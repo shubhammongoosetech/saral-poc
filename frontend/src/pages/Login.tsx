@@ -122,7 +122,7 @@ export const Login: React.FC = () => {
 
   return (
     <div className="card">
-      <h1 className="page-title">Sign In to SARAL</h1>
+      <h1 className="page-title">Sign In with SARAL</h1>
       <p className="page-subtitle">Access your non-custodial decentralized key container</p>
 
       {error && <div className="alert alert-danger">{error}</div>}
