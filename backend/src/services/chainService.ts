@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { env } from '../config/env';
 import { prisma } from '../config/db';
+import { wipeBuffer } from '../utils/crypto';
 
 let providerInstance: ethers.JsonRpcProvider | null = null;
 
@@ -33,16 +34,18 @@ export async function getBalance(address: string): Promise<string> {
 }
 
 export async function sendTransaction(
-  userId:    string,
-  privateKey: string,
+  userId:     string,
+  privateKey: string | Buffer,
   toAddress:  string,
   amount:     string
 ): Promise<{ txHash: string; broadcasted: boolean; message: string; explorerUrl: string }> {
   let wallet: ethers.Wallet | null = null;
+  let signingKey: ethers.SigningKey | null = null;
 
   try {
     const provider = getProvider();
-    wallet = new ethers.Wallet(privateKey, provider);
+    signingKey = new ethers.SigningKey(privateKey);
+    wallet = new ethers.Wallet(signingKey, provider);
 
     let cleanToAddress = toAddress.trim();
     try {
@@ -94,6 +97,11 @@ export async function sendTransaction(
   } catch (err: any) {
     throw new Error(err.shortMessage || err.reason || err.message || 'Transaction broadcast failed');
   } finally {
+    // SECURITY: Scrub raw key buffer from memory immediately
+    if (Buffer.isBuffer(privateKey)) {
+      wipeBuffer(privateKey);
+    }
     wallet = null;
+    signingKey = null;
   }
 }
