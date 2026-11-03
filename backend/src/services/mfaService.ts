@@ -85,9 +85,10 @@ export async function verifyMfaOtp(
   });
   const loginMethod = (user?.loginMethod ?? 'google') as 'google' | 'mobile';
 
-  const [policy, shareCount] = await Promise.all([
-    prisma.workPolicy.findUnique({ where: { userId }, select: { id: true } }),
-    prisma.keyShare.count({ where: { userId } }),
+  const [policy, shareCount, walletCount] = await Promise.all([
+    prisma.workPolicy.findUnique({ where: { userId }, select: { id: true } }).catch(() => null),
+    prisma.keyShare.count({ where: { userId } }).catch(() => 0),
+    prisma.wallet.count({ where: { userId } }).catch(() => 0),
   ]);
 
   const token = signToken({ userId, loginMethod, mfaVerified: true });
@@ -96,6 +97,6 @@ export async function verifyMfaOtp(
     success:   true,
     token,
     hasPolicy: !!policy,
-    hasWallet: shareCount > 0,
+    hasWallet: shareCount > 0 || walletCount > 0,
   };
 }

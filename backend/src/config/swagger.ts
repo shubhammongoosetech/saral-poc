@@ -13,11 +13,11 @@ export const swaggerDocument: Record<string, any> = {
 **SARAL** is a Non-Custodial, Separation-of-Powers Cryptographic Key Management System with an Adaptive Multi-Asset Economic Security Layer.
 
 ### Core Security Architecture:
-- **3-Domain Separation of Powers:** Private keys are decomposed into Public, Institutional, and Sovereign domains.
-- **Shamir Secret Sharing (SSS):** Each domain portion is split into 9 node shares with a threshold of 5 (k=5, n=9).
-- **AES-256-CBC Encryption:** Individual key shares are encrypted at rest with hardware/environment-isolated keys.
+- **3-Domain Separation of Powers:** Keys are additively distributed across Foundation, Public, and Private domains with genuine Threshold MPC signing.
+- **Shamir Secret Sharing (SSS) over F_n:** Internal threshold quorums (5-of-9) over the secp256k1 scalar field.
+- **AES-256-GCM Authenticated Encryption:** Individual key shares are encrypted at rest with HKDF domain separation.
 - **Dual Authentication & MFA:** Google OAuth 2.0 and Mobile Phone OTP authentication with mandatory two-step verification.
-- **MSTC Testnet Integration:** On-demand key reconstruction to sign transactions and broadcast to the blockchain.
+- **MSTC Testnet Integration:** Threshold MPC signing produces EVM-compliant signatures with Zero Private Key Reconstruction.
     `,
     contact: {
       name: 'SARAL Security Team',

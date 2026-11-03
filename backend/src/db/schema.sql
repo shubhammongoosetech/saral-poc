@@ -1,5 +1,5 @@
 -- SARAL Wallet PostgreSQL Database Schema
--- Exactly matching Section 6 specification
+-- Patent Architecture Aligned: Zero-Key Storage & Separation of Powers
 
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -37,19 +37,22 @@ CREATE TABLE IF NOT EXISTS wallets (
   user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
   address VARCHAR(255) NOT NULL UNIQUE,
   public_key TEXT NOT NULL,
+  protocol_version VARCHAR(50) NOT NULL DEFAULT 'MPC-secp256k1-v1',
+  threshold INTEGER NOT NULL DEFAULT 5,
+  n INTEGER NOT NULL DEFAULT 9,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS key_shares (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id        UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  category       VARCHAR(50)  NOT NULL, -- 'PUBLIC' | 'INSTITUTIONAL' | 'SOVEREIGN'
+  category       VARCHAR(50)  NOT NULL, -- 'FOUNDATION' | 'PUBLIC' | 'PRIVATE' (or legacy 'INSTITUTIONAL' | 'SOVEREIGN')
   share_index    INTEGER      NOT NULL,
   n              INTEGER      NOT NULL DEFAULT 9,
   threshold      INTEGER      NOT NULL DEFAULT 5,
-  -- Share lives ONLY inside its Docker container — never in the DB
-  container_id   VARCHAR(100) NOT NULL, -- Short Docker container ID (12 chars)
-  container_name VARCHAR(255) NOT NULL, -- saral-share-{userId8}-{cat}-{index}
+  -- Cryptographic share lives ONLY in container/node vault - NEVER in PostgreSQL!
+  container_id   VARCHAR(100) NOT NULL,
+  container_name VARCHAR(255) NOT NULL,
   created_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT unique_user_category_share UNIQUE (user_id, category, share_index)
 );
@@ -62,6 +65,29 @@ CREATE TABLE IF NOT EXISTS access_logs (
   lng DOUBLE PRECISION,
   allowed BOOLEAN NOT NULL,
   reason TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS security_event_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event_type VARCHAR(100) NOT NULL,
+  severity VARCHAR(50) NOT NULL DEFAULT 'INFO',
+  ip_address VARCHAR(100),
+  user_agent VARCHAR(255),
+  details TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS recovery_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  request_id VARCHAR(100) NOT NULL UNIQUE,
+  state VARCHAR(50) NOT NULL DEFAULT 'PENDING_TIMELOCK',
+  timelock_expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  authorized_custodians TEXT,
+  reason TEXT,
+  executed_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -83,8 +109,11 @@ CREATE TABLE IF NOT EXISTS otps (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Indices for performance
+-- Indices for high performance
+CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
 CREATE INDEX IF NOT EXISTS idx_key_shares_user_id ON key_shares(user_id);
 CREATE INDEX IF NOT EXISTS idx_key_shares_container_name ON key_shares(container_name);
 CREATE INDEX IF NOT EXISTS idx_access_logs_user_id ON access_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_security_logs_user_event ON security_event_logs(user_id, event_type);
+CREATE INDEX IF NOT EXISTS idx_recovery_records_user_state ON recovery_records(user_id, state);
 CREATE INDEX IF NOT EXISTS idx_otps_user_purpose ON otps(user_id, purpose, used);

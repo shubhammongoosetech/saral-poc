@@ -8,6 +8,8 @@
     "start": "concurrently -n \"BACKEND,FRONTEND\" -c \"blue,green\" \"npm --prefix backend start\" \"npm --prefix frontend run dev\"",
     "backend": "npm --prefix backend run dev",
     "frontend": "npm --prefix frontend run dev",
+    "test": "npm --prefix backend test",
+    "db:clear": "npm --prefix backend run db:clear",
     "build": "npm --prefix frontend run build"
   },
   "devDependencies": {

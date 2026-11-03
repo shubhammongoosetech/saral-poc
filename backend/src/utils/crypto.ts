@@ -1,5 +1,28 @@
+/**
+ * crypto.ts
+ *
+ * SARAL Cryptographic Utility Functions
+ *
+ * Includes:
+ *   - Secure buffer wipe / memory zeroization.
+ *   - Constant-time string & token comparison (anti-timing attacks).
+ *   - AES-256-GCM authenticated encryption with HKDF domain separation.
+ *   - Legacy 3-way XOR compatibility functions with strict zeroization.
+ */
+
 import crypto from 'crypto';
 import { env } from '../config/env';
+import {
+  encryptShareGcm,
+  decryptShareGcm,
+  deriveDomainKey,
+} from '../crypto/secureEncryption';
+
+export {
+  encryptShareGcm,
+  decryptShareGcm,
+  deriveDomainKey,
+};
 
 /**
  * Derives a clean 32-byte key from MASTER_ENCRYPTION_KEY
@@ -9,55 +32,26 @@ function getMasterKey(): Buffer {
   if (/^[0-9a-fA-F]{64}$/.test(rawKey)) {
     return Buffer.from(rawKey, 'hex');
   }
-  // Otherwise derive a consistent 32-byte key using SHA-256
   return crypto.createHash('sha256').update(rawKey).digest();
 }
 
 /**
- * AES-256-GCM encryption of a share string
- * Output format: iv:authTag:ciphertext (all in hex)
+ * Legacy AES-256-GCM encryption wrapper (for backward compatibility).
  */
 export function encryptShare(plainText: string): string {
-  const masterKey = getMasterKey();
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', masterKey, iv);
-
-  const encrypted = Buffer.concat([
-    cipher.update(plainText, 'utf8'),
-    cipher.final(),
-  ]);
-  const authTag = cipher.getAuthTag();
-
-  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+  const res = encryptShareGcm(plainText, 'LEGACY');
+  return res.serialized;
 }
 
 /**
- * AES-256-GCM decryption of an encrypted share string
+ * Legacy AES-256-GCM decryption wrapper (for backward compatibility).
  */
 export function decryptShare(encryptedData: string): string {
-  const masterKey = getMasterKey();
-  const parts = encryptedData.split(':');
-  if (parts.length !== 3) {
-    throw new Error('Invalid encrypted share format');
-  }
-
-  const iv = Buffer.from(parts[0], 'hex');
-  const authTag = Buffer.from(parts[1], 'hex');
-  const ciphertext = Buffer.from(parts[2], 'hex');
-
-  const decipher = crypto.createDecipheriv('aes-256-gcm', masterKey, iv);
-  decipher.setAuthTag(authTag);
-
-  const decrypted = Buffer.concat([
-    decipher.update(ciphertext),
-    decipher.final(),
-  ]);
-
-  return decrypted.toString('utf8');
+  return decryptShareGcm(encryptedData, 'LEGACY');
 }
 
 /**
- * Overwrites all bytes of a buffer with zeros to purge secrets immediately from RAM.
+ * Overwrites all bytes of a buffer with zeros to purge secrets from RAM.
  */
 export function wipeBuffer(buf?: Buffer | Uint8Array | null): void {
   if (buf && (Buffer.isBuffer(buf) || buf instanceof Uint8Array)) {
@@ -66,9 +60,19 @@ export function wipeBuffer(buf?: Buffer | Uint8Array | null): void {
 }
 
 /**
+ * Secure constant-time comparison for OTPs, tokens, and hashes (prevents timing attacks).
+ */
+export function secureCompare(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
  * Splits a 32-byte private key into 3 categories: PUBLIC, INSTITUTIONAL, SOVEREIGN
- * using a 3-way XOR secret sharing scheme.
- * Securely zeros out the raw key and intermediate buffers from RAM.
+ * using a 3-way XOR secret sharing scheme. (Legacy compatibility only).
  */
 export function splitPrivateKey3Ways(privateKeyHexOrBuf: string | Buffer): {
   PUBLIC: string;
@@ -98,7 +102,6 @@ export function splitPrivateKey3Ways(privateKeyHexOrBuf: string | Buffer): {
       SOVEREIGN: part3.toString('hex'),
     };
   } finally {
-    // Explicitly zeroize raw key bytes and intermediate buffers from memory
     keyBytes.fill(0);
     part1.fill(0);
     part2.fill(0);
@@ -108,7 +111,7 @@ export function splitPrivateKey3Ways(privateKeyHexOrBuf: string | Buffer): {
 
 /**
  * Reconstructs the private key by XORing the 3 parts into a 32-byte zeroizable Buffer.
- * Parts b1, b2, and b3 are immediately zeroized from RAM in the finally block.
+ * (Legacy compatibility only).
  */
 export function combinePrivateKey3WaysAsBuffer(
   part1Hex: string,
@@ -140,7 +143,7 @@ export function combinePrivateKey3WaysAsBuffer(
 }
 
 /**
- * Reconstructs the private key as a string (legacy compatibility).
+ * Reconstructs the private key as a string (Legacy compatibility only).
  */
 export function combinePrivateKey3Ways(
   part1Hex: string,
@@ -153,19 +156,4 @@ export function combinePrivateKey3Ways(
   } finally {
     buf.fill(0);
   }
-}
-
-/**
- * Secure constant-time comparison for OTP or sensitive tokens
- */
-export function secureCompare(a: string, b: string): boolean {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) {
-    // Constant time dummy comparison
-    crypto.timingSafeEqual(bufA, bufA);
-    return false;
-  }
-  return crypto.timingSafeEqual(bufA, bufB);
 }

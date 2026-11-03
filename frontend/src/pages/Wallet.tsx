@@ -222,7 +222,7 @@ export const Wallet: React.FC = () => {
           </button>
         </div>
       </div>
-      <p className="page-subtitle">Decentralized 3-container Shamir key architecture on MST testnet</p>
+      <p className="page-subtitle">SARAL Non-Custodial Key Management — 3-Domain Separation of Powers & True Threshold MPC</p>
 
       {error && <div className="alert alert-danger">{error}</div>}
 
@@ -230,10 +230,11 @@ export const Wallet: React.FC = () => {
       {!hasWallet ? (
         <div>
           <div className="policy-block" style={{ marginBottom: '20px' }}>
-            <p style={{ fontWeight: 500, marginBottom: '6px' }}>First-Time Setup: Wallet Initialization</p>
+            <p style={{ fontWeight: 600, marginBottom: '6px' }}>First-Time Setup: 3-Domain MPC Wallet Initialization</p>
             <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-              Your private key will be split across 3 containers: <strong>PUBLIC</strong>, <strong>INSTITUTIONAL</strong>, and <strong>SOVEREIGN</strong>.
-              Each container is separately sharded with Shamir Secret Sharing and encrypted with your master key.
+              Your wallet is generated via Distributed Key Generation (DKG) across 3 independent trust domains:
+              <strong> FOUNDATION</strong> (Institutional Compliance), <strong>PUBLIC</strong> (Decentralized Staking Nodes), and <strong>PRIVATE</strong> (Sovereign User Devices & Guardians).
+              27 distributed nodes are deployed with <strong>Zero Complete Private Key Reconstruction</strong>.
             </p>
           </div>
 
@@ -307,7 +308,7 @@ export const Wallet: React.FC = () => {
             </div>
           ) : (
             <div className="alert alert-success" style={{ marginBottom: '16px' }}>
-              Working time and physical location verified. Key reconstruction authorized.
+              Working time and physical location verified. 3-Domain MPC Threshold Signing Quorum Authorized (Zero Private Key Reconstruction).
             </div>
           )}
 
@@ -328,9 +329,23 @@ export const Wallet: React.FC = () => {
             </div>
 
             <div className="summary-item">
-              <span className="summary-label">Shamir Container Scheme</span>
+              <span className="summary-label">Cryptographic Protocol</span>
+              <span className="summary-value" style={{ color: 'var(--success)', fontWeight: 600 }}>
+                {wallet?.protocolVersion || 'MPC-secp256k1-v1'} (Gennaro-Goldfeder Threshold ECDSA)
+              </span>
+            </div>
+
+            <div className="summary-item">
+              <span className="summary-label">Separation-of-Powers Scheme</span>
               <span className="summary-value">
-                3 Containers × ({wallet?.threshold || 5}-of-{wallet?.n || 9} Shares)
+                Foundation (1-of-1) ∧ Public ({wallet?.threshold || 5}-of-{wallet?.n || 9}) ∧ Private ({wallet?.threshold || 5}-of-{wallet?.n || 9})
+              </span>
+            </div>
+
+            <div className="summary-item">
+              <span className="summary-label">Node Cluster Distribution</span>
+              <span className="summary-value">
+                27 Distributed Nodes across 3 Trust Domains
               </span>
             </div>
           </div>
@@ -442,7 +457,7 @@ export const Wallet: React.FC = () => {
                   className="btn btn-primary"
                   disabled={signing || !policyCheck?.allowed}
                 >
-                  {signing ? 'Reconstructing Key & Signing...' : 'Sign & Broadcast Transaction'}
+                  {signing ? 'Coordinating 3-Domain MPC Signing...' : 'Sign & Broadcast Transaction via MPC'}
                 </button>
               </form>
 

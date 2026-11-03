@@ -26,4 +26,6 @@ yarn-debug.log*
 .idea/
 *.swp
 *.swo
+.saral_node_vault/
+*.vault
 

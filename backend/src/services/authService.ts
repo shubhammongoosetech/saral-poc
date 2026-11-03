@@ -23,16 +23,17 @@ export interface AuthResult {
 // ─── Shared status helpers ────────────────────────────────────────────────────
 
 async function getUserStatus(userId: string) {
-  const [mfa, policy, shareCount] = await Promise.all([
-    prisma.mfa.findUnique({ where: { userId }, select: { verifiedAt: true } }),
-    prisma.workPolicy.findUnique({ where: { userId }, select: { id: true } }),
-    prisma.keyShare.count({ where: { userId } }),
+  const [mfa, policy, shareCount, walletCount] = await Promise.all([
+    prisma.mfa.findUnique({ where: { userId }, select: { verifiedAt: true } }).catch(() => null),
+    prisma.workPolicy.findUnique({ where: { userId }, select: { id: true } }).catch(() => null),
+    prisma.keyShare.count({ where: { userId } }).catch(() => 0),
+    prisma.wallet.count({ where: { userId } }).catch(() => 0),
   ]);
 
   return {
     mfaVerified: !!mfa?.verifiedAt,
     hasPolicy: !!policy,
-    hasWallet: shareCount > 0,
+    hasWallet: shareCount > 0 || walletCount > 0,
   };
 }
 

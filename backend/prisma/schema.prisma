@@ -15,12 +15,15 @@ model User {
   loginMethod String   @map("login_method") @db.VarChar(50)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  mfa         Mfa?
-  workPolicy  WorkPolicy?
-  keyShares   KeyShare[]
-  accessLogs  AccessLog[]
-  transactions Transaction[]
-  otps        Otp[]
+  mfa             Mfa?
+  workPolicy      WorkPolicy?
+  wallet          Wallet?
+  keyShares       KeyShare[]
+  accessLogs      AccessLog[]
+  transactions    Transaction[]
+  otps            Otp[]
+  securityLogs    SecurityEventLog[]
+  recoveryRecords RecoveryRecord[]
 
   @@map("users")
 }
@@ -53,10 +56,26 @@ model WorkPolicy {
   @@map("work_policy")
 }
 
+model Wallet {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String   @unique @map("user_id") @db.Uuid
+  address         String   @unique @db.VarChar(255)
+  publicKey       String   @map("public_key") @db.Text
+  protocolVersion String   @default("MPC-secp256k1-v1") @map("protocol_version") @db.VarChar(50)
+  threshold       Int      @default(5)
+  n               Int      @default(9)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([address])
+  @@map("wallets")
+}
+
 model KeyShare {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId        String   @map("user_id") @db.Uuid
-  category      String   @db.VarChar(50)   // 'PUBLIC' | 'INSTITUTIONAL' | 'SOVEREIGN'
+  category      String   @db.VarChar(50) // 'FOUNDATION' | 'PUBLIC' | 'PRIVATE' (or legacy 'INSTITUTIONAL' | 'SOVEREIGN')
   shareIndex    Int      @map("share_index")
   n             Int      @default(9)
   threshold     Int      @default(5)
@@ -87,6 +106,39 @@ model AccessLog {
   @@map("access_logs")
 }
 
+model SecurityEventLog {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  eventType String   @map("event_type") @db.VarChar(100)
+  severity  String   @default("INFO") @db.VarChar(50)
+  ipAddress String?  @map("ip_address") @db.VarChar(100)
+  userAgent String?  @map("user_agent") @db.VarChar(255)
+  details   String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, eventType])
+  @@map("security_event_logs")
+}
+
+model RecoveryRecord {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String    @map("user_id") @db.Uuid
+  requestId            String    @unique @map("request_id") @db.VarChar(100)
+  state                String    @default("PENDING_TIMELOCK") @db.VarChar(50)
+  timelockExpiresAt    DateTime  @map("timelock_expires_at") @db.Timestamptz
+  authorizedCustodians String?   @map("authorized_custodians") @db.Text
+  reason               String?   @db.Text
+  executedAt           DateTime? @map("executed_at") @db.Timestamptz
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, state])
+  @@map("recovery_records")
+}
+
 model Transaction {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
@@ -104,7 +156,7 @@ model Otp {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
   code      String   @db.VarChar(10)
-  purpose   String   @db.VarChar(50)  // 'login' | 'mfa'
+  purpose   String   @db.VarChar(50) // 'login' | 'mfa'
   expiresAt DateTime @map("expires_at") @db.Timestamptz
   used      Boolean  @default(false)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -114,4 +166,3 @@ model Otp {
   @@index([userId, purpose, used])
   @@map("otps")
 }
-

@@ -34,6 +34,42 @@ export interface WalletData {
   n: number;
   threshold: number;
   createdAt?: string;
+  protocolVersion?: string;
+  domains?: {
+    foundation: { role: string; nodes: number };
+    public: { role: string; nodes: number; threshold: number };
+    private: { role: string; nodes: number; threshold: number };
+  };
+}
+
+export interface ClusterStatus {
+  totalNodes: number;
+  domainBreakdown: {
+    FOUNDATION: { total: number; online: number; threshold: number };
+    PUBLIC: { total: number; online: number; threshold: number };
+    PRIVATE: { total: number; online: number; threshold: number };
+  };
+  healthy: boolean;
+  activeDriver: 'docker' | 'sandbox' | 'remote';
+}
+
+export interface EconomicStats {
+  state: {
+    totalValueSecuredMstc: number;
+    stakedSst: number;
+    stakedSmstc: number;
+    totalEffectiveStake: number;
+    currentSecurityRatio: number;
+    currentEmissionRateApr: number;
+    insuranceTreasuryBalanceMstc: number;
+    totalUsageFeesProcessedMstc: number;
+  };
+  params: {
+    targetSecurityRatio: number;
+    minEmissionRateApr: number;
+    maxEmissionRateApr: number;
+    sstMaxSupplyCeiling: number;
+  };
 }
 
 export interface PolicyCheckResponse {
@@ -44,6 +80,7 @@ export interface PolicyCheckResponse {
     allowedWindow?: string;
     currentDistanceKm?: number;
     maxRadiusKm?: number;
+    anomalyDetected?: boolean;
   };
 }
 
@@ -150,6 +187,31 @@ export const walletApi = {
     }>;
   }> => {
     const res = await apiClient.get('/wallet/transactions');
+    return res.data;
+  },
+
+  getClusterHealth: async (): Promise<ClusterStatus> => {
+    const res = await apiClient.get<ClusterStatus>('/wallet/cluster-health');
+    return res.data;
+  },
+
+  getEconomicStats: async (): Promise<EconomicStats> => {
+    const res = await apiClient.get<EconomicStats>('/wallet/economic-stats');
+    return res.data;
+  },
+
+  initiateRecovery: async (reason: string, timelockHours?: number): Promise<{ success: boolean; message: string; request: any }> => {
+    const res = await apiClient.post('/wallet/recovery/initiate', { reason, timelockHours });
+    return res.data;
+  },
+
+  cancelRecovery: async (requestId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
+    const res = await apiClient.post('/wallet/recovery/cancel', { requestId, reason });
+    return res.data;
+  },
+
+  getRecoveryLogs: async (): Promise<{ logs: any[] }> => {
+    const res = await apiClient.get('/wallet/recovery/logs');
     return res.data;
   },
 };

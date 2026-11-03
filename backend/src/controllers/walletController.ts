@@ -1,3 +1,17 @@
+/**
+ * walletController.ts
+ *
+ * SARAL Wallet API Controller
+ *
+ * Implements:
+ *  - Wallet retrieval & generation via 3-Domain MPC.
+ *  - Real-time 27-node cluster health monitoring.
+ *  - Zero-Trust Context access evaluation.
+ *  - Genuine Threshold MPC transaction signing.
+ *  - Guarded Break-Glass Recovery lifecycle.
+ *  - Adaptive Multi-Asset Economic Security stats.
+ */
+
 import { Request, Response, NextFunction } from 'express';
 import {
   generateWalletSchema,
@@ -10,6 +24,15 @@ import {
   executeSigningTransaction,
 } from '../services/walletService';
 import { evaluateAccessPolicy } from '../services/locationService';
+import { nodeCluster } from '../services/nodeClusterService';
+import { economicSecurity } from '../services/economicService';
+import {
+  initiateBreakGlassRecovery,
+  cancelRecoveryRequest,
+  submitCustodianApproval,
+  executeGuardedRecovery,
+  getRecoveryAuditLogs,
+} from '../services/recoveryService';
 import { prisma } from '../config/db';
 
 export async function handleGetWallet(
@@ -43,7 +66,7 @@ export async function handleGenerateWallet(
     res.status(201).json({
       success: true,
       wallet: result,
-      message: `Wallet created. Private key split into ${result.n * 3} Docker containers (${result.n} shares × 3 categories) using Shamir Secret Sharing`,
+      message: `SARAL MPC Wallet created. Keys additively distributed across 3 Domains: Foundation, Public, and Private (27 distributed nodes) with Zero Complete Private Key Reconstruction.`,
     });
   } catch (err) {
     next(err);
@@ -117,24 +140,149 @@ export async function handleGetTransactions(
     const userId = req.user!.userId;
 
     const rawTx = await prisma.transaction.findMany({
-      where:   { userId },
+      where: { userId },
       orderBy: { createdAt: 'desc' },
-      take:    50,
-      select:  { txHash: true, toAddress: true, amount: true, createdAt: true },
+      take: 50,
+      select: { txHash: true, toAddress: true, amount: true, createdAt: true },
     });
 
-    // Provide both snake_case (expected by frontend) and camelCase
     const transactions = rawTx.map((t) => ({
-      tx_hash:    t.txHash,
+      tx_hash: t.txHash,
       to_address: t.toAddress,
-      amount:     t.amount,
+      amount: t.amount,
       created_at: t.createdAt.toISOString(),
-      txHash:     t.txHash,
-      toAddress:  t.toAddress,
-      createdAt:  t.createdAt.toISOString(),
+      txHash: t.txHash,
+      toAddress: t.toAddress,
+      createdAt: t.createdAt.toISOString(),
     }));
 
     res.json({ transactions });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Node Cluster Health Check Endpoint
+ */
+export async function handleGetClusterHealth(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.user!.userId;
+    const status = await nodeCluster.checkClusterHealth(userId);
+    res.json(status);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Economic Security Subsystem Stats Endpoint (Patent FIG. 4)
+ */
+export async function handleGetEconomicStats(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const state = economicSecurity.getState();
+    const params = economicSecurity.getParameters();
+    res.json({
+      state,
+      params,
+      slashingHistory: economicSecurity.getSlashingHistory(),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Guarded Break-Glass Recovery Endpoints (Patent FIG. 3)
+ */
+export async function handleInitiateRecovery(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.user!.userId;
+    const { reason, timelockHours } = req.body;
+    const request = initiateBreakGlassRecovery(
+      userId,
+      reason || 'Emergency wallet recovery requested',
+      timelockHours,
+      req.ip
+    );
+    res.status(201).json({
+      success: true,
+      request,
+      message: `Recovery requested. Mandatory ${request.timelockDurationHours}-hour timelock initiated.`,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function handleCancelRecovery(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.user!.userId;
+    const { requestId, reason } = req.body;
+    const cancelled = cancelRecoveryRequest(userId, requestId, reason);
+    res.json({
+      success: true,
+      request: cancelled,
+      message: 'Recovery request was successfully challenged and aborted.',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function handleSubmitCustodianApproval(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { requestId, custodianId, shareIndex, shareValueHex } = req.body;
+    const result = submitCustodianApproval(requestId, custodianId, shareIndex, shareValueHex);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function handleExecuteRecovery(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { requestId } = req.body;
+    const result = executeGuardedRecovery(requestId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function handleGetRecoveryLogs(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.user!.userId;
+    const logs = getRecoveryAuditLogs(userId);
+    res.json({ logs });
   } catch (err) {
     next(err);
   }
