@@ -3,9 +3,10 @@ import { prisma } from '../config/db';
 import { env } from '../config/env';
 import {
   splitPrivateKey3Ways,
-  combinePrivateKey3Ways,
+  combinePrivateKey3WaysAsBuffer,
   encryptShare,
   decryptShare,
+  wipeBuffer,
 } from '../utils/crypto';
 import { splitSecret, reconstructSecret, validateShamirParams } from './shamirService';
 import {
@@ -103,23 +104,31 @@ export async function getExistingWallet(userId: string): Promise<WalletInfo | nu
   const { n, threshold, createdAt } = first;
 
   let reconstructedParts: Record<string, string> = {};
+  let keyBuffer: Buffer | null = null;
 
   try {
     reconstructedParts = await reconstructAllPartsFromContainers(userId, threshold);
 
-    let ephemeralKey: string | null = combinePrivateKey3Ways(
+    // Reconstruct into a secure, zeroizable 32-byte Buffer
+    keyBuffer = combinePrivateKey3WaysAsBuffer(
       reconstructedParts['PUBLIC'],
       reconstructedParts['INSTITUTIONAL'],
       reconstructedParts['SOVEREIGN']
     );
 
-    const publicKey = new ethers.SigningKey(ephemeralKey).publicKey;
-    const address   = ethers.computeAddress(ephemeralKey);
-    ephemeralKey    = null; // wipe immediately from RAM
+    const signingKey = new ethers.SigningKey(keyBuffer);
+    const publicKey  = signingKey.publicKey;
+    const address    = ethers.computeAddress(publicKey);
+
+    // SECURITY: Purge private key bytes from RAM immediately
+    wipeBuffer(keyBuffer);
+    keyBuffer = null;
 
     const balance = await getBalance(address);
     return { address, publicKey, balance, createdAt: createdAt.toISOString(), n, threshold };
   } finally {
+    wipeBuffer(keyBuffer);
+    keyBuffer = null;
     delete reconstructedParts['PUBLIC'];
     delete reconstructedParts['INSTITUTIONAL'];
     delete reconstructedParts['SOVEREIGN'];
@@ -134,7 +143,7 @@ export async function getExistingWallet(userId: string): Promise<WalletInfo | nu
  * 4. Encrypt each share (AES-256-GCM) in memory
  * 5. Store each encrypted share in its own Docker container (n × 3 containers)
  * 6. DB stores ONLY: userId, category, shareIndex, n, threshold, containerId, containerName
- * 7. Private key erased from memory in `finally`
+ * 7. Private key Buffer explicitly wiped from memory with buffer.fill(0)
  */
 export async function generateWallet(
   userId:         string,
@@ -149,13 +158,16 @@ export async function generateWallet(
   const threshold = thresholdParam ?? env.SHARE_THRESHOLD;
   validateShamirParams(n, threshold);
 
-  const randomWallet = ethers.Wallet.createRandom();
-  const address      = randomWallet.address;
-  const publicKey    = randomWallet.signingKey.publicKey;
-  let   privateKey: string | null = randomWallet.privateKey;
+  const randomWallet  = ethers.Wallet.createRandom();
+  const address       = randomWallet.address;
+  const publicKey     = randomWallet.signingKey.publicKey;
+  const rawKeyClean   = randomWallet.privateKey.startsWith('0x')
+    ? randomWallet.privateKey.slice(2)
+    : randomWallet.privateKey;
+  const privateKeyBuf = Buffer.from(rawKeyClean, 'hex');
 
   try {
-    const categoryParts = splitPrivateKey3Ways(privateKey);
+    const categoryParts = splitPrivateKey3Ways(privateKeyBuf);
 
     for (const cat of CATEGORIES) {
       const shares = splitSecret(categoryParts[cat], n, threshold);
@@ -193,14 +205,15 @@ export async function generateWallet(
 
     return { address, publicKey, balance, n, threshold };
   } finally {
-    privateKey = null;
+    // SECURITY: Scrub raw private key from RAM
+    wipeBuffer(privateKeyBuf);
   }
 }
 
 /**
  * CASE B — Reconstruct Key + Execute Transaction
- * Reads shares in batch from Docker containers, reconstructs the private key in RAM,
- * signs + broadcasts the transaction, then erases the key immediately.
+ * Reads shares in batch from Docker containers, reconstructs into a secure Buffer,
+ * signs + broadcasts the transaction, then overwrites the buffer with zeroes immediately.
  */
 export async function executeSigningTransaction(
   userId:      string,
@@ -222,18 +235,23 @@ export async function executeSigningTransaction(
 
   const { threshold } = config;
   let reconstructedParts: Record<string, string> = {};
+  let keyBuffer: Buffer | null = null;
 
   try {
     reconstructedParts = await reconstructAllPartsFromContainers(userId, threshold);
 
-    let privateKey: string | null = combinePrivateKey3Ways(
+    // Reconstruct directly into a zeroizable Buffer
+    keyBuffer = combinePrivateKey3WaysAsBuffer(
       reconstructedParts['PUBLIC'],
       reconstructedParts['INSTITUTIONAL'],
       reconstructedParts['SOVEREIGN']
     );
 
-    return await sendTransaction(userId, privateKey, toAddress, amount);
+    return await sendTransaction(userId, keyBuffer, toAddress, amount);
   } finally {
+    // SECURITY: Ensure memory is zeroed out even if transaction throws
+    wipeBuffer(keyBuffer);
+    keyBuffer = null;
     delete reconstructedParts['PUBLIC'];
     delete reconstructedParts['INSTITUTIONAL'];
     delete reconstructedParts['SOVEREIGN'];
