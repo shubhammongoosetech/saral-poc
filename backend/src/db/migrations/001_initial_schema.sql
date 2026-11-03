@@ -1,0 +1,86 @@
+-- Migration 001: Initial SARAL Database Schema
+-- Run this migration to initialize all required PostgreSQL tables
+
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  google_id VARCHAR(255) UNIQUE,
+  email VARCHAR(255) UNIQUE,
+  mobile VARCHAR(50) UNIQUE,
+  login_method VARCHAR(50) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS mfa (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type VARCHAR(50) NOT NULL DEFAULT 'otp',
+  verified_at TIMESTAMP WITH TIME ZONE,
+  CONSTRAINT unique_user_mfa UNIQUE (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS work_policy (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  start_time VARCHAR(10) NOT NULL,
+  end_time VARCHAR(10) NOT NULL,
+  timezone VARCHAR(100) NOT NULL DEFAULT 'Asia/Kolkata',
+  city VARCHAR(255) NOT NULL,
+  lat DOUBLE PRECISION NOT NULL,
+  lng DOUBLE PRECISION NOT NULL,
+  radius_km DOUBLE PRECISION NOT NULL DEFAULT 25.0,
+  set_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT unique_user_work_policy UNIQUE (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS wallets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  address VARCHAR(255) NOT NULL UNIQUE,
+  public_key TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS key_shares (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category VARCHAR(50) NOT NULL,
+  share_index INTEGER NOT NULL,
+  encrypted_share TEXT NOT NULL,
+  n INTEGER NOT NULL DEFAULT 9,
+  threshold INTEGER NOT NULL DEFAULT 5,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT unique_user_category_share UNIQUE (user_id, category, share_index)
+);
+
+CREATE TABLE IF NOT EXISTS access_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  attempted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  lat DOUBLE PRECISION,
+  lng DOUBLE PRECISION,
+  allowed BOOLEAN NOT NULL,
+  reason TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  tx_hash VARCHAR(255) NOT NULL UNIQUE,
+  to_address VARCHAR(255) NOT NULL,
+  amount VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS otps (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code VARCHAR(10) NOT NULL,
+  purpose VARCHAR(50) NOT NULL,
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  used BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_key_shares_user_id ON key_shares(user_id);
+CREATE INDEX IF NOT EXISTS idx_access_logs_user_id ON access_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_otps_user_purpose ON otps(user_id, purpose, used);

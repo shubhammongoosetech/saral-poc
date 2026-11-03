@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  googleId    String?  @unique @map("google_id") @db.VarChar(255)
+  email       String?  @unique @db.VarChar(255)
+  mobile      String?  @unique @db.VarChar(50)
+  loginMethod String   @map("login_method") @db.VarChar(50)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  mfa         Mfa?
+  workPolicy  WorkPolicy?
+  keyShares   KeyShare[]
+  accessLogs  AccessLog[]
+  transactions Transaction[]
+  otps        Otp[]
+
+  @@map("users")
+}
+
+model Mfa {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String    @unique @map("user_id") @db.Uuid
+  type       String    @default("otp") @db.VarChar(50)
+  verifiedAt DateTime? @map("verified_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("mfa")
+}
+
+model WorkPolicy {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  startTime String   @map("start_time") @db.VarChar(10)
+  endTime   String   @map("end_time") @db.VarChar(10)
+  timezone  String   @default("Asia/Kolkata") @db.VarChar(100)
+  city      String   @db.VarChar(255)
+  lat       Float
+  lng       Float
+  radiusKm  Float    @default(25.0) @map("radius_km")
+  setAt     DateTime @default(now()) @map("set_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("work_policy")
+}
+
+model KeyShare {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  category      String   @db.VarChar(50)   // 'PUBLIC' | 'INSTITUTIONAL' | 'SOVEREIGN'
+  shareIndex    Int      @map("share_index")
+  n             Int      @default(9)
+  threshold     Int      @default(5)
+  containerId   String   @map("container_id") @db.VarChar(100)
+  containerName String   @map("container_name") @db.VarChar(255)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, category, shareIndex], name: "unique_user_category_share")
+  @@index([userId])
+  @@index([containerName])
+  @@map("key_shares")
+}
+
+model AccessLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  attemptedAt DateTime @default(now()) @map("attempted_at") @db.Timestamptz
+  lat         Float?
+  lng         Float?
+  allowed     Boolean
+  reason      String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("access_logs")
+}
+
+model Transaction {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  txHash    String   @unique @map("tx_hash") @db.VarChar(255)
+  toAddress String   @map("to_address") @db.VarChar(255)
+  amount    String   @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
+}
+
+model Otp {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  code      String   @db.VarChar(10)
+  purpose   String   @db.VarChar(50)  // 'login' | 'mfa'
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, used])
+  @@map("otps")
+}
+

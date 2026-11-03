@@ -1,0 +1,28 @@
+version: '3.9'
+
+services:
+  # ─── PostgreSQL Database ────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: saral-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: saral
+      POSTGRES_PASSWORD: saral_secret
+      POSTGRES_DB: saral
+    ports:
+      - '5433:5432'       # host 5433 → avoids conflict with any local postgres
+    volumes:
+      - saral_pg_data:/var/lib/postgresql/data          # persistent data volume
+      - ./backend/src/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U saral -d saral']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  saral_pg_data:
+    driver: local
+
