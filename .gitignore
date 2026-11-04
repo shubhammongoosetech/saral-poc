@@ -29,3 +29,6 @@ yarn-debug.log*
 .saral_node_vault/
 *.vault
 
+# Documentation (Do not push to Git)
+docs/
+
