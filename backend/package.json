@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "tsx src/server.ts",
+    "start": "node dist/server.js",
+    "start:prod": "node dist/server.js",
     "test": "tsx --test tests/*.test.ts",
     "db:clear": "tsx src/scripts/clearDb.ts",
     "db:generate": "prisma generate",

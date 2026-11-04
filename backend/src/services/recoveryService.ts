@@ -14,17 +14,21 @@
  */
 
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import {
   CURVE_ORDER,
   modN,
   randomScalar,
   scalarMultiplyG,
   scalarToHex,
+  G,
 } from '../crypto/secp256k1Math';
 import {
   FieldShare,
   splitSecretField,
-  reconstructSecretField,
+  computeLagrangeCoefficient,
+  verifyShareWithCommitments,
   generateZeroPolynomial,
   evaluateZeroPolynomial,
   proactiveRefreshShare,
@@ -88,10 +92,70 @@ export interface RecoveryAuditRecord {
   details: Record<string, any>;
 }
 
-// In-memory persistent registry for recovery state & audit trails (backed by DB models)
+// Persistent storage directory for recovery state & audit trails
+const RECOVERY_STORAGE_DIR = process.env.SARAL_RECOVERY_DIR || path.resolve(process.cwd(), '.saral_registry');
+const RECOVERY_STORAGE_FILE = path.join(RECOVERY_STORAGE_DIR, 'recovery_state.json');
+
 const recoverySetups = new Map<string, BreakGlassRecoverySetup>();
 const activeRequests = new Map<string, ActiveRecoveryRequest>();
 const recoveryAuditLogs: RecoveryAuditRecord[] = [];
+
+function saveRecoveryStateToDisk(): void {
+  try {
+    if (!fs.existsSync(RECOVERY_STORAGE_DIR)) {
+      fs.mkdirSync(RECOVERY_STORAGE_DIR, { recursive: true, mode: 0o700 });
+    }
+    const data = {
+      setups: Array.from(recoverySetups.entries()),
+      requests: Array.from(activeRequests.entries()).map(([k, v]) => [
+        k,
+        {
+          ...v,
+          submittedShares: v.submittedShares.map((s) => ({
+            index: s.index,
+            value: scalarToHex(s.value),
+          })),
+        },
+      ]),
+      auditLogs: recoveryAuditLogs,
+    };
+    fs.writeFileSync(RECOVERY_STORAGE_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
+  } catch (err) {
+    // Disk persistence warning (fail-safe)
+  }
+}
+
+function loadRecoveryStateFromDisk(): void {
+  try {
+    if (fs.existsSync(RECOVERY_STORAGE_FILE)) {
+      const raw = fs.readFileSync(RECOVERY_STORAGE_FILE, 'utf8');
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.setups)) {
+        for (const [k, v] of data.setups) {
+          recoverySetups.set(k, v);
+        }
+      }
+      if (Array.isArray(data.requests)) {
+        for (const [k, v] of data.requests) {
+          activeRequests.set(k, {
+            ...v,
+            submittedShares: (v.submittedShares || []).map((s: any) => ({
+              index: s.index,
+              value: BigInt('0x' + s.value),
+            })),
+          });
+        }
+      }
+      if (Array.isArray(data.auditLogs)) {
+        recoveryAuditLogs.push(...data.auditLogs);
+      }
+    }
+  } catch {
+    // Ignore if not present
+  }
+}
+
+loadRecoveryStateFromDisk();
 
 /**
  * Logs a permanent recovery audit event.
@@ -110,6 +174,7 @@ export function logRecoveryEvent(
   };
   recoveryAuditLogs.push(record);
   console.log(`[SARAL Recovery Audit] [${eventType}] User: ${userId} Details:`, details);
+  saveRecoveryStateToDisk();
   return record;
 }
 
@@ -295,6 +360,9 @@ export function submitCustodianApproval(
   if (req.authorizedCustodianIds.includes(custodianId)) {
     throw new Error(`Custodian ${custodianId} has already submitted approval`);
   }
+  if (req.submittedShares.some((s) => s.index === shareIndex)) {
+    throw new Error(`Custodian share index ${shareIndex} has already been submitted`);
+  }
 
   // Verify share format & non-zero
   const value = modN(BigInt('0x' + shareValueHex));
@@ -311,6 +379,7 @@ export function submitCustodianApproval(
     authorizedCount: req.authorizedCustodianIds.length,
     threshold: setup.thresholdM,
   });
+  saveRecoveryStateToDisk();
 
   return {
     success: true,
@@ -324,8 +393,8 @@ export function submitCustodianApproval(
  * Validates:
  *   1. Quorum of at least m custodians.
  *   2. Mandatory timelock delay has elapsed (now >= timelockExpiresAt).
- *   3. Recovery secret reconstructed correctly to authorize key rotation.
- *   4. Generates rotated Private Domain key shares without private key reconstruction!
+ *   3. Homomorphic custodian threshold verification without central secret reconstruction.
+ *   4. Generates rotated Private Domain key shares via PSS without private key reconstruction!
  */
 export function executeGuardedRecovery(
   requestId: string
@@ -366,10 +435,33 @@ export function executeGuardedRecovery(
     );
   }
 
-  // Reconstruct recovery secret to authorize MPC rotation
-  const secret = reconstructSecretField(req.submittedShares, setup.thresholdM);
-  if (secret === 0n) {
-    throw new Error('Recovery secret validation failed: reconstructed secret is zero');
+  // Verify custodian shares homomorphically without scalar secret reconstruction
+  // Uses Lagrange interpolation in the exponent: Sum_i lambda_i * (s_i * G) == C_0
+  const indices = req.submittedShares.map((s) => s.index);
+  let aggregatedAuthPoint: typeof G | null = null;
+  for (const share of req.submittedShares) {
+    if (setup.commitments && setup.commitments.length > 0) {
+      const isShareValid = verifyShareWithCommitments(share, setup.commitments);
+      if (!isShareValid) {
+        throw new Error(
+          `Recovery custodian share at index ${share.index} failed Feldman commitment verification`
+        );
+      }
+    }
+    const lambda = computeLagrangeCoefficient(share.index, indices);
+    const pt_i = scalarMultiplyG(share.value).multiply(lambda);
+    aggregatedAuthPoint = aggregatedAuthPoint ? aggregatedAuthPoint.add(pt_i) : pt_i;
+  }
+
+  if (setup.commitments && setup.commitments.length > 0) {
+    const expectedC0 = setup.commitments[0].startsWith('0x')
+      ? setup.commitments[0].slice(2)
+      : setup.commitments[0];
+    if (aggregatedAuthPoint && aggregatedAuthPoint.toHex(true) !== expectedC0) {
+      throw new Error(
+        'Custodian threshold authorization failed: combined points do not match recovery commitment'
+      );
+    }
   }
 
   // Proactive Secret Sharing (PSS) Zero-Polynomial Share Refresh:
@@ -382,10 +474,13 @@ export function executeGuardedRecovery(
   const zeroPoly = generateZeroPolynomial(5); // Private domain threshold = 5
   const zeroPolyCommitments = zeroPoly.slice(1).map((b) => scalarMultiplyG(b).toHex(true));
 
-  // Preserved public key commitment point
-  const preservedCommitment =
-    setup.originalPrivatePublicKeyHex ||
-    (setup.commitments.length > 0 ? setup.commitments[0] : scalarMultiplyG(randomScalar()).toHex(true));
+  // Preserved public key commitment point — reject missing commitments strictly
+  if (!setup.originalPrivatePublicKeyHex && (!setup.commitments || setup.commitments.length === 0)) {
+    throw new Error(
+      '[Recovery] Missing cryptographic commitment: cannot execute recovery without verified commitment point'
+    );
+  }
+  const preservedCommitment = setup.originalPrivatePublicKeyHex || setup.commitments[0];
 
   req.state = 'EXECUTED';
   req.executedAt = new Date().toISOString();
@@ -398,6 +493,7 @@ export function executeGuardedRecovery(
     commitment: preservedCommitment,
     zeroPolyCommitmentCount: zeroPolyCommitments.length,
   });
+  saveRecoveryStateToDisk();
 
   return {
     success: true,

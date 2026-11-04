@@ -4,13 +4,13 @@
   "private": true,
   "description": "SARAL — Separation-of-Powers Cryptographic Key Management System",
   "scripts": {
-    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"blue,green\" \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
-    "start": "concurrently -n \"BACKEND,FRONTEND\" -c \"blue,green\" \"npm --prefix backend start\" \"npm --prefix frontend run dev\"",
+    "dev": "concurrently -n BACKEND,FRONTEND -c \"blue,green\" \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build",
+    "start": "npm --prefix backend run start:prod",
     "backend": "npm --prefix backend run dev",
     "frontend": "npm --prefix frontend run dev",
     "test": "npm --prefix backend test",
-    "db:clear": "npm --prefix backend run db:clear",
-    "build": "npm --prefix frontend run build"
+    "db:clear": "npm --prefix backend run db:clear"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

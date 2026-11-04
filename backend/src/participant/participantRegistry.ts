@@ -26,6 +26,14 @@ import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { DomainType } from '../crypto/thresholdEcdsa';
 
+export interface OperatorMetadata {
+  operatorId: string;
+  organizationName?: string;
+  jurisdiction?: string;
+  hostingProvider?: string;
+  asn?: string;
+}
+
 export interface EnrolledParticipant {
   nodeId: string;
   domain: DomainType;
@@ -41,6 +49,7 @@ export interface EnrolledParticipant {
   revoked: boolean;
   revocationReason?: string;
   revokedAt?: string;
+  operator?: OperatorMetadata;
   keyRotationHistory: Array<{
     oldKey: string;
     oldFingerprint: string;
@@ -64,6 +73,7 @@ export interface ParticipantEnrollmentInfo {
   expiresInDays?: number;
   proofOfPossessionSigHex?: string;
   popTimestamp?: number;
+  operator?: OperatorMetadata;
 }
 
 export interface SerializedRegistryData {
@@ -200,18 +210,7 @@ export class ParticipantRegistry {
    * Mandates valid Proof-of-Possession (PoP) signature over enrollment challenge and secp256k1 point validity.
    * Defaults to unapproved (approved: false).
    */
-  public enrollParticipant(info: {
-    nodeId: string;
-    domain: DomainType;
-    nodeIndex: number;
-    shareIndex: number;
-    identityPublicKeyHex: string;
-    endpoint?: string;
-    approved?: boolean;
-    expiresInDays?: number;
-    proofOfPossessionSigHex?: string;
-    popTimestamp?: number;
-  }): EnrolledParticipant {
+  public enrollParticipant(info: ParticipantEnrollmentInfo): EnrolledParticipant {
     if (!info.nodeId || typeof info.nodeId !== 'string') {
       throw new Error('[ParticipantRegistry] Enrollment failed: missing or invalid nodeId');
     }
@@ -261,6 +260,21 @@ export class ParticipantRegistry {
 
     this.seenPoPSignatures.add(info.proofOfPossessionSigHex);
 
+    // Cross-Domain Membership Exclusion (Patent Claim 5 & Paragraph [0022])
+    if (info.operator?.operatorId) {
+      for (const [_, existing] of this.registry) {
+        if (
+          !existing.revoked &&
+          existing.operator?.operatorId === info.operator.operatorId &&
+          existing.domain !== info.domain
+        ) {
+          throw new Error(
+            `[ParticipantRegistry] Cross-Domain Membership Exclusion Violation: Operator '${info.operator.operatorId}' already operates node '${existing.nodeId}' in domain '${existing.domain}' and cannot participate in '${info.domain}'`
+          );
+        }
+      }
+    }
+
     const fingerprint = this.computeFingerprint(cleanPub);
     const now = new Date();
     const expiryDays = info.expiresInDays ?? 365;
@@ -282,6 +296,7 @@ export class ParticipantRegistry {
       enrolledAt: now.toISOString(),
       expiresAt,
       revoked: false,
+      operator: info.operator,
       keyRotationHistory: [],
       auditTrail: [
         {
@@ -395,6 +410,22 @@ export class ParticipantRegistry {
 
     this.seenPoPSignatures.add(popSigHex);
 
+    // Cross-Domain Membership Exclusion (Patent Claim 5 & Paragraph [0022])
+    if (info.operator?.operatorId) {
+      for (const [_, other] of this.registry) {
+        if (
+          !other.revoked &&
+          other.nodeId !== info.nodeId &&
+          other.operator?.operatorId === info.operator.operatorId &&
+          other.domain !== info.domain
+        ) {
+          throw new Error(
+            `[ParticipantRegistry] Cross-Domain Membership Exclusion Violation: Operator '${info.operator.operatorId}' already operates node '${other.nodeId}' in domain '${other.domain}' and cannot participate in '${info.domain}'`
+          );
+        }
+      }
+    }
+
     const fingerprint = this.computeFingerprint(cleanPub);
     const now = new Date();
     const expiryDays = info.expiresInDays ?? 365;
@@ -405,6 +436,7 @@ export class ParticipantRegistry {
       existing.approved = true;
       existing.approvedAt = now.toISOString();
       existing.endpoint = endpoint;
+      if (info.operator) existing.operator = info.operator;
       existing.auditTrail.push({
         action: 'LOCAL_PROVISION_ACTIVATE',
         timestamp: now.toISOString(),
@@ -427,6 +459,7 @@ export class ParticipantRegistry {
       enrolledAt: now.toISOString(),
       expiresAt,
       revoked: false,
+      operator: info.operator,
       keyRotationHistory: [],
       auditTrail: [
         {
@@ -629,6 +662,54 @@ export class ParticipantRegistry {
       this.saveToDisk();
       console.warn(`[ParticipantRegistry] Node '${nodeId}' revoked: ${reason}`);
     }
+  }
+
+  /**
+   * Assesses infrastructure diversity and concentration risks across enrolled nodes (Patent paragraph [0022]).
+   */
+  public checkInfrastructureDiversity(): {
+    healthy: boolean;
+    operatorDistribution: Record<string, number>;
+    providerDistribution: Record<string, number>;
+    warnings: string[];
+  } {
+    const operatorCounts: Record<string, number> = {};
+    const providerCounts: Record<string, number> = {};
+    const warnings: string[] = [];
+
+    for (const [_, p] of this.registry) {
+      if (p.revoked || !p.approved) continue;
+      const op = p.operator?.operatorId || 'default-operator';
+      const prov = p.operator?.hostingProvider || 'local-host';
+      operatorCounts[op] = (operatorCounts[op] || 0) + 1;
+      providerCounts[prov] = (providerCounts[prov] || 0) + 1;
+    }
+
+    // Flag if any single operator controls >= 33% of public nodes
+    const publicNodes = Array.from(this.registry.values()).filter(
+      (p) => p.domain === 'PUBLIC' && !p.revoked && p.approved
+    );
+    if (publicNodes.length > 0) {
+      const pubOpCounts: Record<string, number> = {};
+      for (const p of publicNodes) {
+        const op = p.operator?.operatorId || 'default-operator';
+        pubOpCounts[op] = (pubOpCounts[op] || 0) + 1;
+      }
+      for (const [op, count] of Object.entries(pubOpCounts)) {
+        if (count > Math.ceil(publicNodes.length / 3)) {
+          warnings.push(
+            `Concentration warning: Operator '${op}' controls ${count}/${publicNodes.length} Public validator nodes`
+          );
+        }
+      }
+    }
+
+    return {
+      healthy: warnings.length === 0,
+      operatorDistribution: operatorCounts,
+      providerDistribution: providerCounts,
+      warnings,
+    };
   }
 
   /**

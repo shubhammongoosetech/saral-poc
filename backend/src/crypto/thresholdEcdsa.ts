@@ -103,11 +103,84 @@ export interface MpcSignatureResult {
 }
 
 /**
+ * Generates an independent domain cryptographic key contribution.
+ *
+ * Each domain executes this ceremony inside its own custody boundary:
+ *   - Foundation: Institutional administrative custodian.
+ *   - Public: Staking validator node network.
+ *   - Private: Sovereign user guardian / device.
+ *
+ * Emits ONLY the domain public key Q_domain and Feldman VSS public commitments
+ * to the coordinator, while Shamir shares are distributed directly to nodes.
+ */
+export function generateDomainKeyContribution(
+  domain: DomainType,
+  totalShares: number,
+  threshold: number
+): DomainKeySetup {
+  if (totalShares < 1) throw new Error(`[DKG] totalShares must be >= 1 for domain ${domain}`);
+  if (threshold < 1 || threshold > totalShares) {
+    throw new Error(`[DKG] threshold must be between 1 and ${totalShares} for domain ${domain}`);
+  }
+
+  // Generate private domain scalar x_domain strictly within domain boundary
+  const x_domain = randomScalar();
+  const sharing = splitSecretField(x_domain, totalShares, threshold);
+  const Q_domain = scalarMultiplyG(x_domain);
+
+  return {
+    domain,
+    publicKeyPointHex: Q_domain.toHex(true),
+    threshold,
+    totalShares,
+    shares: sharing.shares,
+    commitments: sharing.commitments,
+  };
+}
+
+/**
+ * Homomorphically aggregates independent domain public keys on secp256k1:
+ *   Q = Q_Foundation + Q_Public + Q_Private
+ *
+ * Computes Ethereum/EVM account address directly from uncompressed point Q.
+ * The master private key x = (x_F + x_P + x_U) is NEVER materialized or reconstructed.
+ */
+export function aggregateDomainPublicKeys(
+  foundationPubHex: string,
+  publicPubHex: string,
+  privatePubHex: string
+): { aggregatedPublicKeyHex: string; address: string } {
+  const cleanF = foundationPubHex.startsWith('0x') ? foundationPubHex.slice(2) : foundationPubHex;
+  const cleanP = publicPubHex.startsWith('0x') ? publicPubHex.slice(2) : publicPubHex;
+  const cleanU = privatePubHex.startsWith('0x') ? privatePubHex.slice(2) : privatePubHex;
+
+  const ptF = secp256k1.ProjectivePoint.fromHex(cleanF);
+  const ptP = secp256k1.ProjectivePoint.fromHex(cleanP);
+  const ptU = secp256k1.ProjectivePoint.fromHex(cleanU);
+
+  ptF.assertValidity();
+  ptP.assertValidity();
+  ptU.assertValidity();
+
+  const ptAgg = ptF.add(ptP).add(ptU);
+  const aggregatedPublicKeyHex = '0x' + ptAgg.toHex(false);
+  const address = ethers.computeAddress(aggregatedPublicKeyHex);
+
+  return { aggregatedPublicKeyHex, address };
+}
+
+/**
  * Distributed Key Generation (DKG) for the 3-Domain SARAL Wallet.
  *
- * Each domain generates its private scalar independently in F_n.
- * The raw complete private key x = (x_F + x_P + x_U) is NEVER aggregated.
- * Public key Q is computed homomorphically: Q = Q_F + Q_P + Q_U.
+ * Decomposes key generation into three independent domain boundaries:
+ *  1. Foundation institutional boundary: (1-of-1)
+ *  2. Public validator domain boundary: (t_P-of-n_P)
+ *  3. Private sovereign guardian boundary: (t_U-of-n_U)
+ *
+ * Public key Q is aggregated via elliptic-curve point addition:
+ *   Q = Q_F + Q_P + Q_U
+ *
+ * The raw complete master private key x is NEVER aggregated, possessed, or computed.
  */
 export function generateSaralWalletMpc(
   nShares: number = 9,
@@ -116,56 +189,31 @@ export function generateSaralWalletMpc(
   foundationThreshold: number = 1
 ): SaralWalletSetup {
   // Domain 1: Foundation (Institutional Administrative Quorum)
-  const x_Foundation = randomScalar();
-  const foundationSharing = splitSecretField(
-    x_Foundation,
+  const foundation = generateDomainKeyContribution(
+    'FOUNDATION',
     foundationTotalShares,
     foundationThreshold
   );
-  const Q_Foundation = scalarMultiplyG(x_Foundation);
 
   // Domain 2: Public (t_P-of-n_P independent staking validator nodes)
-  const x_Public = randomScalar();
-  const publicSharing = splitSecretField(x_Public, nShares, threshold);
-  const Q_Public = scalarMultiplyG(x_Public);
+  const publicDomain = generateDomainKeyContribution('PUBLIC', nShares, threshold);
 
   // Domain 3: Private (t_U-of-n_U sovereign user devices / guardians)
-  const x_Private = randomScalar();
-  const privateSharing = splitSecretField(x_Private, nShares, threshold);
-  const Q_Private = scalarMultiplyG(x_Private);
+  const privateDomain = generateDomainKeyContribution('PRIVATE', nShares, threshold);
 
   // Homomorphic aggregation of domain public keys: Q = Q_F + Q_P + Q_U
-  const Q_Aggregated = Q_Foundation.add(Q_Public).add(Q_Private);
-  const aggregatedPublicKeyHex = '0x' + Q_Aggregated.toHex(false); // Uncompressed
-  const address = ethers.computeAddress(aggregatedPublicKeyHex);
+  const { aggregatedPublicKeyHex, address } = aggregateDomainPublicKeys(
+    foundation.publicKeyPointHex,
+    publicDomain.publicKeyPointHex,
+    privateDomain.publicKeyPointHex
+  );
 
   return {
     address,
     aggregatedPublicKeyHex,
-    foundation: {
-      domain: 'FOUNDATION',
-      publicKeyPointHex: Q_Foundation.toHex(true),
-      threshold: foundationThreshold,
-      totalShares: foundationTotalShares,
-      shares: foundationSharing.shares,
-      commitments: foundationSharing.commitments,
-    },
-    publicDomain: {
-      domain: 'PUBLIC',
-      publicKeyPointHex: Q_Public.toHex(true),
-      threshold,
-      totalShares: nShares,
-      shares: publicSharing.shares,
-      commitments: publicSharing.commitments,
-    },
-    privateDomain: {
-      domain: 'PRIVATE',
-      publicKeyPointHex: Q_Private.toHex(true),
-      threshold,
-      totalShares: nShares,
-      shares: privateSharing.shares,
-      commitments: privateSharing.commitments,
-    },
+    foundation,
+    publicDomain,
+    privateDomain,
     createdAt: new Date().toISOString(),
   };
 }
@@ -201,10 +249,13 @@ export function computeEffectiveAdditiveShares(
 }
 
 /**
- * Genuine Multi-Party Computation (MPC) Threshold Signing Protocol.
+ * In-Process Test Simulation Harness for Multi-Party Computation (MPC) Threshold Signing Protocol.
  *
- * Implements Gennaro-Goldfeder / Lindell threshold ECDSA protocol over secp256k1.
- * Signatures are produced using additive shares across Foundation, Public, and Private quorums.
+ * ARCHITECTURAL NOTICE:
+ * This function provides an in-process simulation adapter strictly for test suite verification.
+ * In production environments, wallet signing is orchestrated via `walletService.executeSigningTransaction()`
+ * utilizing independent OS participant processes via `AuthenticatedParticipantClient` over authenticated
+ * Unix domain sockets / IPC.
  *
  * MATHEMATICAL GUARANTEE:
  * At NO point is the complete private key x reconstructed, stored, or materialized.
