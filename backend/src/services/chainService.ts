@@ -18,9 +18,12 @@ let providerInstance: ethers.JsonRpcProvider | null = null;
 
 export function getProvider(): ethers.JsonRpcProvider {
   if (!providerInstance) {
-    providerInstance = new ethers.JsonRpcProvider(env.RPC_URL, {
+    const network = ethers.Network.from({
       chainId: env.CHAIN_ID,
       name: 'mst-testnet',
+    });
+    providerInstance = new ethers.JsonRpcProvider(env.RPC_URL, network, {
+      staticNetwork: network,
     });
   }
   return providerInstance;
@@ -79,7 +82,13 @@ export async function broadcastRawTransaction(
   rawSignedTx: string,
   toAddress: string,
   amount: string
-): Promise<{ txHash: string; broadcasted: boolean; message: string; explorerUrl: string }> {
+): Promise<{
+  txHash: string;
+  broadcasted: boolean;
+  message: string;
+  explorerUrl: string;
+  rpcError?: string;
+}> {
   const provider = getProvider();
 
   let cleanToAddress = toAddress.trim();
@@ -89,31 +98,37 @@ export async function broadcastRawTransaction(
     throw new Error(`Invalid recipient address format: ${toAddress}`);
   }
 
-  let txHash: string;
+  let txHash = ethers.keccak256(rawSignedTx);
   let broadcasted = false;
+  let message = '';
+  let rpcError: string | undefined;
 
   try {
     const txResponse = await provider.broadcastTransaction(rawSignedTx);
     txHash = txResponse.hash;
     broadcasted = true;
+    message = 'Transaction successfully signed via 3-Domain MPC and broadcasted to blockchain node!';
   } catch (err: any) {
-    // If the network testnet is offline or rejects due to testnet fund limits,
-    // compute deterministic tx hash from the signed transaction payload
-    console.warn(`[chainService] Broadcast RPC note: ${err.message}`);
-    txHash = ethers.keccak256(rawSignedTx);
-    broadcasted = true;
+    // STRICT RULE: No fake success! Accurately report that RPC broadcast failed
+    broadcasted = false;
+    rpcError = err?.message || 'Blockchain RPC node rejected raw transaction';
+    message = `MPC threshold signature valid, but blockchain broadcast was rejected by node: ${rpcError}`;
+    console.error(`[chainService] Blockchain broadcast rejected: ${rpcError}`);
   }
 
-  // Idempotently log transaction in database
+  // Idempotently log transaction in database with truthful status
   try {
     await prisma.transaction.upsert({
       where: { txHash },
-      update: {},
+      update: {
+        status: broadcasted ? 'BROADCASTED' : 'FAILED_RPC_REJECTED',
+      },
       create: {
         userId,
         txHash,
         toAddress: cleanToAddress,
         amount,
+        status: broadcasted ? 'BROADCASTED' : 'FAILED_RPC_REJECTED',
       },
     });
   } catch (err) {
@@ -123,7 +138,8 @@ export async function broadcastRawTransaction(
   return {
     txHash,
     broadcasted,
-    message: 'Transaction successfully signed via 3-Domain MPC and broadcasted!',
+    message,
     explorerUrl: `https://testnet.mstscan.com/tx/${txHash}`,
+    rpcError,
   };
 }

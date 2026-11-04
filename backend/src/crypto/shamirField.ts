@@ -11,6 +11,7 @@
  *  - Tamper & invalid share detection.
  */
 
+import { secp256k1 } from '@noble/curves/secp256k1';
 import {
   CURVE_ORDER,
   modN,
@@ -106,6 +107,9 @@ export function verifyShareWithCommitments(
   commitmentsHex: string[]
 ): boolean {
   try {
+    if (share.index < 1 || share.value <= 0n || share.value >= CURVE_ORDER) {
+      return false;
+    }
     const sharePoint = scalarMultiplyG(share.value);
     const x = BigInt(share.index);
 
@@ -113,8 +117,8 @@ export function verifyShareWithCommitments(
     let powerOfX = 1n;
 
     for (const commHex of commitmentsHex) {
-      const { secp256k1 } = require('@noble/curves/secp256k1');
-      const C_k = secp256k1.ProjectivePoint.fromHex(commHex);
+      const cleanHex = commHex.startsWith('0x') ? commHex.slice(2) : commHex;
+      const C_k = secp256k1.ProjectivePoint.fromHex(cleanHex);
       const term = C_k.multiply(powerOfX);
 
       expectedPoint = expectedPoint ? expectedPoint.add(term) : term;
@@ -126,6 +130,78 @@ export function verifyShareWithCommitments(
   } catch {
     return false;
   }
+}
+
+/**
+ * Generates a Zero-Polynomial for Proactive Secret Sharing (PSS) key refresh:
+ *   h(z) = b_1 * z + b_2 * z^2 + ... + b_{threshold-1} * z^{threshold-1} (mod n)
+ * Notice: h(0) = 0. The constant term is strictly zero.
+ */
+export function generateZeroPolynomial(threshold: number): bigint[] {
+  if (threshold < 2) {
+    throw new Error('Zero-polynomial requires threshold >= 2');
+  }
+  const coefficients: bigint[] = [0n]; // b_0 = 0
+  for (let i = 1; i < threshold; i++) {
+    coefficients.push(randomScalar());
+  }
+  return coefficients;
+}
+
+/**
+ * Evaluates a zero-polynomial at position x:
+ *   delta = h(x) = sum_{k=1}^{t-1} b_k * x^k (mod n)
+ */
+export function evaluateZeroPolynomial(coefficients: bigint[], x: bigint): bigint {
+  return evaluatePolynomial(coefficients, x);
+}
+
+/**
+ * Refreshes an existing field share using a zero-polynomial contribution:
+ *   s_i' = (s_i + h(i)) mod n
+ * Reconstructed secret f'(0) = f(0) + h(0) = secret + 0 = secret (mod n).
+ */
+export function proactiveRefreshShare(
+  oldShare: FieldShare,
+  zeroPolyCoeffs: bigint[]
+): FieldShare {
+  const delta = evaluateZeroPolynomial(zeroPolyCoeffs, BigInt(oldShare.index));
+  const refreshedValue = modN(oldShare.value + delta);
+  return {
+    index: oldShare.index,
+    value: refreshedValue,
+  };
+}
+
+/**
+ * Updates Feldman commitments for the refreshed polynomial:
+ *   C_0' = C_0  (constant term unchanged: public key is preserved!)
+ *   C_k' = C_k + (b_k * G) for k >= 1
+ */
+export function refreshFeldmanCommitments(
+  oldCommitmentsHex: string[],
+  zeroPolyCoeffs: bigint[]
+): string[] {
+  const newCommitments: string[] = [];
+
+  for (let k = 0; k < oldCommitmentsHex.length; k++) {
+    const cleanHex = oldCommitmentsHex[k].startsWith('0x')
+      ? oldCommitmentsHex[k].slice(2)
+      : oldCommitmentsHex[k];
+    const oldPoint = secp256k1.ProjectivePoint.fromHex(cleanHex);
+
+    if (k === 0 || k >= zeroPolyCoeffs.length) {
+      // C_0 is unchanged because b_0 = 0
+      newCommitments.push(oldPoint.toHex(true));
+    } else {
+      const b_k = zeroPolyCoeffs[k];
+      const deltaPoint = scalarMultiplyG(b_k);
+      const updatedPoint = oldPoint.add(deltaPoint);
+      newCommitments.push(updatedPoint.toHex(true));
+    }
+  }
+
+  return newCommitments;
 }
 
 /**

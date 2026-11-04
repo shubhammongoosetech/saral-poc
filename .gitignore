@@ -26,9 +26,17 @@ yarn-debug.log*
 .idea/
 *.swp
 *.swo
-.saral_node_vault/
+.saral*
 *.vault
+*.key
+*.sock
 
 # Documentation (Do not push to Git)
 docs/
+
+# Tests (Do not push to Git)
+tests/
+*/tests/
+test/
+*/test/
 

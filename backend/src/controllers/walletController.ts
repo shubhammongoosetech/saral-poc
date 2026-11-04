@@ -5,7 +5,7 @@
  *
  * Implements:
  *  - Wallet retrieval & generation via 3-Domain MPC.
- *  - Real-time 27-node cluster health monitoring.
+ *  - Real-time 19-node cluster health monitoring.
  *  - Zero-Trust Context access evaluation.
  *  - Genuine Threshold MPC transaction signing.
  *  - Guarded Break-Glass Recovery lifecycle.
@@ -66,7 +66,7 @@ export async function handleGenerateWallet(
     res.status(201).json({
       success: true,
       wallet: result,
-      message: `SARAL MPC Wallet created. Keys additively distributed across 3 Domains: Foundation, Public, and Private (27 distributed nodes) with Zero Complete Private Key Reconstruction.`,
+      message: `SARAL MPC Wallet created. Keys additively distributed across 3 Domains: Foundation, Public, and Private (19 distributed nodes) with Zero Complete Private Key Reconstruction.`,
     });
   } catch (err) {
     next(err);

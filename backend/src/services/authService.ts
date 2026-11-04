@@ -1,8 +1,10 @@
+import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { prisma } from '../config/db';
 import { env } from '../config/env';
 import { signToken } from '../utils/jwt';
 import { secureCompare } from '../utils/crypto';
+import { hashOtpCode } from './mfaService';
 
 const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
 
@@ -20,8 +22,7 @@ export interface AuthResult {
   hasWallet: boolean;
 }
 
-// ─── Shared status helpers ────────────────────────────────────────────────────
-
+// Status lookup helper
 async function getUserStatus(userId: string) {
   const [mfa, policy, shareCount, walletCount] = await Promise.all([
     prisma.mfa.findUnique({ where: { userId }, select: { verifiedAt: true } }).catch(() => null),
@@ -37,8 +38,7 @@ async function getUserStatus(userId: string) {
   };
 }
 
-// ─── Google OAuth ─────────────────────────────────────────────────────────────
-
+// Google OAuth authentication
 export async function verifyGoogleAuth(credential: string): Promise<AuthResult> {
   const ticket = await googleClient.verifyIdToken({
     idToken: credential,
@@ -92,8 +92,7 @@ export async function verifyGoogleAuth(credential: string): Promise<AuthResult> 
   };
 }
 
-// ─── Mobile OTP ───────────────────────────────────────────────────────────────
-
+// Mobile phone OTP authentication
 export async function requestMobileOtp(
   mobile: string
 ): Promise<{ success: boolean; message: string; devOtp?: string }> {
@@ -105,7 +104,8 @@ export async function requestMobileOtp(
     select: { id: true },
   });
 
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const code = crypto.randomInt(100000, 1000000).toString();
+  const codeHash = hashOtpCode(code, 'login');
 
   // Invalidate old login OTPs, then insert fresh one (in a transaction)
   await prisma.$transaction([
@@ -116,7 +116,7 @@ export async function requestMobileOtp(
     prisma.otp.create({
       data: {
         userId: user.id,
-        code,
+        code: codeHash,
         purpose: 'login',
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
         used: false,
@@ -124,9 +124,9 @@ export async function requestMobileOtp(
     }),
   ]);
 
-  console.log('───────────────────────────────────────────────────────');
-  console.log(`[SMS OTP AUTH] Mobile: ${mobile} | CODE: ${code}`);
-  console.log('───────────────────────────────────────────────────────');
+  if (env.NODE_ENV === 'development') {
+    console.log(`[SMS OTP AUTH] Mobile: ${mobile} | Code: ${code}`);
+  }
 
   return {
     success: true,
@@ -145,6 +145,9 @@ export async function verifyMobileOtp(
   });
   if (!user) throw new Error('User not found for this mobile number');
 
+  const cleanCode = otpCode.trim();
+  const expectedHash = hashOtpCode(cleanCode, 'login');
+
   const otpRecord = await prisma.otp.findFirst({
     where: {
       userId: user.id,
@@ -159,7 +162,12 @@ export async function verifyMobileOtp(
   if (!otpRecord) {
     throw new Error('Invalid or expired OTP code. Please request a new code.');
   }
-  if (!secureCompare(otpRecord.code, otpCode)) {
+
+  const isMatch =
+    secureCompare(otpRecord.code, expectedHash) ||
+    secureCompare(otpRecord.code, cleanCode);
+
+  if (!isMatch) {
     throw new Error('Incorrect OTP code');
   }
 

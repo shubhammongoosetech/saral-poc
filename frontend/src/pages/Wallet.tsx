@@ -234,7 +234,7 @@ export const Wallet: React.FC = () => {
             <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
               Your wallet is generated via Distributed Key Generation (DKG) across 3 independent trust domains:
               <strong> FOUNDATION</strong> (Institutional Compliance), <strong>PUBLIC</strong> (Decentralized Staking Nodes), and <strong>PRIVATE</strong> (Sovereign User Devices & Guardians).
-              27 distributed nodes are deployed with <strong>Zero Complete Private Key Reconstruction</strong>.
+              19 distributed nodes are deployed with <strong>Zero Complete Private Key Reconstruction</strong>.
             </p>
           </div>
 
@@ -345,7 +345,7 @@ export const Wallet: React.FC = () => {
             <div className="summary-item">
               <span className="summary-label">Node Cluster Distribution</span>
               <span className="summary-value">
-                27 Distributed Nodes across 3 Trust Domains
+                19 Distributed Nodes across 3 Trust Domains
               </span>
             </div>
           </div>

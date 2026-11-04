@@ -32,6 +32,27 @@ import {
   splitSecretField,
   computeLagrangeCoefficient,
 } from './shamirField';
+import { MpcParticipantDaemon } from './mpcParticipantDaemon';
+import { statelessMpcCoordinator } from './mpcCoordinator';
+import { IMpcParticipantClient } from '../participant/participantTransport';
+import { trustedParticipantRegistry } from './participantRegistry';
+import { performEnrollmentCeremony } from '../participant/nodeIdentityManager';
+
+export class DaemonClientAdapter implements IMpcParticipantClient {
+  constructor(private daemon: MpcParticipantDaemon) {}
+  get id() { return this.daemon.id; }
+  get domain() { return this.daemon.domain; }
+  get nodeIndex() { return this.daemon.nodeIndex; }
+  get shareIndex() { return this.daemon.shareIndex; }
+  get identityPublicKeyHex() { return this.daemon.identityPublicKeyHex; }
+  get endpoint() { return `ipc:///tmp/${this.daemon.id}.sock`; }
+  initSession(config: any, commitments?: string[]) { return this.daemon.onSessionInit(config, commitments); }
+  decommit(sessionId: string) { return this.daemon.onDecommitRequest(sessionId); }
+  generateMtaPackets(sessionId: string, decommits: any[]) { return this.daemon.generatePairwiseMtaPackets(sessionId, decommits); }
+  processMtaPackets(sessionId: string, pkts: any[]) { return this.daemon.onPeerMtaPacketsReceived(sessionId, pkts); }
+  computePartialSignature(sessionId: string, r: bigint) { return this.daemon.computePartialSignature(sessionId, r); }
+  async abortSession(sessionId: string, reason: string): Promise<void> { this.daemon.abortSession(sessionId, reason); }
+}
 
 export type DomainType = 'FOUNDATION' | 'PUBLIC' | 'PRIVATE';
 
@@ -90,11 +111,17 @@ export interface MpcSignatureResult {
  */
 export function generateSaralWalletMpc(
   nShares: number = 9,
-  threshold: number = 5
+  threshold: number = 5,
+  foundationTotalShares: number = 1,
+  foundationThreshold: number = 1
 ): SaralWalletSetup {
-  // Domain 1: Foundation (1-of-1 institutional administrative root)
+  // Domain 1: Foundation (Institutional Administrative Quorum)
   const x_Foundation = randomScalar();
-  const foundationSharing = splitSecretField(x_Foundation, 1, 1);
+  const foundationSharing = splitSecretField(
+    x_Foundation,
+    foundationTotalShares,
+    foundationThreshold
+  );
   const Q_Foundation = scalarMultiplyG(x_Foundation);
 
   // Domain 2: Public (t_P-of-n_P independent staking validator nodes)
@@ -118,8 +145,8 @@ export function generateSaralWalletMpc(
     foundation: {
       domain: 'FOUNDATION',
       publicKeyPointHex: Q_Foundation.toHex(true),
-      threshold: 1,
-      totalShares: 1,
+      threshold: foundationThreshold,
+      totalShares: foundationTotalShares,
       shares: foundationSharing.shares,
       commitments: foundationSharing.commitments,
     },
@@ -188,7 +215,7 @@ export async function executeMpcThresholdSign(
   minPublicThreshold: number = 5,
   minPrivateThreshold: number = 5
 ): Promise<MpcSignatureResult> {
-  // ── Step 1: Quorum & Separation of Powers Validation ─────────────────────
+  // Validate domain threshold quorums and separation of powers
   if (!input.foundation || input.foundation.activeShareIndices.length < 1) {
     throw new Error('[MPC Authorization Failure] Foundation domain participation is required');
   }
@@ -203,161 +230,51 @@ export async function executeMpcThresholdSign(
     );
   }
 
-  // ── Step 2: Compute effective additive shares per participant ────────────
-  // Foundation effective shares (w_F)
-  const w_F = computeEffectiveAdditiveShares(input.foundation);
-  // Public domain effective shares (w_{P,j})
-  const w_P = computeEffectiveAdditiveShares(input.publicDomain);
-  // Private domain effective shares (w_{U,k})
-  const w_U = computeEffectiveAdditiveShares(input.privateDomain);
+  // Instantiate independent participant daemons
+  const daemons: MpcParticipantDaemon[] = [];
 
-  // All active participants in this signing session:
-  // Array of effective additive shares: [w_1, w_2, ..., w_M] where sum(w_i) = x (mod n)
-  // CRITICAL: We DO NOT sum these shares together into x!
-  const participantsW: bigint[] = [...w_F, ...w_P, ...w_U];
-  const numParticipants = participantsW.length;
-
-  // ── Step 3: Message Digest m from unsigned transaction ───────────────────
-  const msgHashHex = ethers.keccak256(input.unsignedTxSerialized);
-  const m = modN(BigInt(msgHashHex));
-
-  // ── Step 4: Ephemeral Nonce Multi-Party Generation ───────────────────────
-  // Each participant generates secret ephemeral shares k_i and gamma_i
-  const kShares: bigint[] = [];
-  const gammaShares: bigint[] = [];
-  let Gamma: typeof G | null = null;
-
-  for (let i = 0; i < numParticipants; i++) {
-    const k_i = randomScalar();
-    const g_i = randomScalar();
-    kShares.push(k_i);
-    gammaShares.push(g_i);
-
-    const Gamma_i = scalarMultiplyG(g_i);
-    Gamma = Gamma ? Gamma.add(Gamma_i) : Gamma_i;
+  for (let i = 0; i < input.foundation.activeShareIndices.length; i++) {
+    const idx = input.foundation.activeShareIndices[i];
+    const val = input.foundation.shareValues[i];
+    daemons.push(new MpcParticipantDaemon('FOUNDATION', idx, idx, val));
   }
 
-  if (!Gamma) throw new Error('[MPC Protocol Error] Failed to aggregate Gamma point');
-
-  // Sum of k_i and gamma_i in F_n
-  let totalK = 0n;
-  let totalGamma = 0n;
-  for (let i = 0; i < numParticipants; i++) {
-    totalK = modN(totalK + kShares[i]);
-    totalGamma = modN(totalGamma + gammaShares[i]);
+  for (let i = 0; i < input.publicDomain.activeShareIndices.length; i++) {
+    const idx = input.publicDomain.activeShareIndices[i];
+    const val = input.publicDomain.shareValues[i];
+    daemons.push(new MpcParticipantDaemon('PUBLIC', idx, idx, val));
   }
 
-  // delta = (k * gamma) mod n
-  // In GG20 MPC, delta is computed via distributed Beaver triples without revealing k_i or g_i.
-  const delta = modN(totalK * totalGamma);
-  const deltaInv = modInverse(delta, CURVE_ORDER);
-
-  // Nonce point R = deltaInv * Gamma = (k * gamma)^(-1) * (gamma * G) = k^(-1) * G = (r_x, r_y)
-  const R = Gamma.multiply(deltaInv);
-  const r = modN(R.x);
-  if (r === 0n) {
-    throw new Error('[MPC Protocol Error] Nonce collision: r = 0 mod n. Retry session.');
+  for (let i = 0; i < input.privateDomain.activeShareIndices.length; i++) {
+    const idx = input.privateDomain.activeShareIndices[i];
+    const val = input.privateDomain.shareValues[i];
+    daemons.push(new MpcParticipantDaemon('PRIVATE', idx, idx, val));
   }
 
-  let yParity: 0 | 1 = R.y % 2n === 1n ? 1 : 0;
-
-  // ── Step 5: Distributed Cross-Multiplication (sigma = k * x mod n) ────────
-  // In MPC, cross-terms k_i * w_j are masked using symmetric pairwise blinding pads:
-  //   sigma_i = k_i * w_i + sum_{j != i} (k_i * w_j + blind_{ij} - blind_{ji})
-  // so that sum(sigma_i) = k * x (mod n), but no party learns x or w_j!
-  const sigmaShares: bigint[] = [];
-  let remainingSigma = 0n;
-
-  // Compute distributed sigma contributions
-  // Each participant i computes its initial share:
-  for (let i = 0; i < numParticipants - 1; i++) {
-    const s_share = randomScalar();
-    sigmaShares.push(s_share);
-    remainingSigma = modN(remainingSigma + s_share);
-  }
-
-  // Exact total sigma = (totalK * sum(participantsW)) mod n
-  // Notice: this equals k * x mod n.
-  let totalW = 0n;
-  for (const w of participantsW) totalW = modN(totalW + w);
-  const exactSigma = modN(totalK * totalW);
-
-  // Final participant's share balances the sum
-  const lastSigmaShare = modN(exactSigma - remainingSigma);
-  sigmaShares.push(lastSigmaShare);
-
-  // ── Step 6: Distributed Partial Signatures ────────────────────────────────
-  // Each participant i computes partial signature:
-  //   s_i = (m * k_i + r * sigma_i) mod n
-  const sShares: bigint[] = [];
-  let aggregatedS = 0n;
-
-  for (let i = 0; i < numParticipants; i++) {
-    const s_i = modN(modN(m * kShares[i]) + modN(r * sigmaShares[i]));
-    sShares.push(s_i);
-    aggregatedS = modN(aggregatedS + s_i);
-  }
-
-  if (aggregatedS === 0n) {
-    throw new Error('[MPC Protocol Error] Degenerate signature: s = 0 mod n. Retry session.');
-  }
-
-  // Enforce canonical low-s (BIP-62 / EIP-2)
-  const halfOrder = CURVE_ORDER / 2n;
-  let finalS = aggregatedS;
-  if (finalS > halfOrder) {
-    finalS = modN(CURVE_ORDER - finalS);
-    yParity = yParity === 1 ? 0 : 1;
-  }
-
-  // ── Step 7: Zeroize ephemeral nonce & secret material from RAM ───────────
-  kShares.fill(0n);
-  gammaShares.fill(0n);
-  sigmaShares.fill(0n);
-  sShares.fill(0n);
-  participantsW.fill(0n);
-
-  // ── Step 8: Verify Signature against Aggregated Public Key ────────────────
-  const rHex = '0x' + scalarToHex(r);
-  const sHex = '0x' + scalarToHex(finalS);
-
-  const sig = ethers.Signature.from({
-    r: rHex,
-    s: sHex,
-    yParity,
+  // Execute 3-round decentralized interactive threshold ECDSA protocol
+  const clients: IMpcParticipantClient[] = daemons.map((d) => {
+    if (!trustedParticipantRegistry.getParticipant(d.id)) {
+      performEnrollmentCeremony({
+        nodeId: d.id,
+        domain: d.domain,
+        nodeIndex: d.nodeIndex,
+        shareIndex: d.shareIndex,
+        endpoint: `ipc:///tmp/${d.id}.sock`,
+        approved: true,
+      });
+    }
+    return new DaemonClientAdapter(d);
   });
 
-  const recoveredAddress = ethers.recoverAddress(msgHashHex, sig);
-  const expectedAddress = ethers.computeAddress(expectedAggregatedPublicKeyHex);
-
-  if (recoveredAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
-    throw new Error(
-      `[MPC Cryptographic Verification Failed] Recovered address ${recoveredAddress} does not match expected wallet address ${expectedAddress}`
-    );
-  }
-
-  // ── Step 9: Assemble EVM Broadcastable Signed Transaction ────────────────
-  const tx = ethers.Transaction.from(input.unsignedTxSerialized);
-  tx.signature = sig;
-  const rawSignedTx = tx.serialized;
-  const txHash = ethers.keccak256(rawSignedTx);
-
-  // Calculate EIP-155 v parameter
-  const v = Number(input.chainId * 2n + 35n + BigInt(yParity));
-
-  return {
-    r: rHex,
-    s: sHex,
-    yParity,
-    v,
-    rawSignedTx,
-    txHash,
-    signingQuorum: {
-      foundationAuthorized: true,
-      publicNodeCount: input.publicDomain.activeShareIndices.length,
-      privateNodeCount: input.privateDomain.activeShareIndices.length,
-    },
-  };
+  return await statelessMpcCoordinator.coordinateSigningSession(
+    clients,
+    input.unsignedTxSerialized,
+    input.chainId,
+    expectedAggregatedPublicKeyHex,
+    undefined,
+    minPublicThreshold,
+    minPrivateThreshold
+  );
 }
 
 /**

@@ -1,88 +1,17 @@
 import { apiClient } from './client';
+import {
+  User,
+  AuthResponse,
+  WorkPolicy,
+  WalletData,
+  ClusterStatus,
+  EconomicStats,
+  PolicyCheckResponse,
+  TransactionRecord,
+  SignTransactionResult,
+} from '../types/api';
 
-export interface User {
-  id: string;
-  loginMethod: 'google' | 'mobile';
-  googleId?: string;
-  email?: string;
-  mobile?: string;
-}
-
-export interface AuthResponse {
-  user: User;
-  token: string;
-  mfaVerified: boolean;
-  hasPolicy: boolean;
-  hasWallet: boolean;
-}
-
-export interface WorkPolicy {
-  start_time: string;
-  end_time: string;
-  timezone: string;
-  city: string;
-  lat: number;
-  lng: number;
-  radius_km: number;
-  set_at?: string;
-}
-
-export interface WalletData {
-  address: string;
-  publicKey: string;
-  balance: string;
-  n: number;
-  threshold: number;
-  createdAt?: string;
-  protocolVersion?: string;
-  domains?: {
-    foundation: { role: string; nodes: number };
-    public: { role: string; nodes: number; threshold: number };
-    private: { role: string; nodes: number; threshold: number };
-  };
-}
-
-export interface ClusterStatus {
-  totalNodes: number;
-  domainBreakdown: {
-    FOUNDATION: { total: number; online: number; threshold: number };
-    PUBLIC: { total: number; online: number; threshold: number };
-    PRIVATE: { total: number; online: number; threshold: number };
-  };
-  healthy: boolean;
-  activeDriver: 'docker' | 'sandbox' | 'remote';
-}
-
-export interface EconomicStats {
-  state: {
-    totalValueSecuredMstc: number;
-    stakedSst: number;
-    stakedSmstc: number;
-    totalEffectiveStake: number;
-    currentSecurityRatio: number;
-    currentEmissionRateApr: number;
-    insuranceTreasuryBalanceMstc: number;
-    totalUsageFeesProcessedMstc: number;
-  };
-  params: {
-    targetSecurityRatio: number;
-    minEmissionRateApr: number;
-    maxEmissionRateApr: number;
-    sstMaxSupplyCeiling: number;
-  };
-}
-
-export interface PolicyCheckResponse {
-  allowed: boolean;
-  reason: string;
-  details?: {
-    currentTime?: string;
-    allowedWindow?: string;
-    currentDistanceKm?: number;
-    maxRadiusKm?: number;
-    anomalyDetected?: boolean;
-  };
-}
+export * from '../types/api';
 
 export const authApi = {
   loginWithGoogle: async (credential: string): Promise<AuthResponse> => {
@@ -173,19 +102,12 @@ export const walletApi = {
     amount: string;
     lat?: number;
     lng?: number;
-  }): Promise<{ success: boolean; txHash: string; broadcasted: boolean; message: string; explorerUrl?: string }> => {
-    const res = await apiClient.post('/wallet/sign', data);
+  }): Promise<SignTransactionResult> => {
+    const res = await apiClient.post<SignTransactionResult>('/wallet/sign', data);
     return res.data;
   },
 
-  getTransactions: async (): Promise<{
-    transactions: Array<{
-      tx_hash: string;
-      to_address: string;
-      amount: string;
-      created_at: string;
-    }>;
-  }> => {
+  getTransactions: async (): Promise<{ transactions: TransactionRecord[] }> => {
     const res = await apiClient.get('/wallet/transactions');
     return res.data;
   },

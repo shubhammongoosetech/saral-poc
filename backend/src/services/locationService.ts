@@ -1,5 +1,6 @@
 import { prisma } from '../config/db';
 import { env } from '../config/env';
+import { logSecurityEvent } from './auditLogService';
 
 export interface PolicyCheckResult {
   allowed: boolean;
@@ -148,19 +149,31 @@ export async function evaluateAccessPolicy(
   // Check for impossible travel speed anomalies (Zero-trust telemetry verification)
   try {
     const lastLog = await prisma.accessLog.findFirst({
-      where: { userId, lat: { not: null }, lng: { not: null } },
+      where: { userId, allowed: true, lat: { not: null }, lng: { not: null } },
       orderBy: { attemptedAt: 'desc' },
     });
 
     if (lastLog && lastLog.lat !== null && lastLog.lng !== null) {
       const timeDiffMinutes = (Date.now() - new Date(lastLog.attemptedAt).getTime()) / (1000 * 60);
-      if (timeDiffMinutes > 0 && timeDiffMinutes < 10) {
+
+      // 24-Hour Sliding-Window Velocity Evaluation (Patent: Zero-Trust Telemetry Context Gate)
+      // Note: Browser GPS coordinates are client-asserted telemetry, not hardware-attested.
+      // Physical plausibility is verified across a 24-hour window (1,440 minutes).
+      if (timeDiffMinutes >= 0 && timeDiffMinutes <= 1440) {
         const jumpDistanceKm = calculateDistanceKm(lastLog.lat, lastLog.lng, currentLat, currentLng);
-        const speedKmH = (jumpDistanceKm / (timeDiffMinutes / 60));
-        // Flag impossible speeds exceeding 1,200 km/h (airline maximum)
-        if (speedKmH > 1200) {
-          const reason = `Security anomaly: Impossible velocity detected (${Math.round(speedKmH)} km/h over ${jumpDistanceKm.toFixed(1)} km). Location spoofing suspected.`;
+        const effectiveHours = Math.max(timeDiffMinutes / 60, 0.00833); // baseline 30 seconds
+        const speedKmH = jumpDistanceKm / effectiveHours;
+
+        // Flag impossible speeds exceeding 1,200 km/h (airline maximum cruise velocity)
+        if (speedKmH > 1200 && jumpDistanceKm > 5.0) {
+          const reason = `Security anomaly: Impossible velocity detected (${Math.round(speedKmH)} km/h over ${jumpDistanceKm.toFixed(1)} km in ${Math.round(timeDiffMinutes)} minutes). Telemetry spoofing suspected.`;
           await logAccess(false, reason);
+          await logSecurityEvent({
+            userId,
+            eventType: 'LOCATION_VELOCITY_ANOMALY',
+            severity: 'SECURITY_ALERT',
+            details: { speedKmH: Math.round(speedKmH), jumpDistanceKm, timeDiffMinutes },
+          }).catch(() => null);
           return { allowed: false, reason, details: { anomalyDetected: true } };
         }
       }

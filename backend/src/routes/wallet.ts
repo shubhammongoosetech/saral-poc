@@ -41,7 +41,7 @@ router.post('/check-access', requireAuth, requireMfa, handleCheckAccess);
 router.post('/sign', requireAuth, requireMfa, signingLimiter, handleSignTransaction);
 router.get('/transactions', requireAuth, requireMfa, handleGetTransactions);
 
-// 27-Node Cluster Health Monitoring
+// 19-Node Cluster Health Monitoring
 router.get('/cluster-health', requireAuth, requireMfa, handleGetClusterHealth);
 
 // Adaptive Multi-Asset Economic Security Stats (Patent FIG. 4)

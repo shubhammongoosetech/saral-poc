@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
+import { AppError } from '../utils/errors';
+import { logger } from '../utils/logger';
 
 export function errorHandler(
   err: any,
@@ -7,8 +9,9 @@ export function errorHandler(
   res: Response,
   next: NextFunction
 ): void {
-  // Never log private keys or raw data in error outputs
-  console.error('[Error]', req.method, req.path, err.message || err);
+  // Never log private key material or raw secrets in error logs
+  const errMsg = err?.message || String(err);
+  logger.error('ErrorHandler', `${req.method} ${req.path} failed: ${errMsg}`);
 
   if (err instanceof ZodError) {
     const issues = (err as any).issues || (err as any).errors || [];
@@ -22,9 +25,15 @@ export function errorHandler(
     return;
   }
 
-  const statusCode = err.statusCode || (err.message?.includes('Access Denied') ? 403 : 400);
+  if (err instanceof AppError) {
+    res.status(err.statusCode).json({
+      error: err.message,
+    });
+    return;
+  }
 
+  const statusCode = err.statusCode || (errMsg.includes('Access Denied') ? 403 : 400);
   res.status(statusCode).json({
-    error: err.message || 'An unexpected error occurred',
+    error: errMsg || 'An unexpected error occurred',
   });
 }

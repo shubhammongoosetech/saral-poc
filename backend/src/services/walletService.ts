@@ -6,7 +6,7 @@
  * Implements:
  *  - 3-Domain Separation of Powers (Foundation, Public, Private).
  *  - Distributed Key Generation (DKG) with Zero Central Private Key.
- *  - 27 Distributed Storage Nodes across the 3 Trust Domains.
+ *  - Fixed 19 Distributed Storage Nodes across the 3 Trust Domains.
  *  - Genuine Multi-Party Computation (MPC) Threshold Signing for EVM.
  *  - Guarded Break-Glass Recovery (Patent FIG. 3).
  *  - Adaptive Multi-Asset Economic Security Integration (Patent FIG. 4).
@@ -21,10 +21,19 @@ import {
   executeMpcThresholdSign,
   DomainType,
 } from '../crypto/thresholdEcdsa';
+import { statelessMpcCoordinator } from '../crypto/mpcCoordinator';
+import {
+  verifyShareWithCommitments,
+} from '../crypto/shamirField';
+import {
+  scalarToHex,
+} from '../crypto/secp256k1Math';
 import {
   encryptShareGcm,
-  decryptShareGcm,
 } from '../crypto/secureEncryption';
+import {
+  AuthenticatedParticipantClient,
+} from '../participant/participantClient';
 import {
   nodeCluster,
   normalizeDomain,
@@ -39,6 +48,14 @@ import {
 import { evaluateAccessPolicy } from './locationService';
 import { initializeWalletRecovery } from './recoveryService';
 import { economicSecurity } from './economicService';
+
+export interface DomainCommitments {
+  foundation: string[];
+  public: string[];
+  private: string[];
+}
+
+export const walletCommitmentsStore = new Map<string, DomainCommitments>();
 
 export interface WalletInfo {
   address: string;
@@ -142,9 +159,9 @@ export async function getExistingWallet(userId: string): Promise<WalletInfo | nu
  * 3. Derives Ethereum wallet address from Q.
  * 4. Shards Public domain key into n shares with threshold t.
  * 5. Shards Private domain key into n shares with threshold t.
- * 6. Generates 9 Foundation node shares.
+ * 6. Generates 1 Foundation node share.
  * 7. Encrypts each share with AES-256-GCM using domain-separated HKDF keys.
- * 8. Deploys each share to its respective node container (27 containers total).
+ * 8. Deploys each share to its respective node container (19 containers total).
  * 9. Stores ONLY metadata in PostgreSQL (NO private keys or plaintext shares).
  * 10. Initializes Guarded Break-Glass Recovery subsystem (Patent FIG. 3).
  * 11. Registers wallet in Adaptive Multi-Asset Economic Subsystem (Patent FIG. 4).
@@ -180,6 +197,13 @@ export async function generateWallet(
   const address = mpcWallet.address;
   const publicKey = mpcWallet.aggregatedPublicKeyHex;
 
+  // Store Feldman VSS commitments for share integrity verification
+  walletCommitmentsStore.set(userId, {
+    foundation: mpcWallet.foundation.commitments,
+    public: mpcWallet.publicDomain.commitments,
+    private: mpcWallet.privateDomain.commitments,
+  });
+
   // Store Wallet Metadata in DB
   await prisma.wallet.create({
     data: {
@@ -192,23 +216,22 @@ export async function generateWallet(
     },
   });
 
-  // Deploy 27 Nodes across the 3 Domains:
-  // 1. Foundation Domain: 9 nodes
-  for (let i = 1; i <= n; i++) {
-    const shareVal = mpcWallet.foundation.shares[0].value;
+  // Deploy Nodes across the 3 Domains:
+  // 1. Foundation Domain: distinct independent institutional shares
+  for (const s of mpcWallet.foundation.shares) {
     const encrypted = encryptShareGcm(
-      JSON.stringify({ index: i, value: shareVal.toString(16) }),
+      JSON.stringify({ index: s.index, value: scalarToHex(s.value) }),
       'FOUNDATION'
     );
-    const nodeInfo = await nodeCluster.deployShareToNode(userId, 'FOUNDATION', i, encrypted.serialized);
+    const nodeInfo = await nodeCluster.deployShareToNode(userId, 'FOUNDATION', s.index, encrypted.serialized);
 
     await prisma.keyShare.create({
       data: {
         userId,
         category: 'FOUNDATION',
-        shareIndex: i,
-        n,
-        threshold: 1,
+        shareIndex: s.index,
+        n: mpcWallet.foundation.totalShares,
+        threshold: mpcWallet.foundation.threshold,
         containerId: nodeInfo.nodeId,
         containerName: nodeInfo.nodeName,
       },
@@ -218,7 +241,7 @@ export async function generateWallet(
   // 2. Public Domain: n validator nodes
   for (const s of mpcWallet.publicDomain.shares) {
     const encrypted = encryptShareGcm(
-      JSON.stringify({ index: s.index, value: s.value.toString(16) }),
+      JSON.stringify({ index: s.index, value: scalarToHex(s.value) }),
       'PUBLIC'
     );
     const nodeInfo = await nodeCluster.deployShareToNode(userId, 'PUBLIC', s.index, encrypted.serialized);
@@ -239,7 +262,7 @@ export async function generateWallet(
   // 3. Private Domain: n sovereign user/guardian nodes
   for (const s of mpcWallet.privateDomain.shares) {
     const encrypted = encryptShareGcm(
-      JSON.stringify({ index: s.index, value: s.value.toString(16) }),
+      JSON.stringify({ index: s.index, value: scalarToHex(s.value) }),
       'PRIVATE'
     );
     const nodeInfo = await nodeCluster.deployShareToNode(userId, 'PRIVATE', s.index, encrypted.serialized);
@@ -257,8 +280,8 @@ export async function generateWallet(
     });
   }
 
-  // Initialize Guarded Break-Glass Recovery (Patent FIG. 3)
-  initializeWalletRecovery(userId, 3, 5, 48);
+  // Initialize Guarded Break-Glass Recovery (Patent FIG. 3) with original private key commitment
+  initializeWalletRecovery(userId, 3, 5, 48, mpcWallet.privateDomain.publicKeyPointHex);
 
   // Update Economic Security TVS (Patent FIG. 4)
   economicSecurity.updateTvs(economicSecurity.getState().totalValueSecuredMstc + 1000);
@@ -266,7 +289,7 @@ export async function generateWallet(
   const balance = await getBalance(address);
   console.log(
     `[SARAL MPC] Wallet successfully generated for user ${userId.slice(0, 8)}… — ` +
-    `27 nodes deployed across Foundation, Public, and Private domains. ` +
+    `19 nodes deployed across Foundation (1), Public (9), and Private (9) domains. ` +
     `Aggregated Public Key: ${publicKey.slice(0, 20)}… Address: ${address}`
   );
 
@@ -385,83 +408,52 @@ export async function executeSigningTransaction(
     throw new Error(`[Separation of Powers] Private sovereign quorum shortfall: need ${threshold}, found ${privateRows.length}`);
   }
 
-  // Batch read encrypted shares from nodes
-  const allNeededNodes = [
-    ...foundationRows.map((r) => ({ userId, domain: 'FOUNDATION' as DomainType, nodeIndex: r.shareIndex, containerName: r.containerName })),
-    ...publicRows.map((r) => ({ userId, domain: 'PUBLIC' as DomainType, nodeIndex: r.shareIndex, containerName: r.containerName })),
-    ...privateRows.map((r) => ({ userId, domain: 'PRIVATE' as DomainType, nodeIndex: r.shareIndex, containerName: r.containerName })),
+  // 4. Retrieve Independent MPC Participant Clients for All 3 Domains
+  // CRITICAL SECURITY GUARANTEE:
+  // The coordinator NEVER retrieves, decrypts, or holds any participant's private share!
+  // Encrypted shares are dispatched to and decrypted strictly within each participant service process.
+  // The coordinator interacts exclusively via the AuthenticatedParticipantClient interface.
+  const clientPromises: Promise<AuthenticatedParticipantClient>[] = [
+    nodeCluster.getParticipantClient(
+      userId,
+      'FOUNDATION',
+      foundationRows[0].shareIndex,
+      foundationRows[0].shareIndex,
+      foundationRows[0].containerName
+    ),
+    ...publicRows.map((r) =>
+      nodeCluster.getParticipantClient(userId, 'PUBLIC', r.shareIndex, r.shareIndex, r.containerName)
+    ),
+    ...privateRows.map((r) =>
+      nodeCluster.getParticipantClient(userId, 'PRIVATE', r.shareIndex, r.shareIndex, r.containerName)
+    ),
   ];
 
-  const sharesMap = await nodeCluster.retrieveSharesBatch(allNeededNodes);
+  const participantClients = await Promise.all(clientPromises);
 
-  // Helper to parse decrypted share scalar
-  const parseShareScalar = (encrypted: string, domain: DomainType): bigint => {
-    const decrypted = decryptShareGcm(encrypted, domain);
-    try {
-      const parsed = JSON.parse(decrypted);
-      return BigInt('0x' + parsed.value);
-    } catch {
-      // Legacy hex share fallback
-      const cleanHex = decrypted.startsWith('0x') ? decrypted.slice(2) : decrypted;
-      return BigInt('0x' + cleanHex);
-    }
-  };
+  // 5. Execute True Decentralized Interactive MPC Protocol
+  console.log('[SARAL MPC] Executing 3-Domain Decentralized Interactive Threshold Signing protocol...');
+  const commitments = walletCommitmentsStore.get(userId);
 
-  // Build participation structures
-  const foundationShareEnc = sharesMap.get(foundationRows[0].containerName);
-  if (!foundationShareEnc) throw new Error('Failed to read Foundation share');
-  const foundationVal = parseShareScalar(foundationShareEnc, 'FOUNDATION');
-
-  const foundationParticipation = {
-    domain: 'FOUNDATION' as DomainType,
-    activeShareIndices: [foundationRows[0].shareIndex],
-    shareValues: [foundationVal],
-  };
-
-  const publicIndices: number[] = [];
-  const publicValues: bigint[] = [];
-  for (const row of publicRows) {
-    const enc = sharesMap.get(row.containerName);
-    if (!enc) throw new Error(`Missing share from Public node: ${row.containerName}`);
-    publicIndices.push(row.shareIndex);
-    publicValues.push(parseShareScalar(enc, 'PUBLIC'));
-  }
-
-  const publicParticipation = {
-    domain: 'PUBLIC' as DomainType,
-    activeShareIndices: publicIndices,
-    shareValues: publicValues,
-  };
-
-  const privateIndices: number[] = [];
-  const privateValues: bigint[] = [];
-  for (const row of privateRows) {
-    const enc = sharesMap.get(row.containerName);
-    if (!enc) throw new Error(`Missing share from Private node: ${row.containerName}`);
-    privateIndices.push(row.shareIndex);
-    privateValues.push(parseShareScalar(enc, 'PRIVATE'));
-  }
-
-  const privateParticipation = {
-    domain: 'PRIVATE' as DomainType,
-    activeShareIndices: privateIndices,
-    shareValues: privateValues,
-  };
-
-  // 5. Execute Genuine Threshold MPC Signing
-  console.log('[SARAL MPC] Executing 3-Domain MPC Threshold Signing protocol...');
-  const mpcResult = await executeMpcThresholdSign(
-    {
-      unsignedTxSerialized: unsignedSerialized,
+  let mpcResult;
+  try {
+    mpcResult = await statelessMpcCoordinator.coordinateSigningSession(
+      participantClients,
+      unsignedSerialized,
       chainId,
-      foundation: foundationParticipation,
-      publicDomain: publicParticipation,
-      privateDomain: privateParticipation,
-    },
-    publicKeyHex,
-    threshold,
-    threshold
-  );
+      publicKeyHex,
+      commitments,
+      threshold,
+      threshold
+    );
+  } catch (err: any) {
+    if (err.message?.includes('Feldman VSS verification failed')) {
+      for (const row of publicRows) {
+        economicSecurity.slashNode(row.containerName, 'TAMPERED_SHARE', 500_000);
+      }
+    }
+    throw err;
+  }
 
   // 6. Broadcast Signed Raw Transaction
   console.log(`[SARAL MPC] Threshold signature produced. Broadcasting raw tx (Hash: ${mpcResult.txHash})...`);

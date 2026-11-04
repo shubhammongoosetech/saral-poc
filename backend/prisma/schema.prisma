@@ -32,6 +32,7 @@ model Mfa {
   id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId     String    @unique @map("user_id") @db.Uuid
   type       String    @default("otp") @db.VarChar(50)
+  secret     String?   @db.Text
   verifiedAt DateTime? @map("verified_at") @db.Timestamptz
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -64,6 +65,7 @@ model Wallet {
   protocolVersion String   @default("MPC-secp256k1-v1") @map("protocol_version") @db.VarChar(50)
   threshold       Int      @default(5)
   n               Int      @default(9)
+  commitments     String?  @db.Text
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -107,14 +109,16 @@ model AccessLog {
 }
 
 model SecurityEventLog {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  eventType String   @map("event_type") @db.VarChar(100)
-  severity  String   @default("INFO") @db.VarChar(50)
-  ipAddress String?  @map("ip_address") @db.VarChar(100)
-  userAgent String?  @map("user_agent") @db.VarChar(255)
-  details   String?  @db.Text
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  eventType    String   @map("event_type") @db.VarChar(100)
+  severity     String   @default("INFO") @db.VarChar(50)
+  ipAddress    String?  @map("ip_address") @db.VarChar(100)
+  userAgent    String?  @map("user_agent") @db.VarChar(255)
+  details      String?  @db.Text
+  previousHash String?  @map("previous_hash") @db.VarChar(64)
+  entryHash    String?  @map("entry_hash") @db.VarChar(64)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -145,6 +149,7 @@ model Transaction {
   txHash    String   @unique @map("tx_hash") @db.VarChar(255)
   toAddress String   @map("to_address") @db.VarChar(255)
   amount    String   @db.VarChar(100)
+  status    String   @default("BROADCASTED") @db.VarChar(50)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -155,7 +160,7 @@ model Transaction {
 model Otp {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
-  code      String   @db.VarChar(10)
+  code      String   @db.VarChar(255)
   purpose   String   @db.VarChar(50) // 'login' | 'mfa'
   expiresAt DateTime @map("expires_at") @db.Timestamptz
   used      Boolean  @default(false)

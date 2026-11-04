@@ -28,7 +28,6 @@
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.1",
     "prisma": "^6.19.3",
-    "secrets.js-grempe": "^2.0.0",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^14.0.3",
     "zod": "^4.6.7"

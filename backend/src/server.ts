@@ -1,32 +1,23 @@
 import { app } from './app';
 import { env } from './config/env';
-import { testConnection } from './config/db';
+import { bootstrapSystem, registerGracefulShutdown } from './bootstrap';
 
 async function startServer() {
-  await testConnection();
+  const t0 = performance.now();
+  const metrics = await bootstrapSystem();
 
   const server = app.listen(env.PORT, () => {
-    console.log(`=======================================================`);
-    console.log(`SARAL Wallet Backend running at http://localhost:${env.PORT}`);
-    console.log(`Environment: ${env.NODE_ENV}`);
-    console.log(`Swagger Docs: http://localhost:${env.PORT}/docs`);
-    console.log(`MST Testnet RPC: ${env.RPC_URL}`);
-    console.log(`=======================================================`);
+    const totalListenMs = (performance.now() - t0).toFixed(2);
+    console.log(`[SARAL] Server listening on port ${env.PORT} (${env.NODE_ENV}) [ready in ${totalListenMs}ms]`);
+    console.log(`[SARAL] Bootstrap metrics: dirs=${metrics.runtimeDirsMs.toFixed(1)}ms, db=${metrics.databaseCheckMs.toFixed(1)}ms, env=${metrics.envValidationMs.toFixed(1)}ms`);
+    console.log(`[SARAL] API documentation available at http://localhost:${env.PORT}/docs`);
+    console.log(`[SARAL] RPC upstream: ${env.RPC_URL} (Chain ID: ${env.CHAIN_ID})`);
   });
 
-  const shutdown = () => {
-    console.log('\nShutting down SARAL Wallet server gracefully...');
-    server.close(() => {
-      console.log('Server terminated.');
-      process.exit(0);
-    });
-  };
-
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  registerGracefulShutdown(server);
 }
 
 startServer().catch((err) => {
-  console.error('Fatal error during server startup:', err);
+  console.error('[SARAL] Fatal error during startup:', err);
   process.exit(1);
 });
