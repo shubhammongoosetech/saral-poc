@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { prisma } from '../config/db';
 import { env } from '../config/env';
-import { signToken } from '../utils/jwt';
+import { signAccessToken, signRefreshToken } from '../utils/jwt';
 import { secureCompare } from '../utils/crypto';
 import { hashOtpCode } from './mfaService';
 
@@ -16,13 +16,62 @@ export interface AuthResult {
     googleId?: string;
     email?: string;
   };
+  // TODO: Remove token from response body once all frontend clients
+  //       have migrated to reading from httpOnly cookie (D-07).
   token: string;
+  accessToken: string;
+  refreshToken: string;
   mfaVerified: boolean;
   hasPolicy: boolean;
   hasWallet: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// OTP attempt tracking (in-memory for POC — D-07 / 1.7)
+//
+// POC NOTE: In production this must be backed by Redis or the database to
+// survive process restarts and work across multiple instances.
+// ---------------------------------------------------------------------------
+interface OtpAttemptRecord {
+  count: number;
+  resetAt: number; // epoch ms
+}
+
+const otpAttempts = new Map<string, OtpAttemptRecord>();
+
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+function getAttemptKey(userId: string, purpose: string): string {
+  return `${userId}:${purpose}`;
+}
+
+function checkAndIncrementAttempt(userId: string, purpose: string): void {
+  const key = getAttemptKey(userId, purpose);
+  const now = Date.now();
+  const record = otpAttempts.get(key);
+
+  if (record && now < record.resetAt) {
+    if (record.count >= OTP_MAX_ATTEMPTS) {
+      const remainingSecs = Math.ceil((record.resetAt - now) / 1000);
+      throw new Error(
+        `Too many failed OTP attempts. Try again in ${remainingSecs} seconds.`
+      );
+    }
+    record.count += 1;
+  } else {
+    // Window expired or first attempt
+    otpAttempts.set(key, { count: 1, resetAt: now + OTP_LOCKOUT_MS });
+  }
+}
+
+function resetAttempts(userId: string, purpose: string): void {
+  otpAttempts.delete(getAttemptKey(userId, purpose));
+}
+
+// ---------------------------------------------------------------------------
 // Status lookup helper
+// ---------------------------------------------------------------------------
 async function getUserStatus(userId: string) {
   const [mfa, policy, shareCount, walletCount] = await Promise.all([
     prisma.mfa.findUnique({ where: { userId }, select: { verifiedAt: true } }).catch(() => null),
@@ -38,7 +87,9 @@ async function getUserStatus(userId: string) {
   };
 }
 
+// ---------------------------------------------------------------------------
 // Google OAuth authentication
+// ---------------------------------------------------------------------------
 export async function verifyGoogleAuth(credential: string): Promise<AuthResult> {
   const ticket = await googleClient.verifyIdToken({
     idToken: credential,
@@ -74,11 +125,12 @@ export async function verifyGoogleAuth(credential: string): Promise<AuthResult> 
 
   const status = await getUserStatus(user.id);
 
-  const token = signToken({
+  const accessToken = signAccessToken({
     userId: user.id,
     loginMethod: 'google',
     mfaVerified: false,
   });
+  const refreshToken = signRefreshToken(user.id);
 
   return {
     user: {
@@ -87,12 +139,16 @@ export async function verifyGoogleAuth(credential: string): Promise<AuthResult> 
       googleId: user.googleId ?? undefined,
       email: user.email ?? undefined,
     },
-    token,
+    token: accessToken, // TODO: remove once frontend reads cookie
+    accessToken,
+    refreshToken,
     ...status,
   };
 }
 
+// ---------------------------------------------------------------------------
 // Mobile phone OTP authentication
+// ---------------------------------------------------------------------------
 export async function requestMobileOtp(
   mobile: string
 ): Promise<{ success: boolean; message: string; devOtp?: string }> {
@@ -145,6 +201,9 @@ export async function verifyMobileOtp(
   });
   if (!user) throw new Error('User not found for this mobile number');
 
+  // Lockout check before comparing (1.7)
+  checkAndIncrementAttempt(user.id, 'login');
+
   const cleanCode = otpCode.trim();
   const expectedHash = hashOtpCode(cleanCode, 'login');
 
@@ -171,6 +230,9 @@ export async function verifyMobileOtp(
     throw new Error('Incorrect OTP code');
   }
 
+  // Success — reset attempt counter
+  resetAttempts(user.id, 'login');
+
   // Mark OTP used
   await prisma.otp.update({
     where: { id: otpRecord.id },
@@ -179,11 +241,12 @@ export async function verifyMobileOtp(
 
   const status = await getUserStatus(user.id);
 
-  const token = signToken({
+  const accessToken = signAccessToken({
     userId: user.id,
     loginMethod: 'mobile',
     mfaVerified: false,
   });
+  const refreshToken = signRefreshToken(user.id);
 
   return {
     user: {
@@ -191,7 +254,9 @@ export async function verifyMobileOtp(
       loginMethod: 'mobile',
       mobile: user.mobile ?? undefined,
     },
-    token,
+    token: accessToken, // TODO: remove once frontend reads cookie
+    accessToken,
+    refreshToken,
     ...status,
   };
 }

@@ -16,6 +16,16 @@
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
+import { secp256k1 } from '@noble/curves/secp256k1';
+
+function secp256k1Verify(sigHex: string, hash: Buffer, pubKeyHex: string): boolean {
+  try {
+    return secp256k1.verify(sigHex, hash, pubKeyHex);
+  } catch {
+    return false;
+  }
+}
 
 export interface EconomicParameters {
   targetSecurityRatio: number; // R* (default: 1.5)
@@ -65,8 +75,10 @@ export class EconomicSecuritySubsystem {
   private state: EconomicState;
   private slashingHistory: SlashingEvent[] = [];
   private restakedVaultBalances: Map<string, number> = new Map();
+  private persist: boolean;
 
-  constructor(customParams?: Partial<EconomicParameters>) {
+  constructor(customParams?: Partial<EconomicParameters>, options?: { persist?: boolean }) {
+    this.persist = options?.persist ?? (process.env.NODE_ENV !== 'test');
     this.params = {
       targetSecurityRatio: 1.5,
       minEmissionRateApr: 0.02,
@@ -78,8 +90,8 @@ export class EconomicSecuritySubsystem {
       insuranceFeeSharePercent: 20,
       validatorRewardSharePercent: 50,
       slashingPenaltyPercent: 10,
-      slashingInsuranceSplitPercent: 100,
-      slashingRedistributionSplitPercent: 0,
+      slashingInsuranceSplitPercent: 60,   // 60% → Insurance Treasury (patent FIG. 4 / D-17)
+      slashingRedistributionSplitPercent: 40, // 40% → Validators in good standing
       ...customParams,
     };
 
@@ -104,14 +116,14 @@ export class EconomicSecuritySubsystem {
       lastUpdated: new Date().toISOString(),
     };
 
-    if (process.env.NODE_ENV !== 'test') {
+    if (this.persist) {
       this.loadStateFromDisk();
     }
     this.recalculateAdaptiveEmission();
   }
 
   private saveStateToDisk(): void {
-    if (process.env.NODE_ENV === 'test') return;
+    if (!this.persist) return;
     try {
       if (!fs.existsSync(ECONOMIC_STORAGE_DIR)) {
         fs.mkdirSync(ECONOMIC_STORAGE_DIR, { recursive: true, mode: 0o700 });
@@ -156,6 +168,44 @@ export class EconomicSecuritySubsystem {
   public setPricingOracleRate(mstcToSstRate: number): void {
     if (mstcToSstRate <= 0) throw new Error('Pricing oracle rate must be strictly positive');
     this.params.mstcToSstExchangeRate = mstcToSstRate;
+  }
+
+  /**
+   * Joint Governance (Patent Claims 8, 12):
+   * Modifying economic emission parameters strictly requires valid digital signatures
+   * from BOTH Foundation and Public domains (Two-Signature Rule).
+   */
+  public updateGovernanceParameters(
+    newParams: Partial<EconomicParameters>,
+    foundationSignatureHex: string,
+    publicSignatureHex: string,
+    foundationPubKeyHex: string,
+    publicPubKeyHex: string
+  ): EconomicParameters {
+    const canonicalPayload = JSON.stringify(newParams);
+    const hash = crypto.createHash('sha256').update(`GOVERNANCE_PARAM_UPDATE:${canonicalPayload}`).digest();
+
+    // Verify Foundation Signature
+    const cleanFPub = foundationPubKeyHex.startsWith('0x') ? foundationPubKeyHex.slice(2) : foundationPubKeyHex;
+    const cleanF = foundationSignatureHex.startsWith('0x') ? foundationSignatureHex.slice(2) : foundationSignatureHex;
+    const isValidF = secp256k1Verify(cleanF, hash, cleanFPub);
+    if (!isValidF) {
+      throw new Error('[Joint Governance] Foundation domain authorization signature is invalid');
+    }
+
+    // Verify Public Domain Signature
+    const cleanPPub = publicPubKeyHex.startsWith('0x') ? publicPubKeyHex.slice(2) : publicPubKeyHex;
+    const cleanP = publicSignatureHex.startsWith('0x') ? publicSignatureHex.slice(2) : publicSignatureHex;
+    const isValidP = secp256k1Verify(cleanP, hash, cleanPPub);
+    if (!isValidP) {
+      throw new Error('[Joint Governance] Public validator domain authorization signature is invalid');
+    }
+
+    // Apply governed updates
+    this.params = { ...this.params, ...newParams };
+    this.recalculateAdaptiveEmission();
+    this.saveStateToDisk();
+    return { ...this.params };
   }
 
   public getState(): EconomicState {
@@ -333,7 +383,7 @@ export class EconomicSecuritySubsystem {
     this.state.validatorRedistributionPoolMstc += redistributionShare;
 
     const event: SlashingEvent = {
-      id: `slash-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: `slash-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
       nodeId,
       reason,
       slashedAmountSst: slashedSst,

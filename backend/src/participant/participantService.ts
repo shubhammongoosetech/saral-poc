@@ -159,6 +159,13 @@ export class IndependentParticipantService {
   }
 
   /**
+   * Retrieves isolated tenant share for local inspection / test verification.
+   */
+  public getTenantShare(userId: string): bigint | undefined {
+    return this.tenantShares.get(userId);
+  }
+
+  /**
    * Helper to set share directly for memory-isolated unit tests where vault files are not present.
    */
   public setShareForTesting(shareValue: bigint): void {
@@ -229,7 +236,7 @@ export class IndependentParticipantService {
     const domainIndices = domainParticipants.map((p) => p.shareIndex);
 
     let lambda = 1n;
-    if (this.domain === 'FOUNDATION' || domainIndices.length === 1) {
+    if (domainIndices.length === 1) {
       lambda = 1n;
     } else {
       lambda = computeLagrangeCoefficient(this.shareIndex, domainIndices);

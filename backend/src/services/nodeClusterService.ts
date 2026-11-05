@@ -30,6 +30,8 @@ import { MpcParticipantDaemon } from '../crypto/mpcParticipantDaemon';
 import { AuthenticatedParticipantClient } from '../participant/participantClient';
 import { trustedParticipantRegistry } from '../crypto/participantRegistry';
 import { getProtectedSocketDirectory } from '../participant/participantDaemonProcess';
+import { nodeFileStore } from '../storage/fileStore';
+import { env } from '../config/env';
 
 const execFileAsync = promisify(execFile);
 
@@ -90,15 +92,57 @@ export function getDomainLegacyAliases(domain: DomainType): string[] {
   }
 }
 
+export interface DomainTopologyConfig {
+  count: number;
+  threshold: number;
+}
+
+export interface InfrastructureTopologyConfig {
+  FOUNDATION: DomainTopologyConfig;
+  PUBLIC: DomainTopologyConfig;
+  PRIVATE: DomainTopologyConfig;
+  TOTAL: number;
+}
+
 /**
- * Fixed 19-Node Participant Infrastructure Topology
+ * Retrieves the current cryptographic participant infrastructure topology.
+ * Dynamically resolves from environment configuration or optional custom overrides.
  */
-export const INFRASTRUCTURE_TOPOLOGY = {
-  FOUNDATION: { count: 1, threshold: 1 },
-  PUBLIC: { count: 9, threshold: 5 },
-  PRIVATE: { count: 9, threshold: 5 },
-  TOTAL: 19,
-} as const;
+export function getInfrastructureTopology(
+  customOverride?: Partial<Record<DomainType, Partial<DomainTopologyConfig>>>
+): InfrastructureTopologyConfig {
+  const foundationCount = customOverride?.FOUNDATION?.count ?? env.SARAL_FOUNDATION_NODES;
+  const foundationThreshold = customOverride?.FOUNDATION?.threshold ?? env.SARAL_FOUNDATION_THRESHOLD;
+
+  const publicCount = customOverride?.PUBLIC?.count ?? env.SARAL_PUBLIC_NODES;
+  const publicThreshold = customOverride?.PUBLIC?.threshold ?? env.SARAL_PUBLIC_THRESHOLD;
+
+  const privateCount = customOverride?.PRIVATE?.count ?? env.SARAL_PRIVATE_NODES;
+  const privateThreshold = customOverride?.PRIVATE?.threshold ?? env.SARAL_PRIVATE_THRESHOLD;
+
+  const total = foundationCount + publicCount + privateCount;
+
+  return {
+    FOUNDATION: { count: foundationCount, threshold: foundationThreshold },
+    PUBLIC: { count: publicCount, threshold: publicThreshold },
+    PRIVATE: { count: privateCount, threshold: privateThreshold },
+    TOTAL: total,
+  };
+}
+
+/**
+ * Dynamic participant infrastructure topology proxy.
+ * Reads dynamically from environment configuration while maintaining full backward-compatibility.
+ */
+export const INFRASTRUCTURE_TOPOLOGY: InfrastructureTopologyConfig = new Proxy(
+  {} as InfrastructureTopologyConfig,
+  {
+    get(_target, prop: string | symbol) {
+      const topo = getInfrastructureTopology();
+      return (topo as any)[prop];
+    },
+  }
+);
 
 /**
  * Builds standard infrastructure participant node identifier.
@@ -583,13 +627,27 @@ export class NodeClusterManager {
       } catch {}
     }
 
-    const scriptPath = path.resolve(__dirname, '../participant/participantDaemonProcess.ts');
-    const tsxBin = path.resolve(process.cwd(), 'node_modules/.bin/tsx');
+    const isCompiledJs = __filename.endsWith('.js');
+    let runnerBin: string;
+    let targetScript: string;
+
+    if (isCompiledJs) {
+      runnerBin = process.execPath;
+      targetScript = path.resolve(__dirname, '../participant/participantDaemonProcess.js');
+    } else {
+      const candidates = [
+        path.resolve(__dirname, '../../node_modules/.bin/tsx'),
+        path.resolve(process.cwd(), 'backend/node_modules/.bin/tsx'),
+        path.resolve(process.cwd(), 'node_modules/.bin/tsx'),
+      ];
+      runnerBin = candidates.find((c) => fs.existsSync(c)) || 'tsx';
+      targetScript = path.resolve(__dirname, '../participant/participantDaemonProcess.ts');
+    }
 
     const child = spawn(
-      tsxBin,
+      runnerBin,
       [
-        scriptPath,
+        targetScript,
         '--nodeId', nodeId,
         '--domain', domain,
         '--nodeIndex', String(nodeIndex),
@@ -726,14 +784,18 @@ export class NodeClusterManager {
   }
 
   /**
-   * Initializes and ensures all 19 fixed infrastructure participant nodes are running and active.
+   * Initializes and ensures all infrastructure participant nodes are running and active
+   * according to dynamic topology configuration.
    * Reuses existing nodes, daemons, and containers; idempotent across restarts.
    */
-  public async ensureInfrastructureReady(): Promise<{ totalNodes: number; initialized: number }> {
+  public async ensureInfrastructureReady(
+    customTopology?: Partial<Record<DomainType, Partial<DomainTopologyConfig>>>
+  ): Promise<{ totalNodes: number; initialized: number }> {
+    const topo = getInfrastructureTopology(customTopology);
     const topology = [
-      { domain: 'FOUNDATION' as const, count: 1 },
-      { domain: 'PUBLIC' as const, count: 9 },
-      { domain: 'PRIVATE' as const, count: 9 },
+      { domain: 'FOUNDATION' as const, count: topo.FOUNDATION.count },
+      { domain: 'PUBLIC' as const, count: topo.PUBLIC.count },
+      { domain: 'PRIVATE' as const, count: topo.PRIVATE.count },
     ];
 
     let initialized = 0;
@@ -787,7 +849,93 @@ export class NodeClusterManager {
       }
     }
 
-    return { totalNodes: 19, initialized };
+    return { totalNodes: topo.TOTAL, initialized };
+  }
+
+  /**
+   * Reconciles the running participant containers/processes against desired topology.
+   * - Probes health of every desired participant.
+   * - Spawns/restarts any dead or missing participant processes.
+   * - Restores trusted local enrollment.
+   * - Safely retains all existing tenant shares even during scale-down.
+   */
+  public async reconcileInfrastructure(
+    desiredTopology?: Partial<Record<DomainType, Partial<DomainTopologyConfig>>>
+  ): Promise<{
+    desiredNodes: number;
+    runningNodes: number;
+    restoredNodes: number;
+    status: 'HEALTHY' | 'RECONCILED';
+  }> {
+    const topo = getInfrastructureTopology(desiredTopology);
+    let runningNodes = 0;
+    let restoredNodes = 0;
+
+    const topology = [
+      { domain: 'FOUNDATION' as const, count: topo.FOUNDATION.count },
+      { domain: 'PUBLIC' as const, count: topo.PUBLIC.count },
+      { domain: 'PRIVATE' as const, count: topo.PRIVATE.count },
+    ];
+
+    const socketDir = getProtectedSocketDirectory();
+
+    for (const { domain, count } of topology) {
+      for (let i = 1; i <= count; i++) {
+        const nodeId = buildInfrastructureNodeId(domain, i);
+        const socketPath = path.join(socketDir, `${nodeId}.sock`);
+        const ipcAuthKey = this.getOrCreateNodeIpcSecret(nodeId);
+
+        const isAlive = await this.isSocketResponding(socketPath);
+        if (isAlive) {
+          runningNodes++;
+        } else {
+          // Restart / heal failed participant process
+          const { pid } = await this.ensureParticipantProcessRunning(
+            nodeId,
+            domain,
+            i,
+            i,
+            ipcAuthKey
+          );
+
+          let enrolled = trustedParticipantRegistry.getParticipant(nodeId);
+          if (!enrolled || !enrolled.approved) {
+            const bootstrapClient = new AuthenticatedParticipantClient({
+              id: nodeId,
+              domain,
+              nodeIndex: i,
+              shareIndex: i,
+              identityPublicKeyHex: enrolled?.identityPublicKeyHex || '',
+              socketPath,
+              remotePid: pid,
+              ipcAuthKey,
+            });
+
+            const popInfo = await bootstrapClient.getIdentityPoP();
+            trustedParticipantRegistry.provisionTrustedLocalParticipant({
+              nodeId: popInfo.nodeId,
+              domain: popInfo.domain,
+              nodeIndex: popInfo.nodeIndex,
+              shareIndex: popInfo.shareIndex,
+              identityPublicKeyHex: popInfo.identityPublicKeyHex,
+              endpoint: popInfo.endpoint,
+              proofOfPossessionSigHex: popInfo.proofOfPossessionSigHex,
+              popTimestamp: popInfo.popTimestamp,
+            });
+          }
+
+          restoredNodes++;
+          runningNodes++;
+        }
+      }
+    }
+
+    return {
+      desiredNodes: topo.TOTAL,
+      runningNodes,
+      restoredNodes,
+      status: restoredNodes > 0 ? 'RECONCILED' : 'HEALTHY',
+    };
   }
 
   /**
@@ -853,6 +1001,11 @@ export class NodeClusterManager {
       }
     }
 
+    // Also write to hardened per-node encrypted FileStore (data/<domain>/<nodeName>/wallets/<userId>/share.enc)
+    try {
+      nodeFileStore.writeShare(domain, nodeName, userId, 1, nodeIndex, encryptedShare);
+    } catch {}
+
     return await this.sandboxDriver.writeShare(nodeName, encryptedShare, domain, userId);
   }
 
@@ -867,6 +1020,12 @@ export class NodeClusterManager {
     containerNameHint?: string
   ): Promise<string> {
     const primaryName = buildInfrastructureNodeId(domain, nodeIndex);
+
+    // 0. Try hardened per-node FileStore first
+    try {
+      const stored = nodeFileStore.readShare(domain, primaryName, userId);
+      if (stored && stored.plaintextShare) return stored.plaintextShare;
+    } catch {}
     const candidateNames = [
       primaryName,
       containerNameHint,
@@ -938,22 +1097,37 @@ export class NodeClusterManager {
   }
 
   /**
-   * Health-checks the 19 fixed participant nodes across Foundation, Public, and Private domains.
+   * Health-checks the participant nodes across Foundation, Public, and Private domains.
+   * Dynamically evaluates all nodes defined by the infrastructure topology.
    */
   async checkClusterHealth(
     userId?: string,
-    threshold: number = 5
+    threshold?: number,
+    customTopology?: Partial<Record<DomainType, Partial<DomainTopologyConfig>>>
   ): Promise<ClusterStatus> {
+    const topo = getInfrastructureTopology(customTopology);
     const driver = await this.getPreferredDriver();
     const domainStats = {
-      FOUNDATION: { total: 1, online: 0, threshold: 1 },
-      PUBLIC: { total: 9, online: 0, threshold: 5 },
-      PRIVATE: { total: 9, online: 0, threshold: 5 },
+      FOUNDATION: {
+        total: topo.FOUNDATION.count,
+        online: 0,
+        threshold: topo.FOUNDATION.threshold,
+      },
+      PUBLIC: {
+        total: topo.PUBLIC.count,
+        online: 0,
+        threshold: threshold ?? topo.PUBLIC.threshold,
+      },
+      PRIVATE: {
+        total: topo.PRIVATE.count,
+        online: 0,
+        threshold: threshold ?? topo.PRIVATE.threshold,
+      },
     };
 
-    // 1. Foundation: 1 node (saral-foundation-1)
-    {
-      const nodeName = buildInfrastructureNodeId('FOUNDATION', 1);
+    // 1. Foundation nodes
+    for (let i = 1; i <= topo.FOUNDATION.count; i++) {
+      const nodeName = buildInfrastructureNodeId('FOUNDATION', i);
       let healthy = false;
       if (driver === 'docker') {
         const res = await this.dockerDriver.checkHealth(nodeName);
@@ -966,8 +1140,8 @@ export class NodeClusterManager {
       if (healthy) domainStats.FOUNDATION.online += 1;
     }
 
-    // 2. Public: 9 nodes (saral-public-1..9)
-    for (let i = 1; i <= 9; i++) {
+    // 2. Public nodes
+    for (let i = 1; i <= topo.PUBLIC.count; i++) {
       const nodeName = buildInfrastructureNodeId('PUBLIC', i);
       let healthy = false;
       if (driver === 'docker') {
@@ -981,8 +1155,8 @@ export class NodeClusterManager {
       if (healthy) domainStats.PUBLIC.online += 1;
     }
 
-    // 3. Private: 9 nodes (saral-private-1..9)
-    for (let i = 1; i <= 9; i++) {
+    // 3. Private nodes
+    for (let i = 1; i <= topo.PRIVATE.count; i++) {
       const nodeName = buildInfrastructureNodeId('PRIVATE', i);
       let healthy = false;
       if (driver === 'docker') {
@@ -1002,7 +1176,7 @@ export class NodeClusterManager {
       domainStats.PRIVATE.online >= domainStats.PRIVATE.threshold;
 
     return {
-      totalNodes: 19,
+      totalNodes: topo.TOTAL,
       domainBreakdown: domainStats,
       healthy: isHealthy,
       activeDriver: driver,
@@ -1011,13 +1185,17 @@ export class NodeClusterManager {
 
   /**
    * Deallocates tenant-specific shares for a given user.
-   * Does NOT destroy or terminate the shared 19 infrastructure nodes or containers!
+   * Does NOT destroy or terminate the shared infrastructure nodes or containers!
    */
-  async destroyUserNodes(userId: string): Promise<void> {
+  async destroyUserNodes(
+    userId: string,
+    customTopology?: Partial<Record<DomainType, Partial<DomainTopologyConfig>>>
+  ): Promise<void> {
+    const topo = getInfrastructureTopology(customTopology);
     const topology = [
-      { domain: 'FOUNDATION' as const, count: 1 },
-      { domain: 'PUBLIC' as const, count: 9 },
-      { domain: 'PRIVATE' as const, count: 9 },
+      { domain: 'FOUNDATION' as const, count: topo.FOUNDATION.count },
+      { domain: 'PUBLIC' as const, count: topo.PUBLIC.count },
+      { domain: 'PRIVATE' as const, count: topo.PRIVATE.count },
     ];
     for (const { domain, count } of topology) {
       for (let i = 1; i <= count; i++) {

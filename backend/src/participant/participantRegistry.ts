@@ -25,6 +25,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { DomainType } from '../crypto/thresholdEcdsa';
+import { env } from '../config/env';
 
 export interface OperatorMetadata {
   operatorId: string;
@@ -337,15 +338,26 @@ export class ParticipantRegistry {
       throw new Error(`[ParticipantRegistry] Provisioning rejected: invalid characters in nodeId '${info.nodeId}'`);
     }
 
-    // 2. Validate domain & nodeIndex bounds
+    // 2. Validate domain & nodeIndex bounds dynamically against configured infrastructure
     if (info.domain !== 'FOUNDATION' && info.domain !== 'PUBLIC' && info.domain !== 'PRIVATE') {
       throw new Error(`[ParticipantRegistry] Provisioning rejected: invalid domain '${info.domain}'`);
     }
-    if (info.domain === 'FOUNDATION' && (info.nodeIndex < 1 || info.nodeIndex > 1)) {
-      throw new Error(`[ParticipantRegistry] Provisioning rejected: Foundation domain nodeIndex must be 1, got ${info.nodeIndex}`);
+    const maxFoundation = env.SARAL_FOUNDATION_NODES || 1;
+    const maxPublic = env.SARAL_PUBLIC_NODES || 9;
+    const maxPrivate = env.SARAL_PRIVATE_NODES || 9;
+
+    if (info.domain === 'FOUNDATION' && (info.nodeIndex < 1 || info.nodeIndex > maxFoundation)) {
+      if (maxFoundation === 1) {
+        throw new Error(`[ParticipantRegistry] Provisioning rejected: Foundation domain nodeIndex must be 1, got ${info.nodeIndex}`);
+      } else {
+        throw new Error(`[ParticipantRegistry] Provisioning rejected: Foundation domain nodeIndex must be between 1 and ${maxFoundation}, got ${info.nodeIndex}`);
+      }
     }
-    if ((info.domain === 'PUBLIC' || info.domain === 'PRIVATE') && (info.nodeIndex < 1 || info.nodeIndex > 9)) {
-      throw new Error(`[ParticipantRegistry] Provisioning rejected: ${info.domain} nodeIndex must be between 1 and 9, got ${info.nodeIndex}`);
+    if (info.domain === 'PUBLIC' && (info.nodeIndex < 1 || info.nodeIndex > maxPublic)) {
+      throw new Error(`[ParticipantRegistry] Provisioning rejected: PUBLIC nodeIndex must be between 1 and ${maxPublic}, got ${info.nodeIndex}`);
+    }
+    if (info.domain === 'PRIVATE' && (info.nodeIndex < 1 || info.nodeIndex > maxPrivate)) {
+      throw new Error(`[ParticipantRegistry] Provisioning rejected: PRIVATE nodeIndex must be between 1 and ${maxPrivate}, got ${info.nodeIndex}`);
     }
 
     // 3. Check revocation status

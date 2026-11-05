@@ -48,6 +48,8 @@ import {
 import { evaluateAccessPolicy } from './locationService';
 import { initializeWalletRecovery } from './recoveryService';
 import { economicSecurity } from './economicService';
+import { computeWalletPlacement, pinWalletPlacement } from '../topology/placement';
+import { buildClusterTopology } from '../topology/allocation';
 
 export interface DomainCommitments {
   foundation: string[];
@@ -172,7 +174,15 @@ export async function getExistingWallet(userId: string): Promise<WalletInfo | nu
 export async function generateWallet(
   userId: string,
   nParam?: number,
-  thresholdParam?: number
+  thresholdParam?: number,
+  customTopology?: {
+    foundationN?: number;
+    foundationThreshold?: number;
+    publicN?: number;
+    publicThreshold?: number;
+    privateN?: number;
+    privateThreshold?: number;
+  }
 ): Promise<{
   address: string;
   publicKey: string;
@@ -185,15 +195,30 @@ export async function generateWallet(
     throw new Error('Wallet already exists for this user. Only one wallet generation is permitted.');
   }
 
-  const n = nParam ?? env.SHARE_TOTAL_N;
-  const threshold = thresholdParam ?? env.SHARE_THRESHOLD;
+  const pubN = customTopology?.publicN ?? nParam ?? env.SARAL_PUBLIC_NODES;
+  const pubT = customTopology?.publicThreshold ?? thresholdParam ?? env.SARAL_PUBLIC_THRESHOLD;
 
-  if (threshold < 2 || threshold > n) {
-    throw new Error(`Threshold must be between 2 and ${n}`);
+  const foundN = customTopology?.foundationN ?? env.SARAL_FOUNDATION_NODES;
+  const foundT = customTopology?.foundationThreshold ?? env.SARAL_FOUNDATION_THRESHOLD;
+
+  const privN = customTopology?.privateN ?? env.SARAL_PRIVATE_NODES;
+  const privT = customTopology?.privateThreshold ?? env.SARAL_PRIVATE_THRESHOLD;
+
+  const n = pubN;
+  const threshold = pubT;
+
+  if (pubT < 1 || pubT > pubN) {
+    throw new Error(`Public threshold must be between 1 and ${pubN}`);
+  }
+  if (foundT < 1 || foundT > foundN) {
+    throw new Error(`Foundation threshold must be between 1 and ${foundN}`);
+  }
+  if (privT < 1 || privT > privN) {
+    throw new Error(`Private threshold must be between 1 and ${privN}`);
   }
 
   // Execute DKG: Generate 3 domains without central private key
-  const mpcWallet = generateSaralWalletMpc(n, threshold);
+  const mpcWallet = generateSaralWalletMpc(pubN, pubT, foundN, foundT, privN, privT);
   const address = mpcWallet.address;
   const publicKey = mpcWallet.aggregatedPublicKeyHex;
 
@@ -205,16 +230,30 @@ export async function generateWallet(
   });
 
   // Store Wallet Metadata in DB
-  await prisma.wallet.create({
+  const walletRecord = await prisma.wallet.create({
     data: {
       userId,
       address,
       publicKey,
       protocolVersion: 'MPC-secp256k1-v1',
-      threshold,
-      n,
+      threshold: pubT,
+      n: pubN,
     },
   });
+
+  // Dynamic Topology & Rendezvous (HRW) Placement Pinning (Patent Section 2.2)
+  try {
+    const totalN = foundN + pubN + privN;
+    const topology = buildClusterTopology(totalN, undefined, {
+      foundation: foundT,
+      public: pubT,
+      private: privT,
+    });
+    const placement = computeWalletPlacement(walletRecord.id, topology, 1, userId);
+    await pinWalletPlacement(prisma, placement);
+  } catch (err: any) {
+    console.warn(`[WalletService] Placement pinning note: ${err.message}`);
+  }
 
   // Deploy Nodes across the 3 Domains:
   // 1. Foundation Domain: distinct independent institutional shares
@@ -375,15 +414,16 @@ export async function executeSigningTransaction(
   const unsignedSerialized = unsignedTx.unsignedSerialized;
 
   // 4. Retrieve Shares from Nodes for All 3 Domains
-  // A. Foundation Quorum (1 active node)
+  // A. Foundation Quorum
   const foundationAliases = getDomainLegacyAliases('FOUNDATION');
+  const foundationThreshold = env.SARAL_FOUNDATION_THRESHOLD || 1;
   const foundationRows = await prisma.keyShare.findMany({
     where: { userId, category: { in: foundationAliases } },
-    take: 1,
+    take: foundationThreshold,
     orderBy: { shareIndex: 'asc' },
   });
-  if (foundationRows.length === 0) {
-    throw new Error('[Separation of Powers] Foundation domain authorization share missing');
+  if (foundationRows.length < foundationThreshold) {
+    throw new Error(`[Separation of Powers] Foundation domain authorization shortfall: need ${foundationThreshold}, found ${foundationRows.length}`);
   }
 
   // B. Public Domain Quorum (threshold nodes, e.g. 5)
@@ -414,12 +454,8 @@ export async function executeSigningTransaction(
   // Encrypted shares are dispatched to and decrypted strictly within each participant service process.
   // The coordinator interacts exclusively via the AuthenticatedParticipantClient interface.
   const clientPromises: Promise<AuthenticatedParticipantClient>[] = [
-    nodeCluster.getParticipantClient(
-      userId,
-      'FOUNDATION',
-      foundationRows[0].shareIndex,
-      foundationRows[0].shareIndex,
-      foundationRows[0].containerName
+    ...foundationRows.map((r) =>
+      nodeCluster.getParticipantClient(userId, 'FOUNDATION', r.shareIndex, r.shareIndex, r.containerName)
     ),
     ...publicRows.map((r) =>
       nodeCluster.getParticipantClient(userId, 'PUBLIC', r.shareIndex, r.shareIndex, r.containerName)
@@ -444,7 +480,8 @@ export async function executeSigningTransaction(
       publicKeyHex,
       commitments,
       threshold,
-      threshold
+      threshold,
+      foundationThreshold
     );
   } catch (err: any) {
     if (err.message?.includes('Feldman VSS verification failed')) {

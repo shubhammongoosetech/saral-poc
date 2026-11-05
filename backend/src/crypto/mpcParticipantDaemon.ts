@@ -128,7 +128,11 @@ export class MpcParticipantDaemon {
     nodeIndex: number,
     shareIndex: number,
     privateShareValue: bigint,
-    paillierBits: number = (process.env.PAILLIER_BITS ? parseInt(process.env.PAILLIER_BITS, 10) : 2048)
+    paillierBits: number = process.env.PAILLIER_BITS
+      ? parseInt(process.env.PAILLIER_BITS, 10)
+      : process.env.NODE_ENV === 'production'
+      ? 2048
+      : 1024
   ) {
     this.domain = domain;
     this.nodeIndex = nodeIndex;
@@ -207,7 +211,7 @@ export class MpcParticipantDaemon {
     const domainIndices = domainParticipants.map((p) => p.shareIndex);
 
     let lambda = 1n;
-    if (this.domain === 'FOUNDATION' || domainIndices.length === 1) {
+    if (domainIndices.length === 1) {
       lambda = 1n;
     } else {
       lambda = computeLagrangeCoefficient(this.shareIndex, domainIndices);

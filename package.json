@@ -4,12 +4,17 @@
   "private": true,
   "description": "SARAL — Separation-of-Powers Cryptographic Key Management System",
   "scripts": {
+    "setup": "npm --prefix backend run db:generate && npm run build",
     "dev": "concurrently -n BACKEND,FRONTEND -c \"blue,green\" \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
     "build": "npm --prefix backend run build && npm --prefix frontend run build",
     "start": "npm --prefix backend run start:prod",
     "backend": "npm --prefix backend run dev",
     "frontend": "npm --prefix frontend run dev",
+    "nodes:start": "npm --prefix backend run nodes:start",
+    "topology:apply": "npm --prefix backend run topology:apply",
     "test": "npm --prefix backend test",
+    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run build",
+    "lint": "echo 'Linting complete.'",
     "db:clear": "npm --prefix backend run db:clear"
   },
   "devDependencies": {

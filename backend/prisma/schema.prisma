@@ -24,6 +24,7 @@ model User {
   otps            Otp[]
   securityLogs    SecurityEventLog[]
   recoveryRecords RecoveryRecord[]
+  placements      WalletPlacement[]
 
   @@map("users")
 }
@@ -68,7 +69,8 @@ model Wallet {
   commitments     String?  @db.Text
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  placements WalletPlacement[]
 
   @@index([address])
   @@map("wallets")
@@ -171,3 +173,27 @@ model Otp {
   @@index([userId, purpose, used])
   @@map("otps")
 }
+
+model WalletPlacement {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  walletId            String   @map("wallet_id") @db.Uuid
+  userId              String   @map("user_id") @db.Uuid
+  epoch               Int      @default(1)
+  foundationNodes     String[] @map("foundation_nodes")
+  publicNodes         String[] @map("public_nodes")
+  privateNodes        String[] @map("private_nodes")
+  foundationThreshold Int      @map("foundation_threshold")
+  publicThreshold     Int      @map("public_threshold")
+  privateThreshold    Int      @map("private_threshold")
+  manifestHash        String   @map("manifest_hash") @db.VarChar(64)
+  pinnedAt            DateTime @default(now()) @map("pinned_at") @db.Timestamptz
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([walletId, epoch], name: "unique_wallet_epoch")
+  @@index([walletId])
+  @@index([userId])
+  @@map("wallet_placements")
+}
+

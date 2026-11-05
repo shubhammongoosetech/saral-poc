@@ -1,0 +1,34 @@
+{
+  "version": "1.0.0",
+  "name": "SARAL-Dynamic-Cluster",
+  "totalNodes": 19,
+  "weights": {
+    "foundation": 7,
+    "public": 6,
+    "private": 6
+  },
+  "domains": {
+    "FOUNDATION": {
+      "count": 7,
+      "threshold": 5,
+      "basePort": 4001,
+      "requiresStake": false,
+      "operatorType": "INSTITUTIONAL"
+    },
+    "PUBLIC": {
+      "count": 6,
+      "threshold": 5,
+      "basePort": 4101,
+      "requiresStake": true,
+      "operatorType": "VALIDATOR"
+    },
+    "PRIVATE": {
+      "count": 6,
+      "threshold": 5,
+      "basePort": 4201,
+      "requiresStake": false,
+      "operatorType": "SOVEREIGN_HOLDER"
+    }
+  }
+}
+

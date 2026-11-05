@@ -17,11 +17,19 @@ import { env } from '../config/env';
 /**
  * Derives a domain-separated 32-byte encryption key using HKDF-SHA256
  */
-export function deriveDomainKey(domain: string, salt: string = 'saral-v1-salt'): Buffer {
-  const masterKey = env.MASTER_ENCRYPTION_KEY;
-  const ikm = /^[0-9a-fA-F]{64}$/.test(masterKey)
-    ? Buffer.from(masterKey, 'hex')
-    : crypto.createHash('sha256').update(masterKey).digest();
+export function deriveDomainKey(
+  domain: string,
+  salt: string = 'saral-v1-salt',
+  nodeSecretOrSeed?: string | Buffer
+): Buffer {
+  const seed =
+    nodeSecretOrSeed ||
+    crypto.createHmac('sha256', env.JWT_SECRET).update(`saral-domain-${domain}`).digest();
+  const ikm = Buffer.isBuffer(seed)
+    ? seed
+    : /^[0-9a-fA-F]{64}$/.test(seed)
+    ? Buffer.from(seed, 'hex')
+    : crypto.createHash('sha256').update(seed).digest();
 
   // HKDF: Extract and Expand
   const prk = crypto.createHmac('sha256', salt).update(ikm).digest();

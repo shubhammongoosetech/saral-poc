@@ -14,21 +14,19 @@ export const Login: React.FC = () => {
   const { setSession, isAuthenticated } = useAuth();
 
   const [mobile, setMobile] = useState('');
-  const [otp, setOtp] = useState('');
-  const [devOtp, setDevOtp] = useState<string | null>(null);
-  const [otpSent, setOtpSent] = useState(false);
+  const [code, setCode] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const googleBtnRef = useRef<HTMLDivElement>(null);
 
-  // If already authenticated and MFA verified, redirect forward
   useEffect(() => {
-    // Keep user on login if they just landed or logged out
-  }, [isAuthenticated]);
+    if (isAuthenticated) {
+      navigate('/wallet');
+    }
+  }, [isAuthenticated, navigate]);
 
-  // Initialize Google Sign-In button
   useEffect(() => {
     const clientId =
       import.meta.env.VITE_GOOGLE_CLIENT_ID ||
@@ -54,11 +52,10 @@ export const Login: React.FC = () => {
           client_id: clientId,
           callback: handleGoogleCredential,
         });
-
         window.google.accounts.id.renderButton(googleBtnRef.current, {
           theme: 'outline',
           size: 'large',
-          width: 380,
+          width: 320,
           text: 'continue_with',
         });
       }
@@ -77,44 +74,41 @@ export const Login: React.FC = () => {
     }
   }, [navigate, setSession]);
 
-  const handleRequestOtp = async (e: React.FormEvent) => {
+  const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!mobile || mobile.trim().length < 8) {
-      setError('Please enter a valid mobile number with country code (e.g. +919876543210)');
+      setError('Please enter a valid mobile number');
       return;
     }
-
     try {
       setLoading(true);
       setError(null);
       const res = await authApi.requestOtp(mobile.trim());
-      setOtpSent(true);
-      setSuccessMessage(res.message);
+      setCodeSent(true);
       if (res.devOtp) {
-        setDevOtp(res.devOtp);
+        setCode(res.devOtp);
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to dispatch OTP code');
+      setError(err.response?.data?.error || 'Failed to send code');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleVerifyOtp = async (e: React.FormEvent) => {
+  const handleVerifyCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!otp || otp.length !== 6) {
-      setError('Please enter the 6-digit OTP code');
+    if (!code || code.trim().length !== 6) {
+      setError('Please enter the 6-digit code');
       return;
     }
-
     try {
       setLoading(true);
       setError(null);
-      const res = await authApi.verifyOtp(mobile.trim(), otp.trim());
+      const res = await authApi.verifyOtp(mobile.trim(), code.trim());
       setSession(res.token, res.user);
       navigate('/mfa');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Invalid OTP code');
+      setError(err.response?.data?.error || 'Invalid code');
     } finally {
       setLoading(false);
     }
@@ -122,30 +116,26 @@ export const Login: React.FC = () => {
 
   return (
     <div className="card">
-      <h1 className="page-title">Sign In with SARAL</h1>
-      <p className="page-subtitle">Access your non-custodial decentralized key container</p>
+      <h1 className="page-title">Sign in</h1>
 
-      {error && <div className="alert alert-danger">{error}</div>}
-      {successMessage && <div className="alert alert-success">{successMessage}</div>}
+      {error && <div className="alert alert-error">{error}</div>}
 
-      {/* Google OAuth Option */}
-      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
-        <div ref={googleBtnRef} style={{ minHeight: '44px' }}></div>
+      <div className="field">
+        <div ref={googleBtnRef}></div>
       </div>
 
-      <div className="divider">or continue with mobile</div>
+      <div className="divider">or</div>
 
-      {/* Mobile Number + OTP Option */}
-      {!otpSent ? (
-        <form onSubmit={handleRequestOtp}>
-          <div className="form-group">
-            <label className="form-label" htmlFor="mobileInput">
-              Mobile Number
+      {!codeSent ? (
+        <form onSubmit={handleSendCode}>
+          <div className="field">
+            <label className="label" htmlFor="mobileInput">
+              Mobile number
             </label>
             <input
               id="mobileInput"
               type="tel"
-              className="form-input"
+              className="input"
               placeholder="+91 98765 43210"
               value={mobile}
               onChange={(e) => setMobile(e.target.value)}
@@ -154,58 +144,53 @@ export const Login: React.FC = () => {
             />
           </div>
 
-          <button type="submit" className="btn btn-primary" disabled={loading || !mobile}>
-            {loading ? 'Sending OTP...' : 'Send OTP'}
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={loading || !mobile.trim()}
+          >
+            {loading ? 'Sending code...' : 'Send code'}
           </button>
         </form>
       ) : (
-        <form onSubmit={handleVerifyOtp}>
-          {devOtp && (
-            <div className="policy-block" style={{ marginBottom: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px' }}>
-                Dev OTP: <strong className="text-mono" style={{ fontSize: '14px', letterSpacing: '1px' }}>{devOtp}</strong>
-              </span>
-              <button
-                type="button"
-                className="copy-btn"
-                onClick={() => setOtp(devOtp)}
-              >
-                Auto-fill
-              </button>
-            </div>
-          )}
-          <div className="form-group">
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-              <label className="form-label" htmlFor="otpInput" style={{ margin: 0 }}>
-                Enter 6-digit OTP
+        <form onSubmit={handleVerifyCode}>
+          <div className="field">
+            <div className="inline-row">
+              <label className="label" htmlFor="codeInput">
+                Enter code
               </label>
               <button
                 type="button"
-                className="copy-btn"
-                onClick={() => setOtpSent(false)}
-                style={{ fontSize: '11px', padding: '2px 6px' }}
+                className="btn-link helper-text"
+                onClick={() => setCodeSent(false)}
               >
                 Change number
               </button>
             </div>
             <input
-              id="otpInput"
+              id="codeInput"
               type="text"
               maxLength={6}
-              className="form-input text-mono"
+              className="input text-mono"
               placeholder="123456"
-              value={otp}
-              onChange={(e) => setOtp(e.target.value)}
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
               disabled={loading}
               autoFocus
             />
           </div>
 
-          <button type="submit" className="btn btn-primary" disabled={loading || otp.length !== 6}>
-            {loading ? 'Verifying...' : 'Verify & Continue'}
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={loading || code.trim().length !== 6}
+          >
+            {loading ? 'Verifying...' : 'Sign in'}
           </button>
         </form>
       )}
     </div>
   );
 };
+
+export default Login;

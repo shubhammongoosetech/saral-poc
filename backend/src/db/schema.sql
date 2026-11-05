@@ -112,6 +112,22 @@ CREATE TABLE IF NOT EXISTS otps (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS wallet_placements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  epoch INTEGER NOT NULL DEFAULT 1,
+  foundation_nodes TEXT[] NOT NULL,
+  public_nodes TEXT[] NOT NULL,
+  private_nodes TEXT[] NOT NULL,
+  foundation_threshold INTEGER NOT NULL,
+  public_threshold INTEGER NOT NULL,
+  private_threshold INTEGER NOT NULL,
+  manifest_hash VARCHAR(64) NOT NULL,
+  pinned_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT unique_wallet_epoch UNIQUE (wallet_id, epoch)
+);
+
 -- Indices for high performance
 CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
 CREATE INDEX IF NOT EXISTS idx_key_shares_user_id ON key_shares(user_id);
@@ -120,3 +136,5 @@ CREATE INDEX IF NOT EXISTS idx_access_logs_user_id ON access_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_security_logs_user_event ON security_event_logs(user_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_recovery_records_user_state ON recovery_records(user_id, state);
 CREATE INDEX IF NOT EXISTS idx_otps_user_purpose ON otps(user_id, purpose, used);
+CREATE INDEX IF NOT EXISTS idx_wallet_placements_wallet_id ON wallet_placements(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_placements_user_id ON wallet_placements(user_id);

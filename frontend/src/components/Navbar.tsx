@@ -1,25 +1,53 @@
 import React from 'react';
+import { NavLink, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
 export const Navbar: React.FC = () => {
-  const { user, isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, logout } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const isAuthRoute = location.pathname === '/login' || location.pathname === '/mfa';
+  const showNav = isAuthenticated && !isAuthRoute;
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   return (
     <header className="navbar">
-      <div style={{ display: 'flex', alignItems: 'center' }}>
-        <span className="brand">SARAL Wallet</span>
-        <span className="brand-tag">Cryptographic Key Management</span>
-      </div>
-      {isAuthenticated && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-            {user?.email || (user?.loginMethod === 'google' ? 'Google Account' : user?.mobile || 'Authenticated')}
-          </span>
-          <button onClick={logout} className="btn btn-outline btn-sm">
+      <Link to="/" className="brand">
+        SARAL
+      </Link>
+
+      {showNav && (
+        <nav className="nav-links">
+          <NavLink
+            to="/wallet"
+            className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+          >
+            Wallet
+          </NavLink>
+          <NavLink
+            to="/activity"
+            className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+          >
+            Activity
+          </NavLink>
+          <NavLink
+            to="/settings"
+            className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+          >
+            Settings
+          </NavLink>
+          <button type="button" onClick={handleLogout} className="btn-link nav-link">
             Logout
           </button>
-        </div>
+        </nav>
       )}
     </header>
   );
 };
+
+export default Navbar;

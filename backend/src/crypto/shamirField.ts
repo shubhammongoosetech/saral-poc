@@ -163,9 +163,11 @@ export function evaluateZeroPolynomial(coefficients: bigint[], x: bigint): bigin
  */
 export function proactiveRefreshShare(
   oldShare: FieldShare,
-  zeroPolyCoeffs: bigint[]
+  zeroPolyOrDelta: bigint[] | bigint
 ): FieldShare {
-  const delta = evaluateZeroPolynomial(zeroPolyCoeffs, BigInt(oldShare.index));
+  const delta = Array.isArray(zeroPolyOrDelta)
+    ? evaluateZeroPolynomial(zeroPolyOrDelta, BigInt(oldShare.index))
+    : zeroPolyOrDelta;
   const refreshedValue = modN(oldShare.value + delta);
   return {
     index: oldShare.index,

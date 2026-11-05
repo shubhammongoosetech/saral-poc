@@ -15,4 +15,5 @@ export * from './mpcProtocolTypes';
 export * from './mpcCoordinator';
 export * from './mpcParticipantDaemon';
 export * from './participantRegistry';
+export * from './dkg';
 

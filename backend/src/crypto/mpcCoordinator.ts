@@ -53,7 +53,8 @@ export class StatelessMpcCoordinator {
       private: string[];
     },
     minPublicThreshold: number = 5,
-    minPrivateThreshold: number = 5
+    minPrivateThreshold: number = 5,
+    minFoundationThreshold: number = 1
   ): Promise<DistributedMpcSigningResult> {
     const totalStart = Date.now();
 
@@ -83,8 +84,10 @@ export class StatelessMpcCoordinator {
     const publicDaemons = participants.filter((d) => d.domain === 'PUBLIC');
     const privateDaemons = participants.filter((d) => d.domain === 'PRIVATE');
 
-    if (foundationDaemons.length < 1) {
-      throw new Error('[MPC Authorization Failure] Foundation domain participation is required');
+    if (foundationDaemons.length < minFoundationThreshold) {
+      throw new Error(
+        `[MPC Authorization Failure] Foundation domain threshold not met: require >= ${minFoundationThreshold} nodes, got ${foundationDaemons.length}`
+      );
     }
     if (publicDaemons.length < minPublicThreshold) {
       throw new Error(
@@ -117,7 +120,7 @@ export class StatelessMpcCoordinator {
         identityPublicKeyHex: d.identityPublicKeyHex,
       })),
       thresholds: {
-        foundation: 1,
+        foundation: minFoundationThreshold,
         public: minPublicThreshold,
         private: minPrivateThreshold,
       },
@@ -318,15 +321,17 @@ export class StatelessMpcCoordinator {
       });
 
       const recoveredAddress = ethers.recoverAddress(msgHashHex, sig);
-      const cleanExpectedPk = expectedAggregatedPublicKeyHex.startsWith('0x')
-        ? expectedAggregatedPublicKeyHex
-        : '0x' + expectedAggregatedPublicKeyHex;
-      const expectedAddress = ethers.computeAddress(cleanExpectedPk);
+      if (expectedAggregatedPublicKeyHex) {
+        const cleanExpectedPk = expectedAggregatedPublicKeyHex.startsWith('0x')
+          ? expectedAggregatedPublicKeyHex
+          : '0x' + expectedAggregatedPublicKeyHex;
+        const expectedAddress = ethers.computeAddress(cleanExpectedPk);
 
-      if (recoveredAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
-        throw new Error(
-          `[Coordinator] Cryptographic signature verification failed: recovered ${recoveredAddress}, expected ${expectedAddress}`
-        );
+        if (recoveredAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
+          throw new Error(
+            `[Coordinator] Cryptographic signature verification failed: recovered ${recoveredAddress}, expected ${expectedAddress}`
+          );
+        }
       }
 
       // EVM raw signed transaction serialization

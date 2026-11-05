@@ -30,8 +30,9 @@ export interface MfaVerificationResult {
  * Raw OTPs are never stored in the database.
  */
 export function hashOtpCode(code: string, purpose: string): string {
+  const otpKey = crypto.createHmac('sha256', env.JWT_SECRET).update('saral-otp-key').digest();
   return crypto
-    .createHmac('sha256', env.MASTER_ENCRYPTION_KEY)
+    .createHmac('sha256', otpKey)
     .update(`saral-otp:${purpose}:${code}`)
     .digest('hex');
 }

@@ -26,17 +26,15 @@ yarn-debug.log*
 .idea/
 *.swp
 *.swo
+
+# SARAL node runtime data (secrets and vault data - never commit)
 .saral*
+data/
 *.vault
-*.key
 *.sock
 
-# Documentation (Do not push to Git)
-docs/
+# Key material
+*.key
 
-# Tests (Do not push to Git)
-tests/
-*/tests/
-test/
-*/test/
-
+# Coverage reports
+coverage/
