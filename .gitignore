@@ -38,3 +38,13 @@ data/
 
 # Coverage reports
 coverage/
+
+# Documentation (Do not push to Git)
+docs/
+*/docs/
+
+# Tests (Do not push to Git)
+tests/
+*/tests/
+test/
+*/test/
