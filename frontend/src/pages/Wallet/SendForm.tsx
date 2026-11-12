@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { walletApi } from '../../api/endpoints';
+import { getCurrentCoords } from '../../hooks/useLocation';
 
 interface SendFormProps {
   onSent: () => void;
@@ -11,6 +12,7 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [explorerUrl, setExplorerUrl] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,13 +29,23 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
       setLoading(true);
       setError(null);
       setTxHash(null);
+      setExplorerUrl(null);
 
+      const coords = await getCurrentCoords();
       const res = await walletApi.signTransaction({
         toAddress: to.trim(),
         amount: amount.trim(),
+        lat: coords.lat,
+        lng: coords.lng,
       });
 
+      if (res.broadcasted === false) {
+        setError(res.message || 'Transaction broadcast was rejected by the blockchain node.');
+        return;
+      }
+
       setTxHash(res.txHash);
+      setExplorerUrl(res.explorerUrl || `https://testnet.mstscan.com/tx/${res.txHash}`);
       setTo('');
       setAmount('');
       onSent();
@@ -96,7 +108,7 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
         <div className="send-result">
           <span>Sent! </span>
           <a
-            href={`https://testnet.mstscan.com/tx/${txHash}`}
+            href={explorerUrl || `https://testnet.mstscan.com/tx/${txHash}`}
             target="_blank"
             rel="noopener noreferrer"
           >

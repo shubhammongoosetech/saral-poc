@@ -1,20 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { profileApi, walletApi } from '../api/endpoints';
-
-function getCoords(): Promise<{ lat: number; lng: number }> {
-  return new Promise((resolve) => {
-    if (!navigator.geolocation) {
-      resolve({ lat: 22.7196, lng: 75.8577 });
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => resolve({ lat: 22.7196, lng: 75.8577 }),
-      { timeout: 5000, enableHighAccuracy: true, maximumAge: 30000 }
-    );
-  });
-}
+import { getCurrentCoords } from '../hooks/useLocation';
 
 export const Review: React.FC = () => {
   const navigate = useNavigate();
@@ -46,7 +33,7 @@ export const Review: React.FC = () => {
     try {
       setConfirming(true);
       setError(null);
-      const coords = await getCoords();
+      const coords = await getCurrentCoords();
       const res = await walletApi.checkAccess(coords.lat, coords.lng);
       if (res.allowed) {
         navigate('/wallet');
