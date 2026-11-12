@@ -119,8 +119,9 @@ export async function handleSignTransaction(
       (req.user as any)?.sessionId || userId
     );
 
-    res.json({
-      success: true,
+    res.status(result.broadcasted ? 200 : 400).json({
+      success: result.broadcasted,
+      ...(!result.broadcasted ? { error: result.message } : {}),
       txHash: result.txHash,
       broadcasted: result.broadcasted,
       message: result.message,
@@ -147,13 +148,14 @@ export async function handleGetTransactions(
       where: { userId },
       orderBy: { createdAt: 'desc' },
       take: 50,
-      select: { txHash: true, toAddress: true, amount: true, createdAt: true },
+      select: { txHash: true, toAddress: true, amount: true, status: true, createdAt: true },
     });
 
     const transactions = rawTx.map((t) => ({
       tx_hash: t.txHash,
       to_address: t.toAddress,
       amount: t.amount,
+      status: t.status,
       created_at: t.createdAt.toISOString(),
       txHash: t.txHash,
       toAddress: t.toAddress,

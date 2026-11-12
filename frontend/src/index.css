@@ -68,9 +68,10 @@ a:hover { text-decoration: underline; }
 .label-col { color: var(--muted); }
 .value-col { font-weight: 500; color: var(--text); text-align: right; }
 
-.alert { padding: 12px 14px; border-radius: 4px; font-size: 13px; margin-bottom: 16px; line-height: 1.4; }
+.alert { padding: 12px 14px; border-radius: 4px; font-size: 13px; margin-bottom: 16px; line-height: 1.4; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .alert-error, .alert-danger { background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger); }
 .alert-success { background: var(--success-bg); border: 1px solid var(--success-border); color: var(--success); }
+.status-failed { color: var(--danger); font-weight: 500; }
 
 .divider { display: flex; align-items: center; text-align: center; margin: 20px 0; color: var(--muted); font-size: 12px; }
 .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--border); }

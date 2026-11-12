@@ -41,6 +41,7 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
 
       if (res.broadcasted === false) {
         setError(res.message || 'Transaction broadcast was rejected by the blockchain node.');
+        onSent();
         return;
       }
 
@@ -50,7 +51,10 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
       setAmount('');
       onSent();
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Transaction failed');
+      setError(err.response?.data?.error || err.response?.data?.message || 'Transaction failed');
+      if (err.response?.data?.txHash) {
+        onSent();
+      }
     } finally {
       setLoading(false);
     }

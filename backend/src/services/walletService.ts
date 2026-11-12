@@ -41,10 +41,12 @@ import {
 } from './nodeClusterService';
 import {
   getBalance,
+  getBalanceWeiOrNull,
   getAccountNonce,
   getGasFeeData,
   broadcastRawTransaction,
 } from './chainService';
+import { BadRequestError } from '../utils/errors';
 import { evaluateAccessPolicy } from './locationService';
 import { initializeWalletRecovery } from './recoveryService';
 import { economicSecurity } from './economicService';
@@ -332,11 +334,22 @@ export async function executeSigningTransaction(
   const privateThreshold = placement?.private.threshold ?? activeTopology.private.threshold;
 
   // 3. Prepare Unsigned EVM Transaction
-  const provider = chainService_getProvider();
   const nonce = await getAccountNonce(walletAddress);
   const { gasPrice, gasLimit } = await getGasFeeData();
   const value = ethers.parseEther(amount.trim());
   const chainId = BigInt(env.CHAIN_ID);
+
+  // Pre-check live balance before running MPC signing or logging a failed tx row
+  const liveBalanceWei = await getBalanceWeiOrNull(walletAddress);
+  const gasFeeWei = gasPrice * gasLimit;
+  const totalRequiredWei = value + gasFeeWei;
+  if (liveBalanceWei !== null && liveBalanceWei < totalRequiredWei) {
+    const shortfallWei = totalRequiredWei - liveBalanceWei;
+    const maxSendableWei = liveBalanceWei > gasFeeWei ? liveBalanceWei - gasFeeWei : 0n;
+    throw new BadRequestError(
+      `Insufficient funds: balance is ${ethers.formatEther(liveBalanceWei)} MSTC, but ${ethers.formatEther(totalRequiredWei)} MSTC is needed (${ethers.formatEther(value)} + ${ethers.formatEther(gasFeeWei)} gas; short by ${ethers.formatEther(shortfallWei)} MSTC). Max sendable: ${ethers.formatEther(maxSendableWei)} MSTC.`
+    );
+  }
 
   const unsignedTx = ethers.Transaction.from({
     to: ethers.getAddress(toAddress.trim()),
@@ -437,14 +450,11 @@ export async function executeSigningTransaction(
     amount
   );
 
-  // 7. Process Economic Usage Fee
-  const gasFeeMstc = parseFloat(ethers.formatEther(gasPrice * gasLimit));
-  economicSecurity.processUsageFee(Math.max(gasFeeMstc, 0.0001));
+  // 7. Process Economic Usage Fee (only after successful broadcast)
+  if (broadcastResult.broadcasted) {
+    const gasFeeMstc = parseFloat(ethers.formatEther(gasPrice * gasLimit));
+    economicSecurity.processUsageFee(Math.max(gasFeeMstc, 0.0001));
+  }
 
   return broadcastResult;
-}
-
-function chainService_getProvider() {
-  const { getProvider } = require('./chainService');
-  return getProvider();
 }

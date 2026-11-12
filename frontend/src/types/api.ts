@@ -91,11 +91,13 @@ export interface TransactionRecord {
   tx_hash: string;
   to_address: string;
   amount: string;
+  status?: string;
   created_at: string;
 }
 
 export interface SignTransactionResult {
   success: boolean;
+  error?: string;
   txHash: string;
   broadcasted: boolean;
   message: string;

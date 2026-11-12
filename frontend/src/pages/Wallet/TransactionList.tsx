@@ -48,7 +48,17 @@ export const TransactionList: React.FC<TransactionListProps> = ({ transactions }
                     </td>
                     <td>{tx.amount} MSTC</td>
                     <td>
-                      {hash ? (
+                      {tx.status === 'BROADCASTED' && hash ? (
+                        <a
+                          href={`https://testnet.mstscan.com/tx/${hash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Confirmed ↗
+                        </a>
+                      ) : tx.status && tx.status.toUpperCase().includes('FAILED') ? (
+                        <span className="status-failed">Failed</span>
+                      ) : !tx.status && hash ? (
                         <a
                           href={`https://testnet.mstscan.com/tx/${hash}`}
                           target="_blank"
@@ -57,7 +67,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({ transactions }
                           Confirmed ↗
                         </a>
                       ) : (
-                        <span className="muted">Pending</span>
+                        <span className="muted">{tx.status || 'Pending'}</span>
                       )}
                     </td>
                   </tr>

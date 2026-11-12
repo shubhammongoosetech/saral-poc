@@ -29,7 +29,11 @@ export function getProvider(): ethers.JsonRpcProvider {
   return providerInstance;
 }
 
-export async function getBalance(address: string): Promise<string> {
+/**
+ * Fetches live wei balance for an EVM address with a bounded timeout,
+ * returning null if the RPC node is unreachable or times out.
+ */
+export async function getBalanceWeiOrNull(address: string): Promise<bigint | null> {
   try {
     const provider = getProvider();
     let cleanAddress = address.trim();
@@ -37,16 +41,20 @@ export async function getBalance(address: string): Promise<string> {
       cleanAddress = ethers.getAddress(cleanAddress.toLowerCase());
     } catch {}
 
-    const balanceWei = await Promise.race([
+    return await Promise.race([
       provider.getBalance(cleanAddress),
       new Promise<bigint>((_, reject) =>
         setTimeout(() => reject(new Error('RPC Timeout')), 4000)
       ),
     ]);
-    return ethers.formatEther(balanceWei);
   } catch {
-    return '0.0000';
+    return null;
   }
+}
+
+export async function getBalance(address: string): Promise<string> {
+  const balanceWei = await getBalanceWeiOrNull(address);
+  return balanceWei !== null ? ethers.formatEther(balanceWei) : '0.0000';
 }
 
 export async function getAccountNonce(address: string): Promise<number> {
@@ -71,6 +79,36 @@ export async function getGasFeeData(): Promise<{ gasPrice: bigint; gasLimit: big
       gasLimit: 21000n,
     };
   }
+}
+
+/**
+ * Converts verbose ethers.js / JSON-RPC errors into concise user-safe messages
+ * without leaking raw signed transaction hex blobs into UI alerts.
+ */
+export function formatRpcBroadcastError(err: any): string {
+  const rpcInfoMsg: string = typeof err?.info?.error?.message === 'string' ? err.info.error.message : '';
+  const shortMsg: string = typeof err?.shortMessage === 'string' ? err.shortMessage : '';
+  const rawMsg: string = typeof err?.message === 'string' ? err.message : '';
+  const combined = `${rpcInfoMsg} ${shortMsg} ${rawMsg}`;
+
+  if (err?.code === 'INSUFFICIENT_FUNDS' || /insufficient funds/i.test(combined)) {
+    const match = combined.match(/balance\s+(\d+),\s*tx cost\s+(\d+),\s*overshot\s+(\d+)/i);
+    if (match) {
+      const bal = ethers.formatEther(BigInt(match[1]));
+      const cost = ethers.formatEther(BigInt(match[2]));
+      const shortfall = ethers.formatEther(BigInt(match[3]));
+      return `Insufficient funds for amount + gas fee (Balance: ${bal} MSTC, Required: ${cost} MSTC, Short by: ${shortfall} MSTC). Reduce the amount to cover gas.`;
+    }
+    return 'Insufficient funds to cover transaction amount and gas fee.';
+  }
+
+  const candidate =
+    rpcInfoMsg ||
+    shortMsg ||
+    (typeof err?.reason === 'string' ? err.reason : '') ||
+    rawMsg;
+  const cleaned = candidate.replace(/\s*\(transaction="0x[0-9a-fA-F]+"[\s\S]*$/m, '').trim();
+  return cleaned || 'Blockchain RPC node rejected raw transaction.';
 }
 
 /**
@@ -111,9 +149,9 @@ export async function broadcastRawTransaction(
   } catch (err: any) {
     // STRICT RULE: No fake success! Accurately report that RPC broadcast failed
     broadcasted = false;
-    rpcError = err?.message || 'Blockchain RPC node rejected raw transaction';
-    message = `MPC threshold signature valid, but blockchain broadcast was rejected by node: ${rpcError}`;
-    console.error(`[chainService] Blockchain broadcast rejected: ${rpcError}`);
+    rpcError = formatRpcBroadcastError(err);
+    message = rpcError;
+    console.error(`[chainService] Blockchain broadcast rejected: ${err?.message || rpcError}`);
   }
 
   // Idempotently log transaction in database with truthful status
