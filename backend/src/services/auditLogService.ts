@@ -21,6 +21,7 @@
 
 import crypto from 'crypto';
 import { prisma } from '../config/db';
+import { redactSensitive } from '../utils/logger';
 
 export const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
 
@@ -65,10 +66,11 @@ export function computeLogEntryHash(
 export async function logSecurityEvent(
   input: SecurityEventInput
 ): Promise<SecurityEventRecord> {
-  const detailsStr =
+  const rawDetails =
     typeof input.details === 'string'
       ? input.details
       : JSON.stringify(input.details || {});
+  const detailsStr = redactSensitive(rawDetails);
 
   const severity = input.severity || 'INFO';
 

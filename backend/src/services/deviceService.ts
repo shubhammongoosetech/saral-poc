@@ -13,6 +13,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { env } from '../config/env';
 
 export type DeviceType = 'MOBILE' | 'DESKTOP' | 'HARDWARE_KEY' | 'GUARDIAN' | 'BACKUP';
 export type DeviceStatus = 'ACTIVE' | 'REVOKED' | 'PENDING';
@@ -23,15 +24,13 @@ export interface EnrolledDevice {
   name: string;
   deviceType: DeviceType;
   status: DeviceStatus;
-  publicKeyHex: string;
-  fingerprint: string;
   enrolledAt: string;
   lastActive: string;
   guardianEmail?: string;
   notes?: string;
 }
 
-const STORAGE_DIR = process.env.SARAL_REGISTRY_DIR || path.resolve(process.cwd(), '.saral_registry');
+const STORAGE_DIR = env.SARAL_REGISTRY_DIR || path.resolve(process.cwd(), '.saral_registry');
 const STORAGE_FILE = path.join(STORAGE_DIR, 'user_devices.json');
 
 const devicesMap = new Map<string, EnrolledDevice[]>();
@@ -62,11 +61,6 @@ function loadDevicesFromDisk(): void {
 
 loadDevicesFromDisk();
 
-function computeFingerprint(hex: string): string {
-  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
-  return crypto.createHash('sha256').update(clean).digest('hex').slice(0, 16);
-}
-
 export function getDevicesForUser(userId: string): EnrolledDevice[] {
   let list = devicesMap.get(userId);
   if (!list || list.length === 0) {
@@ -78,8 +72,6 @@ export function getDevicesForUser(userId: string): EnrolledDevice[] {
         name: 'Primary Workstation (Desktop)',
         deviceType: 'DESKTOP',
         status: 'ACTIVE',
-        publicKeyHex: crypto.randomBytes(33).toString('hex'),
-        fingerprint: computeFingerprint(crypto.randomBytes(32).toString('hex')),
         enrolledAt: new Date(Date.now() - 7 * 86400000).toISOString(),
         lastActive: new Date().toISOString(),
         notes: 'Primary authorized signing terminal',
@@ -90,8 +82,6 @@ export function getDevicesForUser(userId: string): EnrolledDevice[] {
         name: 'Authenticated Mobile Device',
         deviceType: 'MOBILE',
         status: 'ACTIVE',
-        publicKeyHex: crypto.randomBytes(33).toString('hex'),
-        fingerprint: computeFingerprint(crypto.randomBytes(32).toString('hex')),
         enrolledAt: new Date(Date.now() - 5 * 86400000).toISOString(),
         lastActive: new Date(Date.now() - 3600000).toISOString(),
         notes: 'MFA and geofencing challenge device',
@@ -102,8 +92,6 @@ export function getDevicesForUser(userId: string): EnrolledDevice[] {
         name: 'Hardware Security Key (FIDO2/YubiKey)',
         deviceType: 'HARDWARE_KEY',
         status: 'ACTIVE',
-        publicKeyHex: crypto.randomBytes(33).toString('hex'),
-        fingerprint: computeFingerprint(crypto.randomBytes(32).toString('hex')),
         enrolledAt: new Date(Date.now() - 2 * 86400000).toISOString(),
         lastActive: new Date(Date.now() - 86400000).toISOString(),
         notes: 'Cold hardware isolation token',
@@ -120,19 +108,15 @@ export function enrollDevice(
   params: {
     name: string;
     deviceType: DeviceType;
-    publicKeyHex?: string;
     notes?: string;
   }
 ): EnrolledDevice {
-  const pub = params.publicKeyHex || crypto.randomBytes(33).toString('hex');
   const device: EnrolledDevice = {
     id: crypto.randomUUID(),
     userId,
     name: params.name,
     deviceType: params.deviceType,
     status: 'ACTIVE',
-    publicKeyHex: pub,
-    fingerprint: computeFingerprint(pub),
     enrolledAt: new Date().toISOString(),
     lastActive: new Date().toISOString(),
     notes: params.notes,
@@ -153,15 +137,12 @@ export function enrollGuardian(
     notes?: string;
   }
 ): EnrolledDevice {
-  const pub = crypto.randomBytes(33).toString('hex');
   const device: EnrolledDevice = {
     id: crypto.randomUUID(),
     userId,
     name: params.name,
     deviceType: 'GUARDIAN',
     status: 'ACTIVE',
-    publicKeyHex: pub,
-    fingerprint: computeFingerprint(pub),
     enrolledAt: new Date().toISOString(),
     lastActive: new Date().toISOString(),
     guardianEmail: params.guardianEmail,

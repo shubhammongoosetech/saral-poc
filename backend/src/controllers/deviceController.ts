@@ -33,7 +33,7 @@ export async function handleEnrollDevice(
 ): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const { name, deviceType, publicKeyHex, notes } = req.body;
+    const { name, deviceType, notes } = req.body;
     if (!name || typeof name !== 'string') {
       res.status(400).json({ error: 'Device name is required' });
       return;
@@ -42,7 +42,6 @@ export async function handleEnrollDevice(
     const device = enrollDevice(userId, {
       name,
       deviceType: deviceType || 'DESKTOP',
-      publicKeyHex,
       notes,
     });
     res.status(201).json({ success: true, device });

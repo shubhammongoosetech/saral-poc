@@ -14,6 +14,7 @@ export async function handleGetProfile(
       where:  { id: userId },
       select: {
         id:          true,
+        name:        true,
         googleId:    true,
         email:       true,
         mobile:      true,
@@ -62,7 +63,7 @@ export async function handleGetProfile(
     res.json({
       user: {
         id:           user.id,
-        google_id:    user.googleId,
+        name:         user.name,
         email:        user.email,
         mobile:       user.mobile,
         login_method: user.loginMethod,

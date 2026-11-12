@@ -4,6 +4,7 @@
 
 export interface User {
   id: string;
+  name?: string;
   loginMethod: 'google' | 'mobile';
   googleId?: string;
   email?: string;

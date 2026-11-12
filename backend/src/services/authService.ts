@@ -11,6 +11,7 @@ const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
 export interface AuthResult {
   user: {
     id: string;
+    name?: string;
     loginMethod: 'google' | 'mobile';
     mobile?: string;
     googleId?: string;
@@ -77,7 +78,7 @@ async function getUserStatus(userId: string) {
     prisma.mfa.findUnique({ where: { userId }, select: { verifiedAt: true } }).catch(() => null),
     prisma.workPolicy.findUnique({ where: { userId }, select: { id: true } }).catch(() => null),
     prisma.keyShare.count({ where: { userId } }).catch(() => 0),
-    prisma.wallet.count({ where: { userId } }).catch(() => 0),
+    prisma.walletPlacement.count({ where: { userId } }).catch(() => 0),
   ]);
 
   return {
@@ -101,6 +102,7 @@ export async function verifyGoogleAuth(credential: string): Promise<AuthResult> 
 
   const googleId = payload.sub;
   const email = payload.email ?? null;
+  const name = payload.name ?? null;
 
   // Find by google_id OR email
   let user = await prisma.user.findFirst({
@@ -114,13 +116,18 @@ export async function verifyGoogleAuth(credential: string): Promise<AuthResult> 
 
   if (!user) {
     user = await prisma.user.create({
-      data: { googleId, email, loginMethod: 'google' },
+      data: { googleId, email, name, loginMethod: 'google' },
     });
-  } else if (!user.email && email) {
-    user = await prisma.user.update({
-      where: { id: user.id },
-      data: { email },
-    });
+  } else {
+    const updateData: { email?: string; name?: string } = {};
+    if (!user.email && email) updateData.email = email;
+    if ((!user.name || user.name !== name) && name) updateData.name = name;
+    if (Object.keys(updateData).length > 0) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: updateData,
+      });
+    }
   }
 
   const status = await getUserStatus(user.id);
@@ -135,6 +142,7 @@ export async function verifyGoogleAuth(credential: string): Promise<AuthResult> 
   return {
     user: {
       id: user.id,
+      name: user.name ?? undefined,
       loginMethod: 'google',
       googleId: user.googleId ?? undefined,
       email: user.email ?? undefined,
@@ -197,7 +205,7 @@ export async function verifyMobileOtp(
 ): Promise<AuthResult> {
   const user = await prisma.user.findUnique({
     where: { mobile },
-    select: { id: true, mobile: true, loginMethod: true },
+    select: { id: true, name: true, mobile: true, loginMethod: true },
   });
   if (!user) throw new Error('User not found for this mobile number');
 
@@ -251,6 +259,7 @@ export async function verifyMobileOtp(
   return {
     user: {
       id: user.id,
+      name: user.name ?? undefined,
       loginMethod: 'mobile',
       mobile: user.mobile ?? undefined,
     },

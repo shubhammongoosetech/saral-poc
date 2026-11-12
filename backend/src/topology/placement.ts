@@ -224,15 +224,18 @@ export async function pinWalletPlacement(
   prismaClient: any,
   placement: WalletPlacement
 ): Promise<void> {
+  const effectiveUserId = placement.userId || placement.walletId;
   pinnedPlacementsCache.set(placement.walletId, placement);
+  pinnedPlacementsCache.set(effectiveUserId, placement);
   pinnedPlacementsCache.set(`${placement.walletId}:${placement.epoch}`, placement);
+  pinnedPlacementsCache.set(`${effectiveUserId}:${placement.epoch}`, placement);
 
   if (prismaClient?.walletPlacement) {
     try {
       await prismaClient.walletPlacement.upsert({
         where: {
-          unique_wallet_epoch: {
-            walletId: placement.walletId,
+          unique_user_epoch: {
+            userId: effectiveUserId,
             epoch: placement.epoch,
           },
         },
@@ -247,8 +250,7 @@ export async function pinWalletPlacement(
           pinnedAt: new Date(placement.pinnedAt),
         },
         create: {
-          walletId: placement.walletId,
-          userId: placement.userId || placement.walletId,
+          userId: effectiveUserId,
           epoch: placement.epoch,
           foundationNodes: placement.foundation.assignedNodeIds,
           publicNodes: placement.public.assignedNodeIds,
@@ -290,7 +292,7 @@ export async function getPinnedWalletPlacement(
     try {
       const row = await prismaClient.walletPlacement.findFirst({
         where: {
-          walletId,
+          userId: walletId,
           ...(epoch !== undefined ? { epoch } : {}),
         },
         orderBy: { epoch: 'desc' },
@@ -298,7 +300,7 @@ export async function getPinnedWalletPlacement(
 
       if (row) {
         const placement: WalletPlacement = {
-          walletId: row.walletId,
+          walletId: row.userId,
           userId: row.userId,
           epoch: row.epoch,
           foundation: {
@@ -320,6 +322,7 @@ export async function getPinnedWalletPlacement(
           pinnedAt: row.pinnedAt.toISOString(),
         };
         pinnedPlacementsCache.set(walletId, placement);
+        pinnedPlacementsCache.set(row.userId, placement);
         return placement;
       }
     } catch (err: any) {

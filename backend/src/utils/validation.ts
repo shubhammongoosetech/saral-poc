@@ -27,18 +27,27 @@ export const workingPolicySchema = z.object({
   radiusKm: z.number().min(1).max(500).optional().default(25),
 });
 
-export const generateWalletSchema = z.object({
-  n: z.number().int().min(2).max(255).optional(),
-  threshold: z.number().int().min(2).max(255).optional(),
-}).refine((data) => {
-  if (data.n !== undefined && data.threshold !== undefined) {
-    return data.threshold <= data.n;
-  }
-  return true;
-}, {
-  message: 'Threshold must be less than or equal to total shares (n)',
-  path: ['threshold'],
-});
+export const generateWalletSchema = z
+  .object({})
+  .passthrough()
+  .superRefine((data: any, ctx) => {
+    if (data && typeof data === 'object') {
+      if ('n' in data) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Client cannot specify n. Node counts and thresholds are configured exclusively in .env',
+          path: ['n'],
+        });
+      }
+      if ('threshold' in data) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Client cannot specify threshold. Node counts and thresholds are configured exclusively in .env',
+          path: ['threshold'],
+        });
+      }
+    }
+  });
 
 export const sendTransactionSchema = z.object({
   toAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Invalid Ethereum recipient address'),

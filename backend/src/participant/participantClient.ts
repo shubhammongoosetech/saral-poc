@@ -27,6 +27,7 @@ import {
   Round3PartialSignatureMessage,
 } from '../crypto/mpcProtocolTypes';
 import { IMpcParticipantClient } from './participantTransport';
+import { env } from '../config/env';
 import {
   serializeIpcMessage,
   IpcMessageParser,
@@ -74,7 +75,7 @@ export class AuthenticatedParticipantClient implements IMpcParticipantClient {
     this.remotePid = options.remotePid;
 
     // Fail closed: enforce mandatory, unique, high-entropy IPC auth key
-    const candidateKey = options.ipcAuthKey || process.env.SARAL_IPC_AUTH_KEY;
+    const candidateKey = options.ipcAuthKey || env.SARAL_IPC_AUTH_KEY;
     assertValidIpcSecret(candidateKey);
     this.ipcAuthKey = candidateKey;
   }

@@ -1,10 +1,18 @@
 import React, { useState } from 'react';
 import { apiClient as api } from '../../api/client';
 
-export const AdvancedSection: React.FC = () => {
-  const [topology, setTopology] = useState<any>(null);
-  const [economicState, setEconomicState] = useState<any>(null);
-  const [loaded, setLoaded] = useState(false);
+export interface AdvancedSectionProps {
+  initialTopology?: any;
+  initialEconomicState?: any;
+}
+
+export const AdvancedSection: React.FC<AdvancedSectionProps> = ({
+  initialTopology,
+  initialEconomicState,
+}) => {
+  const [topology, setTopology] = useState<any>(initialTopology || null);
+  const [economicState, setEconomicState] = useState<any>(initialEconomicState || null);
+  const [loaded, setLoaded] = useState(Boolean(initialTopology));
   const [loading, setLoading] = useState(false);
 
   const handleToggle = async (e: React.SyntheticEvent<HTMLDetailsElement>) => {
@@ -39,19 +47,33 @@ export const AdvancedSection: React.FC = () => {
             <div className="two-column-list">
               <div className="two-column-item">
                 <span className="label-col">Storage nodes</span>
-                <span className="value-col">{topology?.totalNodes || 19} nodes</span>
+                <span className="value-col">
+                  {topology ? `${topology.totalNodes} nodes` : 'Unavailable'}
+                </span>
               </div>
               <div className="two-column-item">
                 <span className="label-col">Foundation group</span>
-                <span className="value-col">7 nodes (requires 5)</span>
+                <span className="value-col">
+                  {topology?.domains?.foundation
+                    ? `${topology.domains.foundation.count ?? topology.domains.foundation.nodes} nodes (requires ${topology.domains.foundation.threshold})`
+                    : 'Unavailable'}
+                </span>
               </div>
               <div className="two-column-item">
                 <span className="label-col">Public group</span>
-                <span className="value-col">6 nodes (requires 5)</span>
+                <span className="value-col">
+                  {topology?.domains?.public
+                    ? `${topology.domains.public.count ?? topology.domains.public.nodes} nodes (requires ${topology.domains.public.threshold})`
+                    : 'Unavailable'}
+                </span>
               </div>
               <div className="two-column-item">
                 <span className="label-col">Private group</span>
-                <span className="value-col">6 nodes (requires 5)</span>
+                <span className="value-col">
+                  {topology?.domains?.private
+                    ? `${topology.domains.private.count ?? topology.domains.private.nodes} nodes (requires ${topology.domains.private.threshold})`
+                    : 'Unavailable'}
+                </span>
               </div>
             </div>
           </div>

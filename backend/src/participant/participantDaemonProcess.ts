@@ -40,12 +40,13 @@ import {
   rotateNodeIdentity,
   NodeIdentity,
 } from './nodeIdentityManager';
+import { env } from '../config/env';
 
 /**
  * Returns protected runtime socket directory (.saral_runtime_sockets) with mode 0o700.
  */
 export function getProtectedSocketDirectory(): string {
-  const dir = process.env.SARAL_SOCKETS_DIR || path.resolve(process.cwd(), '.saral_runtime_sockets');
+  const dir = env.SARAL_SOCKETS_DIR || path.resolve(process.cwd(), '.saral_runtime_sockets');
   if (!fs.existsSync(dir)) {
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -104,7 +105,7 @@ export class ParticipantDaemonProcess {
     this.keyDir = options.keyDir;
 
     // Fail closed: enforce mandatory, unique, high-entropy IPC auth key
-    const candidateKey = options.ipcAuthKey || process.env.SARAL_IPC_AUTH_KEY;
+    const candidateKey = options.ipcAuthKey || env.SARAL_IPC_AUTH_KEY;
     assertValidIpcSecret(candidateKey);
     this.ipcAuthKey = candidateKey;
 
@@ -506,14 +507,14 @@ if (require.main === module || (process.argv && process.argv[1]?.includes('parti
     return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : undefined;
   };
 
-  const nodeId = getArg('--nodeId') || process.env.SARAL_NODE_ID;
-  const rawDomain = (getArg('--domain') || process.env.SARAL_NODE_DOMAIN || 'PUBLIC').toUpperCase();
+  const nodeId = getArg('--nodeId') || env.SARAL_NODE_ID;
+  const rawDomain = (getArg('--domain') || env.SARAL_NODE_DOMAIN || 'PUBLIC').toUpperCase();
   const domain: DomainType = rawDomain === 'FOUNDATION' ? 'FOUNDATION' : rawDomain === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC';
-  const nodeIndex = parseInt(getArg('--nodeIndex') || process.env.SARAL_NODE_INDEX || '1', 10);
-  const shareIndex = parseInt(getArg('--shareIndex') || process.env.SARAL_SHARE_INDEX || `${nodeIndex}`, 10);
-  const socketPath = getArg('--socketPath') || process.env.SARAL_SOCKET_PATH;
-  const keyDir = getArg('--keyDir') || process.env.SARAL_NODE_KEYS_DIR;
-  const ipcAuthKey = getArg('--ipcAuthKey') || process.env.SARAL_IPC_AUTH_KEY;
+  const nodeIndex = parseInt(getArg('--nodeIndex') || env.SARAL_NODE_INDEX || '1', 10);
+  const shareIndex = parseInt(getArg('--shareIndex') || env.SARAL_SHARE_INDEX || `${nodeIndex}`, 10);
+  const socketPath = getArg('--socketPath') || env.SARAL_SOCKET_PATH;
+  const keyDir = getArg('--keyDir') || env.SARAL_NODE_KEYS_DIR;
+  const ipcAuthKey = getArg('--ipcAuthKey') || env.SARAL_IPC_AUTH_KEY;
 
   if (!nodeId || !ipcAuthKey) {
     console.error('Usage: participantDaemonProcess --nodeId <id> --domain <FOUNDATION|PUBLIC|PRIVATE> --nodeIndex <n> --shareIndex <n> --ipcAuthKey <key> [--socketPath <path>]');

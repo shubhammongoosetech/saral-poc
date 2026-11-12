@@ -3,7 +3,7 @@ import { NavLink, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
 export const Navbar: React.FC = () => {
-  const { isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, logout, user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -14,6 +14,8 @@ export const Navbar: React.FC = () => {
     logout();
     navigate('/login');
   };
+
+  const displayName = user?.name || user?.email || user?.mobile;
 
   return (
     <header className="navbar">
@@ -41,6 +43,11 @@ export const Navbar: React.FC = () => {
           >
             Settings
           </NavLink>
+          {displayName && (
+            <span style={{ fontSize: '13px', color: '#111', fontWeight: 500, padding: '4px 8px', background: '#f4f4f5', borderRadius: '4px' }}>
+              {displayName}
+            </span>
+          )}
           <button type="button" onClick={handleLogout} className="btn-link nav-link">
             Logout
           </button>

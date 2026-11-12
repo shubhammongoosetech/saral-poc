@@ -15,6 +15,7 @@ import { Server } from 'http';
 import { env } from './config/env';
 import { testConnection, prisma } from './config/db';
 import { getProtectedSocketDirectory } from './participant/participantDaemonProcess';
+import { getTopologyConfig, logTopologyStartup } from './config/topologyConfig';
 
 export interface StartupMetrics {
   envValidationMs: number;
@@ -71,8 +72,8 @@ export function cleanupStaleSockets(socketDir: string): number {
  * Initializes runtime directories required by the coordinator and participants.
  */
 export function initializeRuntimeDirectories(): void {
-  const registryDir = process.env.SARAL_REGISTRY_DIR || path.resolve(process.cwd(), '.saral_registry');
-  const vaultDir = process.env.SARAL_VAULT_DIR || path.resolve(process.cwd(), '.saral_node_vault');
+  const registryDir = env.SARAL_REGISTRY_DIR || path.resolve(process.cwd(), '.saral_registry');
+  const vaultDir = env.SARAL_VAULT_DIR || path.resolve(process.cwd(), '.saral_node_vault');
   const socketDir = getProtectedSocketDirectory();
 
   ensureSecureDirectory(registryDir);
@@ -90,11 +91,14 @@ export function validateEnvironment(): void {
     throw new Error(`[Bootstrap] Invalid PORT: ${env.PORT}`);
   }
 
+  // Strictly validate topology invariants from .env
+  getTopologyConfig();
+
   if (env.NODE_ENV === 'production') {
-    if (!process.env.SARAL_REGISTRY_ADMIN_SECRET || process.env.SARAL_REGISTRY_ADMIN_SECRET.length < 32) {
+    if (!env.SARAL_REGISTRY_ADMIN_SECRET || env.SARAL_REGISTRY_ADMIN_SECRET.length < 32) {
       throw new Error('[Bootstrap] In production, SARAL_REGISTRY_ADMIN_SECRET must be at least 32 characters long');
     }
-    if (!process.env.SARAL_IPC_AUTH_KEY || process.env.SARAL_IPC_AUTH_KEY.length < 32) {
+    if (!env.SARAL_IPC_AUTH_KEY || env.SARAL_IPC_AUTH_KEY.length < 32) {
       throw new Error('[Bootstrap] In production, SARAL_IPC_AUTH_KEY must be configured with a 32-byte secret');
     }
   }
@@ -114,6 +118,11 @@ export async function bootstrapSystem(options: { checkDatabase?: boolean } = {})
   const tEnvStart = performance.now();
   validateEnvironment();
   const envValidationMs = performance.now() - tEnvStart;
+
+  // Print startup topology summary
+  if (env.NODE_ENV !== 'test') {
+    logTopologyStartup();
+  }
 
   // 2. Prepare runtime directories
   const tDirStart = performance.now();

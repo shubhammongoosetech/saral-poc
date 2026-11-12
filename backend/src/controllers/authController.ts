@@ -17,10 +17,11 @@ export async function handleGoogleLogin(
 ): Promise<void> {
   try {
     const validated = googleAuthSchema.parse(req.body);
-    console.log("validate", validated)
+    console.log('[GoogleLogin] Validated payload received');
     const result = await verifyGoogleAuth(validated.credential);
     res.json(result);
-  } catch (err) {
+  } catch (err: any) {
+    console.error('[GoogleLogin Error]:', err?.message || err);
     next(err);
   }
 }

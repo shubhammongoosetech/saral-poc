@@ -6,6 +6,7 @@ import { apiClient as api } from '../../api/client';
 interface AccountSectionProps {
   user?: {
     id: string;
+    name?: string;
     email?: string;
     mobile?: string;
     login_method: string;
@@ -31,14 +32,32 @@ export const AccountSection: React.FC<AccountSectionProps> = ({ user }) => {
 
   const loginMethod =
     user?.login_method === 'google'
-      ? `Google (${user.email || 'Connected'})`
-      : `Mobile (${user?.mobile || 'Verified'})`;
+      ? 'Google Sign-In'
+      : 'Mobile OTP';
 
   return (
     <div>
       <h2 className="section-title">Account</h2>
 
       <div className="two-column-list">
+        {user?.name && (
+          <div className="two-column-item">
+            <span className="label-col">Name</span>
+            <span className="value-col">{user.name}</span>
+          </div>
+        )}
+        {user?.email && (
+          <div className="two-column-item">
+            <span className="label-col">Email</span>
+            <span className="value-col">{user.email}</span>
+          </div>
+        )}
+        {user?.mobile && (
+          <div className="two-column-item">
+            <span className="label-col">Mobile</span>
+            <span className="value-col">{user.mobile}</span>
+          </div>
+        )}
         <div className="two-column-item">
           <span className="label-col">Login method</span>
           <span className="value-col">{loginMethod}</span>

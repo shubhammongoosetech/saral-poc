@@ -1,7 +1,7 @@
 /**
  * nodeClusterService.ts
  *
- * SARAL Fixed 19-Node Distributed Storage & Cluster Architecture
+ * SARAL Dynamic Distributed Storage & Cluster Architecture
  *
  * Implements 3-Domain Separation of Powers:
  *   - Foundation Domain: 9 Institutional / Regulatory Nodes
@@ -25,7 +25,8 @@ import net from 'net';
 import { execFile, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { DomainType } from '../crypto/thresholdEcdsa';
-import { encryptShareGcm } from '../crypto/secureEncryption';
+import { encryptShareGcm, decryptShareGcm } from '../crypto/secureEncryption';
+import { hexToScalar, scalarMultiplyG } from '../crypto/secp256k1Math';
 import { MpcParticipantDaemon } from '../crypto/mpcParticipantDaemon';
 import { AuthenticatedParticipantClient } from '../participant/participantClient';
 import { trustedParticipantRegistry } from '../crypto/participantRegistry';
@@ -187,7 +188,7 @@ export function buildLegacyContainerName(
 
 // Sandboxed Isolated Storage Directory
 export function getSandboxVaultRoot(): string {
-  const vaultRoot = process.env.SARAL_VAULT_DIR || path.resolve(process.cwd(), '.saral_node_vault');
+  const vaultRoot = env.SARAL_VAULT_DIR || path.resolve(process.cwd(), '.saral_node_vault');
   if (!fs.existsSync(vaultRoot)) {
     try {
       fs.mkdirSync(vaultRoot, { recursive: true, mode: 0o700 });
@@ -792,6 +793,26 @@ export class NodeClusterManager {
     customTopology?: Partial<Record<DomainType, Partial<DomainTopologyConfig>>>
   ): Promise<{ totalNodes: number; initialized: number }> {
     const topo = getInfrastructureTopology(customTopology);
+
+    // Verify existing node data directories match the configured topology count
+    const vaultRoot = getSandboxVaultRoot();
+    if (fs.existsSync(vaultRoot)) {
+      try {
+        const existingEntries = fs.readdirSync(vaultRoot).filter((f) => {
+          try {
+            return fs.statSync(path.join(vaultRoot, f)).isDirectory() && f.startsWith('saral-');
+          } catch {
+            return false;
+          }
+        });
+        if (existingEntries.length > 0 && existingEntries.length !== topo.TOTAL) {
+          console.warn(
+            `[NodeCluster] Topology mismatch: found ${existingEntries.length} existing node data directories but current .env topology requires ${topo.TOTAL} nodes. Nodes will be updated according to current .env.`
+          );
+        }
+      } catch {}
+    }
+
     const topology = [
       { domain: 'FOUNDATION' as const, count: topo.FOUNDATION.count },
       { domain: 'PUBLIC' as const, count: topo.PUBLIC.count },
@@ -1055,6 +1076,31 @@ export class NodeClusterManager {
     throw new Error(
       `[NodeCluster] Share could not be retrieved from node ${primaryName} for user ${userId} (tried candidate names: ${candidateNames.join(', ')})`
     );
+  }
+
+  /**
+   * Retrieves the node's public share point (P_i = s_i * G) computed locally inside the node.
+   * The secret share scalar s_i never leaves the node or moves across the network.
+   */
+  async getNodePublicSharePoint(
+    userId: string,
+    domain: DomainType,
+    nodeIndex: number,
+    containerNameHint?: string
+  ): Promise<{ shareIndex: number; publicPointHex: string; commitments?: string[] }> {
+    const rawEncrypted = await this.retrieveShareFromNode(userId, domain, nodeIndex, containerNameHint);
+    const decrypted = decryptShareGcm(rawEncrypted, domain);
+    const parsed = JSON.parse(decrypted);
+    const shareIndex = parsed.index;
+    const scalarBigInt = hexToScalar(parsed.value);
+    const publicPoint = scalarMultiplyG(scalarBigInt);
+    const publicPointHex = publicPoint.toHex(true);
+
+    return {
+      shareIndex,
+      publicPointHex,
+      commitments: parsed.commitments,
+    };
   }
 
   /**

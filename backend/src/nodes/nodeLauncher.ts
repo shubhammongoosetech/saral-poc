@@ -2,17 +2,17 @@
  * nodeLauncher.ts
  *
  * Standalone Node Process Launcher for Dynamic SARAL Trust Domains.
+ * Sourced dynamically from .env via getTopologyConfig().
  *
  * CLI Usage:
- *   npm run nodes:start -- --foundation 7 --public 6 --private 6
- *   npm run nodes:start -- --nodes 27
+ *   npm run nodes:start
+ *   npm run nodes:start -- --foundation 9 --public 9 --private 9
  */
 
-import { spawn, ChildProcess } from 'child_process';
-import path from 'path';
-import fs from 'fs';
-import { allocate, computeThreshold } from '../topology/allocation';
+import { ChildProcess } from 'child_process';
+import { allocate } from '../topology/allocation';
 import { nodeCluster } from '../services/nodeClusterService';
+import { getTopologyConfig } from '../config/topologyConfig';
 
 export interface LaunchedProcessInfo {
   nodeId: string;
@@ -69,7 +69,7 @@ export class DynamicNodeLauncher {
    * Graceful termination of all spawned processes.
    */
   public shutdown(): void {
-    for (const [id, proc] of this.processes) {
+    for (const [, proc] of this.processes) {
       try {
         proc.kill('SIGTERM');
       } catch {}
@@ -83,9 +83,10 @@ export const dynamicNodeLauncher = new DynamicNodeLauncher();
 // CLI Entrypoint
 if (require.main === module) {
   const args = process.argv.slice(2);
-  let f = 7;
-  let p = 6;
-  let v = 6;
+  const config = getTopologyConfig();
+  let f = config.foundation.nodes;
+  let p = config.public.nodes;
+  let v = config.private.nodes;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--foundation' && args[i + 1]) f = parseInt(args[i + 1], 10);
@@ -110,4 +111,3 @@ if (require.main === module) {
       process.exit(1);
     });
 }
-

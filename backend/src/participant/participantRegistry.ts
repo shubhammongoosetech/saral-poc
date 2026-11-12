@@ -107,7 +107,7 @@ export class ParticipantRegistry {
   private storagePath: string;
 
   constructor(customStoragePath?: string) {
-    const rootDir = process.env.SARAL_REGISTRY_DIR || path.resolve(process.cwd(), '.saral_registry');
+    const rootDir = env.SARAL_REGISTRY_DIR || path.resolve(process.cwd(), '.saral_registry');
     if (!fs.existsSync(rootDir)) {
       try {
         fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
@@ -493,7 +493,7 @@ export class ParticipantRegistry {
    * Default or missing admin secrets fail closed unconditionally.
    */
   public approveParticipant(nodeId: string, adminSecret?: string): void {
-    const requiredSecret = process.env.SARAL_REGISTRY_ADMIN_SECRET;
+    const requiredSecret = env.SARAL_REGISTRY_ADMIN_SECRET;
     if (!requiredSecret || typeof requiredSecret !== 'string' || requiredSecret.trim().length < 32) {
       throw new Error(
         `[ParticipantRegistry] Security Exception: Admin authorization failed. SARAL_REGISTRY_ADMIN_SECRET environment variable is missing, empty, or shorter than 32 characters. Default admin secrets have been permanently eliminated.`

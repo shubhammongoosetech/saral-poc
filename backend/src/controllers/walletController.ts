@@ -5,7 +5,7 @@
  *
  * Implements:
  *  - Wallet retrieval & generation via 3-Domain MPC.
- *  - Real-time 19-node cluster health monitoring.
+ *  - Real-time distributed cluster health monitoring.
  *  - Zero-Trust Context access evaluation.
  *  - Genuine Threshold MPC transaction signing.
  *  - Guarded Break-Glass Recovery lifecycle.
@@ -34,6 +34,7 @@ import {
   getRecoveryAuditLogs,
 } from '../services/recoveryService';
 import { prisma } from '../config/db';
+import { getTopologyConfig } from '../config/topologyConfig';
 
 export async function handleGetWallet(
   req: Request,
@@ -42,7 +43,8 @@ export async function handleGetWallet(
 ): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const wallet = await getExistingWallet(userId);
+    const sessionId = (req.user as any)?.sessionId || userId;
+    const wallet = await getExistingWallet(userId, sessionId);
     if (!wallet) {
       res.json({ hasWallet: false, wallet: null });
       return;
@@ -60,13 +62,14 @@ export async function handleGenerateWallet(
 ): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const validated = generateWalletSchema.parse(req.body);
+    generateWalletSchema.parse(req.body ?? {});
 
-    const result = await generateWallet(userId, validated.n, validated.threshold);
+    const result = await generateWallet(userId);
+    const config = getTopologyConfig();
     res.status(201).json({
       success: true,
       wallet: result,
-      message: `SARAL MPC Wallet created. Keys additively distributed across 3 Domains: Foundation, Public, and Private (19 distributed nodes) with Zero Complete Private Key Reconstruction.`,
+      message: `SARAL MPC Wallet created. Keys additively distributed across 3 Domains: Foundation (${config.foundation.nodes}), Public (${config.public.nodes}), and Private (${config.private.nodes}) with Zero Complete Private Key Reconstruction.`,
     });
   } catch (err) {
     next(err);
@@ -112,7 +115,8 @@ export async function handleSignTransaction(
       validated.toAddress,
       validated.amount,
       validated.lat,
-      validated.lng
+      validated.lng,
+      (req.user as any)?.sessionId || userId
     );
 
     res.json({

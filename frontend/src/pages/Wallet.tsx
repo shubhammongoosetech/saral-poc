@@ -65,7 +65,7 @@ export const Wallet: React.FC = () => {
     try {
       setCreating(true);
       setError(null);
-      const res = await walletApi.generateWallet(19, 13);
+      const res = await walletApi.generateWallet();
       setWallet(res.wallet);
       setHasWallet(true);
       await fetchTransactions();

@@ -1,4 +1,5 @@
 import { prisma } from '../config/db';
+import { redactSensitive } from '../utils/logger';
 import { env } from '../config/env';
 import { logSecurityEvent } from './auditLogService';
 
@@ -71,7 +72,7 @@ export async function evaluateAccessPolicy(
           lat: currentLat ?? null,
           lng: currentLng ?? null,
           allowed,
-          reason,
+          reason: redactSensitive(reason),
         },
       });
     } catch (err) {

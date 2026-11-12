@@ -4,7 +4,7 @@
  * Script to completely reset & clear the SARAL database and stored key shares.
  *
  * Actions:
- *  1. Truncates all PostgreSQL database tables (users, mfa, policy, wallets, key_shares, logs, txs, otps).
+ *  1. Truncates all PostgreSQL database tables (users, mfa, policy, key_shares, logs, txs, otps).
  *  2. Deletes all local node vault share files (.saral_node_vault/*.vault).
  *  3. Attempts to remove any Docker share containers if Docker is available.
  */

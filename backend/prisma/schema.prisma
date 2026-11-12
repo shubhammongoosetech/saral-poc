@@ -9,6 +9,7 @@ datasource db {
 
 model User {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String?  @db.VarChar(255)
   googleId    String?  @unique @map("google_id") @db.VarChar(255)
   email       String?  @unique @db.VarChar(255)
   mobile      String?  @unique @db.VarChar(50)
@@ -17,7 +18,6 @@ model User {
 
   mfa             Mfa?
   workPolicy      WorkPolicy?
-  wallet          Wallet?
   keyShares       KeyShare[]
   accessLogs      AccessLog[]
   transactions    Transaction[]
@@ -56,24 +56,6 @@ model WorkPolicy {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("work_policy")
-}
-
-model Wallet {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId          String   @unique @map("user_id") @db.Uuid
-  address         String   @unique @db.VarChar(255)
-  publicKey       String   @map("public_key") @db.Text
-  protocolVersion String   @default("MPC-secp256k1-v1") @map("protocol_version") @db.VarChar(50)
-  threshold       Int      @default(5)
-  n               Int      @default(9)
-  commitments     String?  @db.Text
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
-
-  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  placements WalletPlacement[]
-
-  @@index([address])
-  @@map("wallets")
 }
 
 model KeyShare {
@@ -176,7 +158,6 @@ model Otp {
 
 model WalletPlacement {
   id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  walletId            String   @map("wallet_id") @db.Uuid
   userId              String   @map("user_id") @db.Uuid
   epoch               Int      @default(1)
   foundationNodes     String[] @map("foundation_nodes")
@@ -186,13 +167,15 @@ model WalletPlacement {
   publicThreshold     Int      @map("public_threshold")
   privateThreshold    Int      @map("private_threshold")
   manifestHash        String   @map("manifest_hash") @db.VarChar(64)
+  protocolVersion     String   @default("MPC-secp256k1-v1") @map("protocol_version") @db.VarChar(50)
+  threshold           Int      @default(5)
+  n                   Int      @default(9)
   pinnedAt            DateTime @default(now()) @map("pinned_at") @db.Timestamptz
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([walletId, epoch], name: "unique_wallet_epoch")
-  @@index([walletId])
+  @@unique([userId, epoch], name: "unique_user_epoch")
   @@index([userId])
   @@map("wallet_placements")
 }

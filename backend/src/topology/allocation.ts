@@ -7,13 +7,12 @@
  *   - The total number of nodes N is dynamic (N >= 9).
  *   - Three trust domains: Foundation, Public, Private.
  *   - Each domain must have at least 3 nodes (n_d >= 3).
- *   - Allocation function allocate(N, weights) splits N across domains:
- *       N = 19 -> Foundation 7, Public 6, Private 6
- *       N = 27 -> Foundation 9, Public 9, Private 9
- *   - Threshold per domain dynamic: default t = floor(2n/3) + 1, always t > n/2.
+ *   - Runtime topology is driven exclusively by getTopologyConfig().
+ *   - allocate() is strictly an offline / test helper and is never called at runtime.
  */
 
 import { DomainType } from '../crypto/thresholdEcdsa';
+import { getTopologyConfig, TopologyConfig } from '../config/topologyConfig';
 
 export interface TopologyWeights {
   foundation?: number;
@@ -35,6 +34,8 @@ export interface ClusterTopology {
   private: DomainAllocation;
 }
 
+let cachedClusterTopology: ClusterTopology | null = null;
+
 /**
  * Computes default fault-tolerant supermajority threshold for a domain:
  *   t = floor(2n / 3) + 1
@@ -54,13 +55,8 @@ export function computeThreshold(n: number): number {
 }
 
 /**
- * Dynamically allocates N nodes across the three trust domains:
- * Foundation, Public, and Private.
- *
- * Constraints:
- *   1. N >= 9
- *   2. Each domain >= 3 nodes
- *   3. Sum of domain counts == N
+ * Proportional allocation helper for offline tools and tests.
+ * NEVER called by the application at runtime.
  */
 export function allocate(
   N: number,
@@ -74,21 +70,13 @@ export function allocate(
     throw new Error(`Total node count N must be >= 9 per separation of powers, got ${N}`);
   }
 
-  // Exemplary calibrated distributions from patent specification
-  if (!weights && N === 19) {
-    return { foundation: 7, public: 6, private: 6 };
-  }
-  if (!weights && N === 27) {
-    return { foundation: 9, public: 9, private: 9 };
-  }
-
   const wF = Math.max(weights?.foundation ?? 1, 0.001);
   const wP = Math.max(weights?.public ?? 1, 0.001);
   const wV = Math.max(weights?.private ?? 1, 0.001);
   const totalWeight = wF + wP + wV;
 
-  // Initial proportional allocation ensuring minimum 3 per domain
-  const availableToDistribute = N - 9; // Reserve 3 for each of the 3 domains
+  // Proportional distribution ensuring at least 3 per domain
+  const availableToDistribute = N - 9;
   const addF = Math.round((wF / totalWeight) * availableToDistribute);
   const addP = Math.round((wP / totalWeight) * availableToDistribute);
   const addV = availableToDistribute - (addF + addP);
@@ -97,7 +85,6 @@ export function allocate(
   const publicCount = 3 + addP;
   const privateCount = 3 + addV;
 
-  // Validation
   if (foundation < 3 || publicCount < 3 || privateCount < 3) {
     throw new Error(
       `Allocation violated minimum domain constraint (>= 3): F=${foundation}, P=${publicCount}, V=${privateCount}`
@@ -117,54 +104,48 @@ export function allocate(
 }
 
 /**
- * Generates full ClusterTopology configuration object for dynamic execution.
+ * Builds the ClusterTopology object strictly from TopologyConfig (sourced from .env).
+ * Cached per process; recomputed on restart or cache reset.
  */
-export function buildClusterTopology(
-  N: number = 19,
-  weights?: TopologyWeights,
-  thresholdOverrides?: {
-    foundation?: number;
-    public?: number;
-    private?: number;
-  }
-): ClusterTopology {
-  const counts = allocate(N, weights);
-
-  const tF = thresholdOverrides?.foundation ?? computeThreshold(counts.foundation);
-  const tP = thresholdOverrides?.public ?? computeThreshold(counts.public);
-  const tV = thresholdOverrides?.private ?? computeThreshold(counts.private);
-
-  // Validate threshold invariants
-  if (tF < 1 || tF > counts.foundation || (counts.foundation > 1 && tF <= Math.floor(counts.foundation / 2))) {
-    throw new Error(`Invalid Foundation threshold ${tF} for count ${counts.foundation}`);
-  }
-  if (tP < 1 || tP > counts.public || (counts.public > 1 && tP <= Math.floor(counts.public / 2))) {
-    throw new Error(`Invalid Public threshold ${tP} for count ${counts.public}`);
-  }
-  if (tV < 1 || tV > counts.private || (counts.private > 1 && tV <= Math.floor(counts.private / 2))) {
-    throw new Error(`Invalid Private threshold ${tV} for count ${counts.private}`);
+export function buildClusterTopology(config?: TopologyConfig): ClusterTopology {
+  if (config) {
+    return constructTopology(config);
   }
 
+  if (!cachedClusterTopology) {
+    const activeConfig = getTopologyConfig();
+    cachedClusterTopology = constructTopology(activeConfig);
+  }
+  return cachedClusterTopology;
+}
+
+function constructTopology(cfg: TopologyConfig): ClusterTopology {
   return {
-    totalNodes: N,
+    totalNodes: cfg.totalNodes,
     foundation: {
       domain: 'FOUNDATION',
-      count: counts.foundation,
-      threshold: tF,
-      nodeIds: Array.from({ length: counts.foundation }, (_, i) => `saral-foundation-${i + 1}`),
+      count: cfg.foundation.nodes,
+      threshold: cfg.foundation.threshold,
+      nodeIds: Array.from({ length: cfg.foundation.nodes }, (_, i) => `saral-foundation-${i + 1}`),
     },
     public: {
       domain: 'PUBLIC',
-      count: counts.public,
-      threshold: tP,
-      nodeIds: Array.from({ length: counts.public }, (_, i) => `saral-public-${i + 1}`),
+      count: cfg.public.nodes,
+      threshold: cfg.public.threshold,
+      nodeIds: Array.from({ length: cfg.public.nodes }, (_, i) => `saral-public-${i + 1}`),
     },
     private: {
       domain: 'PRIVATE',
-      count: counts.private,
-      threshold: tV,
-      nodeIds: Array.from({ length: counts.private }, (_, i) => `saral-private-${i + 1}`),
+      count: cfg.private.nodes,
+      threshold: cfg.private.threshold,
+      nodeIds: Array.from({ length: cfg.private.nodes }, (_, i) => `saral-private-${i + 1}`),
     },
   };
 }
 
+/**
+ * Resets the cached cluster topology (used for test isolation).
+ */
+export function resetTopologyCache(): void {
+  cachedClusterTopology = null;
+}

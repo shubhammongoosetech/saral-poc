@@ -22,6 +22,7 @@ import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { CURVE_ORDER, scalarMultiplyG } from '../crypto/secp256k1Math';
 import { DomainType } from '../crypto/thresholdEcdsa';
+import { env } from '../config/env';
 import {
   trustedParticipantRegistry,
   computePoPChallenge,
@@ -76,7 +77,7 @@ export function validateNodeId(nodeId: string): void {
 }
 
 export function getNodeKeysDirectory(): string {
-  const dir = process.env.SARAL_NODE_KEYS_DIR || path.resolve(process.cwd(), '.saral_node_keys');
+  const dir = env.SARAL_NODE_KEYS_DIR || path.resolve(process.cwd(), '.saral_node_keys');
   if (!fs.existsSync(dir)) {
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

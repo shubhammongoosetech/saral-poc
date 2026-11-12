@@ -81,11 +81,8 @@ export const walletApi = {
     return res.data;
   },
 
-  generateWallet: async (
-    n?: number,
-    threshold?: number
-  ): Promise<{ success: boolean; wallet: WalletData; message: string }> => {
-    const res = await apiClient.post('/wallet/generate', { n, threshold });
+  generateWallet: async (): Promise<{ success: boolean; wallet: WalletData; message: string }> => {
+    const res = await apiClient.post('/wallet/generate', {});
     return res.data;
   },
 

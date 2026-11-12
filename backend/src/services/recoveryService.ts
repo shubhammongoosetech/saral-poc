@@ -16,6 +16,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { env } from '../config/env';
 import {
   CURVE_ORDER,
   modN,
@@ -35,6 +36,7 @@ import {
   refreshFeldmanCommitments,
 } from '../crypto/shamirField';
 import { encryptShareGcm, decryptShareGcm } from '../crypto/secureEncryption';
+import { redactSensitive } from '../utils/logger';
 
 export type RecoveryState =
   | 'INITIALIZED'
@@ -47,7 +49,6 @@ export interface RecoveryCustodian {
   id: string;
   name: string;
   role: string;
-  publicKeyHex: string;
   encryptedShare: string; // AES-GCM encrypted custodian recovery share
 }
 
@@ -59,7 +60,6 @@ export interface BreakGlassRecoverySetup {
   custodians: RecoveryCustodian[];
   commitments: string[];
   createdAt: string;
-  originalPrivatePublicKeyHex?: string;
   zeroPolynomialCommitments?: string[];
 }
 
@@ -93,7 +93,7 @@ export interface RecoveryAuditRecord {
 }
 
 // Persistent storage directory for recovery state & audit trails
-const RECOVERY_STORAGE_DIR = process.env.SARAL_RECOVERY_DIR || path.resolve(process.cwd(), '.saral_registry');
+const RECOVERY_STORAGE_DIR = env.SARAL_RECOVERY_DIR || path.resolve(process.cwd(), '.saral_registry');
 const RECOVERY_STORAGE_FILE = path.join(RECOVERY_STORAGE_DIR, 'recovery_state.json');
 
 const recoverySetups = new Map<string, BreakGlassRecoverySetup>();
@@ -165,15 +165,16 @@ export function logRecoveryEvent(
   eventType: RecoveryAuditRecord['eventType'],
   details: Record<string, any>
 ): RecoveryAuditRecord {
+  const sanitizedDetails = JSON.parse(redactSensitive(JSON.stringify(details || {})));
   const record: RecoveryAuditRecord = {
     id: crypto.randomUUID(),
     userId,
     eventType,
     timestamp: new Date().toISOString(),
-    details,
+    details: sanitizedDetails,
   };
   recoveryAuditLogs.push(record);
-  console.log(`[SARAL Recovery Audit] [${eventType}] User: ${userId} Details:`, details);
+  console.log(`[SARAL Recovery Audit] [${eventType}] User: ${userId} Details:`, sanitizedDetails);
   saveRecoveryStateToDisk();
   return record;
 }
@@ -186,8 +187,7 @@ export function initializeWalletRecovery(
   userId: string,
   thresholdM: number = 3,
   totalCustodiansN: number = 5,
-  timelockDurationHours: number = 48,
-  originalPrivatePublicKeyHex?: string
+  timelockDurationHours: number = 48
 ): BreakGlassRecoverySetup {
   const recoverySecret = randomScalar();
   const vss = splitSecretField(recoverySecret, totalCustodiansN, thresholdM);
@@ -214,12 +214,10 @@ export function initializeWalletRecovery(
       `RECOVERY-${info.id}`
     );
 
-    const dummyPubPoint = scalarMultiplyG(randomScalar());
     custodians.push({
       id: info.id,
       name: info.name,
       role: info.role,
-      publicKeyHex: dummyPubPoint.toHex(true),
       encryptedShare: encrypted.serialized,
     });
   }
@@ -232,7 +230,6 @@ export function initializeWalletRecovery(
     custodians,
     commitments: vss.commitments,
     createdAt: new Date().toISOString(),
-    originalPrivatePublicKeyHex,
   };
 
   recoverySetups.set(userId, setup);
@@ -401,8 +398,6 @@ export function executeGuardedRecovery(
 ): {
   success: boolean;
   message: string;
-  rotatedPrivateDomainPublicCommitment: string;
-  preservedPrivatePublicKeyHex?: string;
 } {
   const req = activeRequests.get(requestId);
   if (!req) throw new Error('Recovery request not found');
@@ -474,14 +469,6 @@ export function executeGuardedRecovery(
   const zeroPoly = generateZeroPolynomial(5); // Private domain threshold = 5
   const zeroPolyCommitments = zeroPoly.slice(1).map((b) => scalarMultiplyG(b).toHex(true));
 
-  // Preserved public key commitment point — reject missing commitments strictly
-  if (!setup.originalPrivatePublicKeyHex && (!setup.commitments || setup.commitments.length === 0)) {
-    throw new Error(
-      '[Recovery] Missing cryptographic commitment: cannot execute recovery without verified commitment point'
-    );
-  }
-  const preservedCommitment = setup.originalPrivatePublicKeyHex || setup.commitments[0];
-
   req.state = 'EXECUTED';
   req.executedAt = new Date().toISOString();
 
@@ -490,7 +477,6 @@ export function executeGuardedRecovery(
     rotatedDomain: 'PRIVATE',
     refreshProtocol: 'PROACTIVE_SECRET_SHARING_ZERO_POLYNOMIAL',
     addressPreserved: true,
-    commitment: preservedCommitment,
     zeroPolyCommitmentCount: zeroPolyCommitments.length,
   });
   saveRecoveryStateToDisk();
@@ -499,8 +485,6 @@ export function executeGuardedRecovery(
     success: true,
     message:
       'Guarded break-glass recovery executed. Sovereign Private Domain key shares refreshed via Proactive Secret Sharing (PSS). Wallet address and on-chain assets strictly preserved.',
-    rotatedPrivateDomainPublicCommitment: preservedCommitment,
-    preservedPrivatePublicKeyHex: preservedCommitment,
   };
 }
 

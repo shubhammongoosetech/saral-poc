@@ -158,7 +158,7 @@ export async function verifyMfaOtp(
   const [policy, shareCount, walletCount] = await Promise.all([
     prisma.workPolicy.findUnique({ where: { userId }, select: { id: true } }).catch(() => null),
     prisma.keyShare.count({ where: { userId } }).catch(() => 0),
-    prisma.wallet.count({ where: { userId } }).catch(() => 0),
+    prisma.walletPlacement.count({ where: { userId } }).catch(() => 0),
   ]);
 
   const token = signToken({ userId, loginMethod, mfaVerified: true });
@@ -314,7 +314,7 @@ export async function verifyTotpToken(
   const [policy, shareCount, walletCount] = await Promise.all([
     prisma.workPolicy.findUnique({ where: { userId }, select: { id: true } }).catch(() => null),
     prisma.keyShare.count({ where: { userId } }).catch(() => 0),
-    prisma.wallet.count({ where: { userId } }).catch(() => 0),
+    prisma.walletPlacement.count({ where: { userId } }).catch(() => 0),
   ]);
 
   const authToken = signToken({ userId, loginMethod, mfaVerified: true });

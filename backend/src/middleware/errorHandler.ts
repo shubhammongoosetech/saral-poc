@@ -50,7 +50,7 @@ export function errorHandler(
     return;
   }
 
-  // Generic error — sanitize to prevent leaking internals
+  // Generic error — sanitize to prevent leaking internals (expose details in development)
   const statusCode =
     typeof (err as Record<string, unknown>).statusCode === 'number'
       ? (err as Record<string, unknown>).statusCode as number
@@ -59,7 +59,7 @@ export function errorHandler(
       : 500;
 
   res.status(statusCode).json({
-    error: 'An unexpected error occurred.',
+    error: process.env.NODE_ENV === 'development' ? errMsg : 'An unexpected error occurred.',
     ...(requestId ? { requestId } : {}),
   });
 }

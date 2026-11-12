@@ -1,0 +1,496 @@
+# SARAL Cluster — Dynamically Generated Docker Compose Configuration
+# Generated automatically from cluster topology specification in backend/.env
+# Database: Configured for Local PostgreSQL on localhost:5432 (no duplicate postgres container)
+
+services:
+  saral-foundation-1:
+    image: alpine:latest
+    container_name: saral-foundation-1
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-foundation-1
+      - NODE_NAME=saral-foundation-1
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=1
+      - PORT=4001
+    volumes:
+      - saral-foundation-1_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-2:
+    image: alpine:latest
+    container_name: saral-foundation-2
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-foundation-2
+      - NODE_NAME=saral-foundation-2
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=2
+      - PORT=4002
+    volumes:
+      - saral-foundation-2_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-3:
+    image: alpine:latest
+    container_name: saral-foundation-3
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-foundation-3
+      - NODE_NAME=saral-foundation-3
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=3
+      - PORT=4003
+    volumes:
+      - saral-foundation-3_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-4:
+    image: alpine:latest
+    container_name: saral-foundation-4
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-foundation-4
+      - NODE_NAME=saral-foundation-4
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=4
+      - PORT=4004
+    volumes:
+      - saral-foundation-4_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-5:
+    image: alpine:latest
+    container_name: saral-foundation-5
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-foundation-5
+      - NODE_NAME=saral-foundation-5
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=5
+      - PORT=4005
+    volumes:
+      - saral-foundation-5_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-6:
+    image: alpine:latest
+    container_name: saral-foundation-6
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-foundation-6
+      - NODE_NAME=saral-foundation-6
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=6
+      - PORT=4006
+    volumes:
+      - saral-foundation-6_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-7:
+    image: alpine:latest
+    container_name: saral-foundation-7
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-foundation-7
+      - NODE_NAME=saral-foundation-7
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=7
+      - PORT=4007
+    volumes:
+      - saral-foundation-7_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-8:
+    image: alpine:latest
+    container_name: saral-foundation-8
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-foundation-8
+      - NODE_NAME=saral-foundation-8
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=8
+      - PORT=4008
+    volumes:
+      - saral-foundation-8_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-9:
+    image: alpine:latest
+    container_name: saral-foundation-9
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-foundation-9
+      - NODE_NAME=saral-foundation-9
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=9
+      - PORT=4009
+    volumes:
+      - saral-foundation-9_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-1:
+    image: alpine:latest
+    container_name: saral-public-1
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-public-1
+      - NODE_NAME=saral-public-1
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=1
+      - PORT=4010
+    volumes:
+      - saral-public-1_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-2:
+    image: alpine:latest
+    container_name: saral-public-2
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-public-2
+      - NODE_NAME=saral-public-2
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=2
+      - PORT=4011
+    volumes:
+      - saral-public-2_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-3:
+    image: alpine:latest
+    container_name: saral-public-3
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-public-3
+      - NODE_NAME=saral-public-3
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=3
+      - PORT=4012
+    volumes:
+      - saral-public-3_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-4:
+    image: alpine:latest
+    container_name: saral-public-4
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-public-4
+      - NODE_NAME=saral-public-4
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=4
+      - PORT=4013
+    volumes:
+      - saral-public-4_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-5:
+    image: alpine:latest
+    container_name: saral-public-5
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-public-5
+      - NODE_NAME=saral-public-5
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=5
+      - PORT=4014
+    volumes:
+      - saral-public-5_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-6:
+    image: alpine:latest
+    container_name: saral-public-6
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-public-6
+      - NODE_NAME=saral-public-6
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=6
+      - PORT=4015
+    volumes:
+      - saral-public-6_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-7:
+    image: alpine:latest
+    container_name: saral-public-7
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-public-7
+      - NODE_NAME=saral-public-7
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=7
+      - PORT=4016
+    volumes:
+      - saral-public-7_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-8:
+    image: alpine:latest
+    container_name: saral-public-8
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-public-8
+      - NODE_NAME=saral-public-8
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=8
+      - PORT=4017
+    volumes:
+      - saral-public-8_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-9:
+    image: alpine:latest
+    container_name: saral-public-9
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-public-9
+      - NODE_NAME=saral-public-9
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=9
+      - PORT=4018
+    volumes:
+      - saral-public-9_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-1:
+    image: alpine:latest
+    container_name: saral-private-1
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-private-1
+      - NODE_NAME=saral-private-1
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=1
+      - PORT=4019
+    volumes:
+      - saral-private-1_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-2:
+    image: alpine:latest
+    container_name: saral-private-2
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-private-2
+      - NODE_NAME=saral-private-2
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=2
+      - PORT=4020
+    volumes:
+      - saral-private-2_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-3:
+    image: alpine:latest
+    container_name: saral-private-3
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-private-3
+      - NODE_NAME=saral-private-3
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=3
+      - PORT=4021
+    volumes:
+      - saral-private-3_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-4:
+    image: alpine:latest
+    container_name: saral-private-4
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-private-4
+      - NODE_NAME=saral-private-4
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=4
+      - PORT=4022
+    volumes:
+      - saral-private-4_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-5:
+    image: alpine:latest
+    container_name: saral-private-5
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-private-5
+      - NODE_NAME=saral-private-5
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=5
+      - PORT=4023
+    volumes:
+      - saral-private-5_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-6:
+    image: alpine:latest
+    container_name: saral-private-6
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-private-6
+      - NODE_NAME=saral-private-6
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=6
+      - PORT=4024
+    volumes:
+      - saral-private-6_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-7:
+    image: alpine:latest
+    container_name: saral-private-7
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-private-7
+      - NODE_NAME=saral-private-7
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=7
+      - PORT=4025
+    volumes:
+      - saral-private-7_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-8:
+    image: alpine:latest
+    container_name: saral-private-8
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-private-8
+      - NODE_NAME=saral-private-8
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=8
+      - PORT=4026
+    volumes:
+      - saral-private-8_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-9:
+    image: alpine:latest
+    container_name: saral-private-9
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+    working_dir: /vault
+    environment:
+      - NODE_ID=saral-private-9
+      - NODE_NAME=saral-private-9
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=9
+      - PORT=4027
+    volumes:
+      - saral-private-9_data:/vault
+    networks:
+      - saral-net
+
+networks:
+  saral-net:
+    driver: bridge
+
+volumes:
+  saral-foundation-1_data:
+  saral-foundation-2_data:
+  saral-foundation-3_data:
+  saral-foundation-4_data:
+  saral-foundation-5_data:
+  saral-foundation-6_data:
+  saral-foundation-7_data:
+  saral-foundation-8_data:
+  saral-foundation-9_data:
+  saral-public-1_data:
+  saral-public-2_data:
+  saral-public-3_data:
+  saral-public-4_data:
+  saral-public-5_data:
+  saral-public-6_data:
+  saral-public-7_data:
+  saral-public-8_data:
+  saral-public-9_data:
+  saral-private-1_data:
+  saral-private-2_data:
+  saral-private-3_data:
+  saral-private-4_data:
+  saral-private-5_data:
+  saral-private-6_data:
+  saral-private-7_data:
+  saral-private-8_data:
+  saral-private-9_data:

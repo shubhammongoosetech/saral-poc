@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
+import { env } from '../config/env';
 
 function secp256k1Verify(sigHex: string, hash: Buffer, pubKeyHex: string): boolean {
   try {
@@ -67,7 +68,7 @@ export interface SlashingEvent {
   timestamp: string;
 }
 
-const ECONOMIC_STORAGE_DIR = process.env.SARAL_ECONOMIC_DIR || path.resolve(process.cwd(), '.saral_registry');
+const ECONOMIC_STORAGE_DIR = env.SARAL_ECONOMIC_DIR || path.resolve(process.cwd(), '.saral_registry');
 const ECONOMIC_STORAGE_FILE = path.join(ECONOMIC_STORAGE_DIR, 'economic_state.json');
 
 export class EconomicSecuritySubsystem {

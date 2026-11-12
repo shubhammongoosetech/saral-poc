@@ -6,7 +6,7 @@
  * Implements:
  *  - 3-Domain Separation of Powers (Foundation, Public, Private).
  *  - Distributed Key Generation (DKG) with Zero Central Private Key.
- *  - Fixed 19 Distributed Storage Nodes across the 3 Trust Domains.
+ *  - Dynamic Distributed Storage Nodes across the 3 Trust Domains configured via .env.
  *  - Genuine Multi-Party Computation (MPC) Threshold Signing for EVM.
  *  - Guarded Break-Glass Recovery (Patent FIG. 3).
  *  - Adaptive Multi-Asset Economic Security Integration (Patent FIG. 4).
@@ -48,8 +48,11 @@ import {
 import { evaluateAccessPolicy } from './locationService';
 import { initializeWalletRecovery } from './recoveryService';
 import { economicSecurity } from './economicService';
-import { computeWalletPlacement, pinWalletPlacement } from '../topology/placement';
+import { computeWalletPlacement, pinWalletPlacement, getPinnedWalletPlacement } from '../topology/placement';
 import { buildClusterTopology } from '../topology/allocation';
+import { getTopologyConfig } from '../config/topologyConfig';
+import { getOrDeriveSessionWallet, setSessionWallet } from './sessionWalletRegistry';
+import { redactSensitive } from '../utils/logger';
 
 export interface DomainCommitments {
   foundation: string[];
@@ -68,7 +71,7 @@ export interface WalletInfo {
   threshold: number;
   protocolVersion: string;
   domains: {
-    foundation: { role: string; nodes: number };
+    foundation: { role: string; nodes: number; threshold: number };
     public: { role: string; nodes: number; threshold: number };
     private: { role: string; nodes: number; threshold: number };
   };
@@ -77,78 +80,47 @@ export interface WalletInfo {
 const DOMAINS: DomainType[] = ['FOUNDATION', 'PUBLIC', 'PRIVATE'];
 
 export async function hasExistingWallet(userId: string): Promise<boolean> {
-  const [walletCount, shareCount] = await Promise.all([
-    prisma.wallet.count({ where: { userId } }).catch(() => 0),
+  const [placementCount, shareCount] = await Promise.all([
+    prisma.walletPlacement.count({ where: { userId } }).catch(() => 0),
     prisma.keyShare.count({ where: { userId } }).catch(() => 0),
   ]);
-  return walletCount > 0 || shareCount > 0;
+  return placementCount > 0 || shareCount > 0;
 }
 
 /**
- * Retrieves wallet metadata and live on-chain balance without private-key reconstruction.
+ * Retrieves wallet metadata and live on-chain balance via dynamic session derivation
+ * without private-key reconstruction or persistent database storage of address/keys.
  */
-export async function getExistingWallet(userId: string): Promise<WalletInfo | null> {
-  // Check wallet table
-  const walletRow = await prisma.wallet.findUnique({
-    where: { userId },
-  }).catch(() => null);
+export async function getExistingWallet(userId: string, sessionId?: string): Promise<WalletInfo | null> {
+  const exists = await hasExistingWallet(userId);
+  if (!exists) return null;
 
-  if (walletRow) {
-    const balance = await getBalance(walletRow.address);
-    return {
-      address: walletRow.address,
-      publicKey: walletRow.publicKey,
-      balance,
-      createdAt: walletRow.createdAt.toISOString(),
-      n: walletRow.n,
-      threshold: walletRow.threshold,
-      protocolVersion: walletRow.protocolVersion,
-      domains: {
-        foundation: { role: 'Institutional Administration', nodes: 9 },
-        public: { role: 'Decentralized Staking Quorum', nodes: walletRow.n, threshold: walletRow.threshold },
-        private: { role: 'Sovereign User Devices & Guardians', nodes: walletRow.n, threshold: walletRow.threshold },
-      },
-    };
-  }
+  const sessionWallet = await getOrDeriveSessionWallet(userId, sessionId);
+  const balance = await getBalance(sessionWallet.address);
+  const placement = await getPinnedWalletPlacement(prisma, userId);
+  const config = getTopologyConfig();
 
-  // Fallback for existing legacy accounts without wallet table record
-  const firstShare = await prisma.keyShare.findFirst({
-    where: { userId },
-    select: { n: true, threshold: true, createdAt: true },
-  });
-  if (!firstShare) return null;
+  const foundationNodes = placement?.foundation.assignedNodeIds.length ?? config.foundation.nodes;
+  const foundationThreshold = placement?.foundation.threshold ?? config.foundation.threshold;
 
-  const { n, threshold, createdAt } = firstShare;
+  const publicNodes = placement?.public.assignedNodeIds.length ?? config.public.nodes;
+  const publicThreshold = placement?.public.threshold ?? config.public.threshold;
 
-  // Retrieve address from stored public shares or compute via commitments
-  // If no address was stored, read threshold public points from nodes
-  let address = '0x0000000000000000000000000000000000000000';
-  let publicKey = '0x';
-
-  try {
-    const pubRows = await prisma.keyShare.findMany({
-      where: { userId, category: { in: ['PUBLIC', 'INSTITUTIONAL', 'SOVEREIGN', 'FOUNDATION', 'PRIVATE'] } },
-      take: 1,
-    });
-    if (pubRows.length > 0) {
-      address = `0x${userId.replace(/-/g, '').slice(0, 40)}`;
-    }
-  } catch {}
-
-  const balance = await getBalance(address);
+  const privateNodes = placement?.private.assignedNodeIds.length ?? config.private.nodes;
+  const privateThreshold = placement?.private.threshold ?? config.private.threshold;
 
   return {
-    address,
-    publicKey,
+    address: sessionWallet.address,
+    publicKey: sessionWallet.publicKey,
     balance,
-    createdAt: createdAt.toISOString(),
-    n,
-    threshold,
-    protocolVersion: 'MPC-secp256k1-v1',
+    createdAt: new Date(sessionWallet.derivedAt).toISOString(),
+    n: publicNodes,
+    threshold: publicThreshold,
+    protocolVersion: sessionWallet.protocolVersion,
     domains: {
-      foundation: { role: 'Institutional Administration', nodes: 9 },
-      public: { role: 'Decentralized Staking Quorum', nodes: n, threshold },
-      private: { role: 'Sovereign User Devices & Guardians', nodes: n, threshold },
+      foundation: { role: 'Institutional Administration', nodes: foundationNodes, threshold: foundationThreshold },
+      public: { role: 'Decentralized Staking Quorum', nodes: publicNodes, threshold: publicThreshold },
+      private: { role: 'Sovereign User Devices & Guardians', nodes: privateNodes, threshold: privateThreshold },
     },
   };
 }
@@ -163,7 +135,7 @@ export async function getExistingWallet(userId: string): Promise<WalletInfo | nu
  * 5. Shards Private domain key into n shares with threshold t.
  * 6. Generates 1 Foundation node share.
  * 7. Encrypts each share with AES-256-GCM using domain-separated HKDF keys.
- * 8. Deploys each share to its respective node container (19 containers total).
+ * 8. Deploys each share to its respective node container.
  * 9. Stores ONLY metadata in PostgreSQL (NO private keys or plaintext shares).
  * 10. Initializes Guarded Break-Glass Recovery subsystem (Patent FIG. 3).
  * 11. Registers wallet in Adaptive Multi-Asset Economic Subsystem (Patent FIG. 4).
@@ -171,19 +143,7 @@ export async function getExistingWallet(userId: string): Promise<WalletInfo | nu
  * CRITICAL ARCHITECTURAL GUARANTEE:
  * The complete private key x is NEVER formed or reconstructed in any variable or Buffer.
  */
-export async function generateWallet(
-  userId: string,
-  nParam?: number,
-  thresholdParam?: number,
-  customTopology?: {
-    foundationN?: number;
-    foundationThreshold?: number;
-    publicN?: number;
-    publicThreshold?: number;
-    privateN?: number;
-    privateThreshold?: number;
-  }
-): Promise<{
+export async function generateWallet(userId: string): Promise<{
   address: string;
   publicKey: string;
   balance: string;
@@ -195,65 +155,30 @@ export async function generateWallet(
     throw new Error('Wallet already exists for this user. Only one wallet generation is permitted.');
   }
 
-  const pubN = customTopology?.publicN ?? nParam ?? env.SARAL_PUBLIC_NODES;
-  const pubT = customTopology?.publicThreshold ?? thresholdParam ?? env.SARAL_PUBLIC_THRESHOLD;
-
-  const foundN = customTopology?.foundationN ?? env.SARAL_FOUNDATION_NODES;
-  const foundT = customTopology?.foundationThreshold ?? env.SARAL_FOUNDATION_THRESHOLD;
-
-  const privN = customTopology?.privateN ?? env.SARAL_PRIVATE_NODES;
-  const privT = customTopology?.privateThreshold ?? env.SARAL_PRIVATE_THRESHOLD;
-
-  const n = pubN;
-  const threshold = pubT;
-
-  if (pubT < 1 || pubT > pubN) {
-    throw new Error(`Public threshold must be between 1 and ${pubN}`);
-  }
-  if (foundT < 1 || foundT > foundN) {
-    throw new Error(`Foundation threshold must be between 1 and ${foundN}`);
-  }
-  if (privT < 1 || privT > privN) {
-    throw new Error(`Private threshold must be between 1 and ${privN}`);
-  }
+  const config = getTopologyConfig();
+  const pubN = config.public.nodes;
+  const pubT = config.public.threshold;
+  const foundN = config.foundation.nodes;
+  const foundT = config.foundation.threshold;
+  const privN = config.private.nodes;
+  const privT = config.private.threshold;
 
   // Execute DKG: Generate 3 domains without central private key
   const mpcWallet = generateSaralWalletMpc(pubN, pubT, foundN, foundT, privN, privT);
   const address = mpcWallet.address;
   const publicKey = mpcWallet.aggregatedPublicKeyHex;
 
-  // Store Feldman VSS commitments for share integrity verification
+  // Store Feldman VSS commitments for share integrity verification in memory
   walletCommitmentsStore.set(userId, {
     foundation: mpcWallet.foundation.commitments,
     public: mpcWallet.publicDomain.commitments,
     private: mpcWallet.privateDomain.commitments,
   });
 
-  // Store Wallet Metadata in DB
-  const walletRecord = await prisma.wallet.create({
-    data: {
-      userId,
-      address,
-      publicKey,
-      protocolVersion: 'MPC-secp256k1-v1',
-      threshold: pubT,
-      n: pubN,
-    },
-  });
-
   // Dynamic Topology & Rendezvous (HRW) Placement Pinning (Patent Section 2.2)
-  try {
-    const totalN = foundN + pubN + privN;
-    const topology = buildClusterTopology(totalN, undefined, {
-      foundation: foundT,
-      public: pubT,
-      private: privT,
-    });
-    const placement = computeWalletPlacement(walletRecord.id, topology, 1, userId);
-    await pinWalletPlacement(prisma, placement);
-  } catch (err: any) {
-    console.warn(`[WalletService] Placement pinning note: ${err.message}`);
-  }
+  const topology = buildClusterTopology(config);
+  const placement = computeWalletPlacement(userId, topology, 1, userId);
+  await pinWalletPlacement(prisma, placement);
 
   // Deploy Nodes across the 3 Domains:
   // 1. Foundation Domain: distinct independent institutional shares
@@ -269,8 +194,8 @@ export async function generateWallet(
         userId,
         category: 'FOUNDATION',
         shareIndex: s.index,
-        n: mpcWallet.foundation.totalShares,
-        threshold: mpcWallet.foundation.threshold,
+        n: foundN,
+        threshold: foundT,
         containerId: nodeInfo.nodeId,
         containerName: nodeInfo.nodeName,
       },
@@ -290,8 +215,8 @@ export async function generateWallet(
         userId,
         category: 'PUBLIC',
         shareIndex: s.index,
-        n,
-        threshold,
+        n: pubN,
+        threshold: pubT,
         containerId: nodeInfo.nodeId,
         containerName: nodeInfo.nodeName,
       },
@@ -311,16 +236,29 @@ export async function generateWallet(
         userId,
         category: 'PRIVATE',
         shareIndex: s.index,
-        n,
-        threshold,
+        n: privN,
+        threshold: privT,
         containerId: nodeInfo.nodeId,
         containerName: nodeInfo.nodeName,
       },
     });
   }
 
-  // Initialize Guarded Break-Glass Recovery (Patent FIG. 3) with original private key commitment
-  initializeWalletRecovery(userId, 3, 5, 48, mpcWallet.privateDomain.publicKeyPointHex);
+  // Initialize Guarded Break-Glass Recovery (Patent FIG. 3)
+  initializeWalletRecovery(userId, 3, 5, 48);
+
+  // Register into ephemeral in-memory session registry (never persisted to disk/DB)
+  setSessionWallet({
+    sessionId: userId,
+    userId,
+    address,
+    publicKey,
+    derivedAt: Date.now(),
+    expiresAt: Date.now() + (env.ACCESS_TOKEN_TTL_SECONDS || 900) * 1000,
+    n: pubN,
+    threshold: pubT,
+    protocolVersion: 'MPC-secp256k1-v1',
+  });
 
   // Update Economic Security TVS (Patent FIG. 4)
   economicSecurity.updateTvs(economicSecurity.getState().totalValueSecuredMstc + 1000);
@@ -328,16 +266,16 @@ export async function generateWallet(
   const balance = await getBalance(address);
   console.log(
     `[SARAL MPC] Wallet successfully generated for user ${userId.slice(0, 8)}… — ` +
-    `19 nodes deployed across Foundation (1), Public (9), and Private (9) domains. ` +
-    `Aggregated Public Key: ${publicKey.slice(0, 20)}… Address: ${address}`
+    `${config.totalNodes} nodes deployed across Foundation (${foundN}, t=${foundT}), ` +
+    `Public (${pubN}, t=${pubT}), and Private (${privN}, t=${privT}) domains with zero address/key storage.`
   );
 
   return {
     address,
     publicKey,
     balance,
-    n,
-    threshold,
+    n: pubN,
+    threshold: pubT,
     protocolVersion: 'MPC-secp256k1-v1',
   };
 }
@@ -371,7 +309,8 @@ export async function executeSigningTransaction(
   toAddress: string,
   amount: string,
   lat?: number,
-  lng?: number
+  lng?: number,
+  sessionId?: string
 ): Promise<{ txHash: string; broadcasted: boolean; message: string; explorerUrl: string }> {
   // 1. Policy Gate
   const policyCheck = await evaluateAccessPolicy(userId, loginMethod, mfaVerified, lat, lng);
@@ -379,20 +318,18 @@ export async function executeSigningTransaction(
     throw new Error(`Access Denied: ${policyCheck.reason}`);
   }
 
-  // 2. Wallet & Threshold Lookup
-  const wallet = await prisma.wallet.findUnique({ where: { userId } });
-  const shareConfig = await prisma.keyShare.findFirst({
-    where: { userId },
-    select: { threshold: true, n: true },
-  });
+  // 2. In-Memory Session Derivation & Threshold Lookup (Zero storage)
+  const sessionWallet = await getOrDeriveSessionWallet(userId, sessionId);
+  const walletAddress = sessionWallet.address;
+  const publicKeyHex = sessionWallet.publicKey;
 
-  if (!shareConfig) {
-    throw new Error('Key shares not found for this user.');
-  }
+  // Retrieve pinned placement for this wallet to strictly respect its pinned thresholds
+  const placement = await getPinnedWalletPlacement(prisma, userId);
+  const activeTopology = getTopologyConfig();
 
-  const threshold = wallet?.threshold ?? shareConfig.threshold;
-  const walletAddress = wallet?.address || ethers.computeAddress('0x' + (wallet?.publicKey || ''));
-  const publicKeyHex = wallet?.publicKey || '';
+  const foundationThreshold = placement?.foundation.threshold ?? activeTopology.foundation.threshold;
+  const publicThreshold = placement?.public.threshold ?? activeTopology.public.threshold;
+  const privateThreshold = placement?.private.threshold ?? activeTopology.private.threshold;
 
   // 3. Prepare Unsigned EVM Transaction
   const provider = chainService_getProvider();
@@ -413,10 +350,9 @@ export async function executeSigningTransaction(
 
   const unsignedSerialized = unsignedTx.unsignedSerialized;
 
-  // 4. Retrieve Shares from Nodes for All 3 Domains
+  // 4. Retrieve Shares from Nodes for All 3 Domains strictly adhering to pinned quorums
   // A. Foundation Quorum
   const foundationAliases = getDomainLegacyAliases('FOUNDATION');
-  const foundationThreshold = env.SARAL_FOUNDATION_THRESHOLD || 1;
   const foundationRows = await prisma.keyShare.findMany({
     where: { userId, category: { in: foundationAliases } },
     take: foundationThreshold,
@@ -426,26 +362,26 @@ export async function executeSigningTransaction(
     throw new Error(`[Separation of Powers] Foundation domain authorization shortfall: need ${foundationThreshold}, found ${foundationRows.length}`);
   }
 
-  // B. Public Domain Quorum (threshold nodes, e.g. 5)
+  // B. Public Domain Quorum
   const publicAliases = getDomainLegacyAliases('PUBLIC');
   const publicRows = await prisma.keyShare.findMany({
     where: { userId, category: { in: publicAliases } },
-    take: threshold,
+    take: publicThreshold,
     orderBy: { shareIndex: 'asc' },
   });
-  if (publicRows.length < threshold) {
-    throw new Error(`[Separation of Powers] Public domain quorum shortfall: need ${threshold}, found ${publicRows.length}`);
+  if (publicRows.length < publicThreshold) {
+    throw new Error(`[Separation of Powers] Public domain quorum shortfall: need ${publicThreshold}, found ${publicRows.length}`);
   }
 
-  // C. Private Domain Quorum (threshold nodes, e.g. 5)
+  // C. Private Domain Quorum
   const privateAliases = getDomainLegacyAliases('PRIVATE');
   const privateRows = await prisma.keyShare.findMany({
     where: { userId, category: { in: privateAliases } },
-    take: threshold,
+    take: privateThreshold,
     orderBy: { shareIndex: 'asc' },
   });
-  if (privateRows.length < threshold) {
-    throw new Error(`[Separation of Powers] Private sovereign quorum shortfall: need ${threshold}, found ${privateRows.length}`);
+  if (privateRows.length < privateThreshold) {
+    throw new Error(`[Separation of Powers] Private sovereign quorum shortfall: need ${privateThreshold}, found ${privateRows.length}`);
   }
 
   // 4. Retrieve Independent MPC Participant Clients for All 3 Domains
@@ -479,8 +415,8 @@ export async function executeSigningTransaction(
       chainId,
       publicKeyHex,
       commitments,
-      threshold,
-      threshold,
+      publicThreshold,
+      privateThreshold,
       foundationThreshold
     );
   } catch (err: any) {

@@ -2,6 +2,7 @@
  * topologyController.ts
  *
  * Dynamic Topology & Container Status API Controller (Patent Claims 1, 11, Section 2).
+ * Sourced dynamically from .env via getTopologyConfig() and buildClusterTopology().
  */
 
 import { Request, Response, NextFunction } from 'express';
@@ -16,31 +17,42 @@ export async function handleGetTopology(
   next: NextFunction
 ): Promise<void> {
   try {
-    const topology = buildClusterTopology(19);
+    const topology = buildClusterTopology();
+    const userId = req.user?.userId;
+    const healthStatus = userId ? await nodeCluster.checkClusterHealth(userId) : null;
+    const isHealthy = healthStatus?.healthy ?? true;
+
     res.json({
       topology: {
         totalNodes: topology.totalNodes,
+        healthy: isHealthy,
         domains: {
           foundation: {
             name: 'Foundation Domain',
             role: 'Institutional Administration & Policy Enforcement',
+            nodes: topology.foundation.count,
             count: topology.foundation.count,
             threshold: topology.foundation.threshold,
             nodeIds: topology.foundation.nodeIds,
+            healthy: isHealthy,
           },
           public: {
             name: 'Public Domain',
             role: 'Open Decentralized Staking Quorum',
+            nodes: topology.public.count,
             count: topology.public.count,
             threshold: topology.public.threshold,
             nodeIds: topology.public.nodeIds,
+            healthy: isHealthy,
           },
           private: {
             name: 'Private Domain',
             role: 'Sovereign User Devices, Backups & Guardians',
+            nodes: topology.private.count,
             count: topology.private.count,
             threshold: topology.private.threshold,
             nodeIds: topology.private.nodeIds,
+            healthy: isHealthy,
           },
         },
       },
@@ -56,7 +68,7 @@ export async function handleGetTopologyNodes(
   next: NextFunction
 ): Promise<void> {
   try {
-    const topology = buildClusterTopology(19);
+    const topology = buildClusterTopology();
     const userId = req.user?.userId;
     const healthStatus = userId ? await nodeCluster.checkClusterHealth(userId) : null;
 
@@ -100,18 +112,17 @@ export async function handleGetPlacement(
 ): Promise<void> {
   try {
     const userId = req.user!.userId;
-    const wallet = await prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) {
-      res.status(404).json({ error: 'Wallet not found' });
-      return;
-    }
-
-    const placement = await getPinnedWalletPlacement(prisma, wallet.id);
+    const placement = await getPinnedWalletPlacement(prisma, userId);
     if (!placement) {
-      // Build default placement if not yet persisted in DB
-      const topology = buildClusterTopology(19);
+      const shareCount = await prisma.keyShare.count({ where: { userId } });
+      if (shareCount === 0) {
+        res.status(404).json({ error: 'Wallet not found' });
+        return;
+      }
+      // Build default placement from current topology if not yet persisted in DB
+      const topology = buildClusterTopology();
       res.json({
-        walletId: wallet.id,
+        userId,
         epoch: 1,
         foundationNodes: topology.foundation.nodeIds,
         publicNodes: topology.public.nodeIds,
@@ -120,13 +131,13 @@ export async function handleGetPlacement(
         publicThreshold: topology.public.threshold,
         privateThreshold: topology.private.threshold,
         manifestHash: 'pinned-epoch-1-manifest-hash',
-        pinnedAt: wallet.createdAt.toISOString(),
+        pinnedAt: new Date().toISOString(),
       });
       return;
     }
 
     res.json({
-      walletId: placement.walletId,
+      userId,
       epoch: placement.epoch,
       foundationNodes: placement.foundation.assignedNodeIds,
       publicNodes: placement.public.assignedNodeIds,

@@ -93,9 +93,27 @@ export const Review: React.FC = () => {
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="two-column-list">
+        {user?.name && (
+          <div className="two-column-item">
+            <span className="label-col">Name</span>
+            <span className="value-col">{user.name}</span>
+          </div>
+        )}
+        {user?.email && (
+          <div className="two-column-item">
+            <span className="label-col">Email</span>
+            <span className="value-col">{user.email}</span>
+          </div>
+        )}
+        {user?.mobile && (
+          <div className="two-column-item">
+            <span className="label-col">Mobile</span>
+            <span className="value-col">{user.mobile}</span>
+          </div>
+        )}
         <div className="two-column-item">
           <span className="label-col">Login method</span>
-          <span className="value-col">{loginMethodText}</span>
+          <span className="value-col">{user?.login_method === 'google' ? 'Google' : 'Mobile'}</span>
         </div>
         <div className="two-column-item">
           <span className="label-col">Two-step</span>

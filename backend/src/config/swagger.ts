@@ -72,8 +72,10 @@ export const swaggerDocument: Record<string, any> = {
       Wallet: {
         type: 'object',
         properties: {
-          walletAddress: { type: 'string', example: '0xbb4bef972449CAA8BB7626a5e41BcE6243e74c52' },
-          publicKey: { type: 'string', example: '0x04a2c5f...e41' },
+          hasWallet: { type: 'boolean', example: true },
+          protocolVersion: { type: 'string', example: 'MPC-secp256k1-v1' },
+          threshold: { type: 'number', example: 5 },
+          n: { type: 'number', example: 9 },
         },
       },
     },
@@ -430,8 +432,7 @@ Each domain is then split via Shamir's Secret Sharing into 9 node shares with a 
                   type: 'object',
                   properties: {
                     message: { type: 'string', example: 'Wallet generated successfully' },
-                    walletAddress: { type: 'string', example: '0xbb4bef972449CAA8BB7626a5e41BcE6243e74c52' },
-                    publicKey: { type: 'string', example: '0x04a2c5f...e41' },
+                    protocolVersion: { type: 'string', example: 'MPC-secp256k1-v1' },
                   },
                 },
               },
@@ -445,8 +446,7 @@ Each domain is then split via Shamir's Secret Sharing into 9 node shares with a 
                   type: 'object',
                   properties: {
                     message: { type: 'string', example: 'Wallet already exists' },
-                    walletAddress: { type: 'string', example: '0xbb4bef972449CAA8BB7626a5e41BcE6243e74c52' },
-                    publicKey: { type: 'string', example: '0x04a2c5f...e41' },
+                    protocolVersion: { type: 'string', example: 'MPC-secp256k1-v1' },
                   },
                 },
               },
@@ -460,7 +460,7 @@ Each domain is then split via Shamir's Secret Sharing into 9 node shares with a 
       get: {
         tags: ['Wallet'],
         summary: 'Get Wallet Details',
-        description: 'Returns the user’s Ethereum/MSTC wallet address and uncompressed public key.',
+        description: 'Returns the user’s live session-derived wallet balance and MPC domain status.',
         security: [{ BearerAuth: [] }],
         responses: {
           200: {
@@ -480,7 +480,7 @@ Each domain is then split via Shamir's Secret Sharing into 9 node shares with a 
       post: {
         tags: ['Wallet'],
         summary: 'Ready-to-Sign Validation',
-        description: 'Loads encrypted key shares from all 3 domains, verifies threshold (>=5 shares per domain), reconstructs key in ephemeral memory, and confirms public key derivation match.',
+        description: 'Verifies MPC node threshold connectivity and session context without key reconstruction.',
         security: [{ BearerAuth: [] }],
         responses: {
           200: {
@@ -491,7 +491,6 @@ Each domain is then split via Shamir's Secret Sharing into 9 node shares with a 
                   type: 'object',
                   properties: {
                     ready: { type: 'boolean', example: true },
-                    walletAddress: { type: 'string', example: '0xbb4bef972449CAA8BB7626a5e41BcE6243e74c52' },
                     domainsVerified: {
                       type: 'array',
                       items: { type: 'string' },
@@ -513,7 +512,7 @@ Each domain is then split via Shamir's Secret Sharing into 9 node shares with a 
       post: {
         tags: ['Wallet'],
         summary: 'Execute MSTC Testnet Payment',
-        description: 'Builds an EIP-1559/Type-2 transaction, reconstructs the private key on-demand to sign, and broadcasts it to the MSTC testnet RPC to produce a genuine transaction hash (txHash).',
+        description: 'Builds an EVM transaction and signs it via genuine threshold MPC without reconstructing the master private key.',
         security: [{ BearerAuth: [] }],
         requestBody: {
           required: true,
@@ -540,7 +539,6 @@ Each domain is then split via Shamir's Secret Sharing into 9 node shares with a 
                   properties: {
                     message: { type: 'string', example: 'Payment executed on MSTC Testnet' },
                     txHash: { type: 'string', example: '0xda5bdaad8959450b4d2740c9062b6e489a35d648f5da91541526c392bb9a4ea4' },
-                    from: { type: 'string', example: '0xbb4bef972449CAA8BB7626a5e41BcE6243e74c52' },
                     to: { type: 'string', example: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e' },
                     value: { type: 'string', example: '0.01 MSTC' },
                     chainId: { type: 'number', example: 1337 },
@@ -560,7 +558,7 @@ Each domain is then split via Shamir's Secret Sharing into 9 node shares with a 
       post: {
         tags: ['Wallet'],
         summary: 'Sign Custom 32-Byte Hash',
-        description: 'Reconstructs the private key from threshold shares across Public, Institutional, and Sovereign domains, and signs a custom 32-byte digest (ECDSA secp256k1).',
+        description: 'Signs a 32-byte hash via threshold MPC across the 3 domains.',
         security: [{ BearerAuth: [] }],
         requestBody: {
           required: true,
@@ -586,8 +584,6 @@ Each domain is then split via Shamir's Secret Sharing into 9 node shares with a 
                   properties: {
                     message: { type: 'string', example: 'Signed successfully' },
                     signature: { type: 'string', example: '0x6886c54e0eb339011e0fb57e9442...' },
-                    walletAddress: { type: 'string', example: '0xbb4bef972449CAA8BB7626a5e41BcE6243e74c52' },
-                    publicKey: { type: 'string', example: '0x04a2c5f...e41' },
                   },
                 },
               },
