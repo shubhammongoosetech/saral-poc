@@ -146,6 +146,16 @@ export async function broadcastRawTransaction(
     txHash = txResponse.hash;
     broadcasted = true;
     message = 'Transaction successfully signed via 3-Domain MPC and broadcasted to blockchain node!';
+
+    // Wait briefly (up to 6s) for 1 confirmation so immediate balance refresh reflects spent funds
+    try {
+      await Promise.race([
+        txResponse.wait(1),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+      ]);
+    } catch {
+      // Broadcast already succeeded; timeout/receipt errors must not mark broadcast as failed
+    }
   } catch (err: any) {
     // STRICT RULE: No fake success! Accurately report that RPC broadcast failed
     broadcasted = false;

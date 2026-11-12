@@ -83,10 +83,26 @@ a:hover { text-decoration: underline; }
 .details-summary:hover { color: var(--text); }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .inline-row { display: flex; align-items: center; justify-content: space-between; }
-.send-result { margin-top: 16px; padding: 12px; background: var(--success-bg); border: 1px solid var(--success-border); border-radius: 4px; font-size: 13px; }
+.send-result { margin-top: 16px; padding: 12px; background: var(--success-bg); border: 1px solid var(--success-border); border-radius: 4px; font-size: 13px; max-width: 100%; }
+.send-tx-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; font-size: 12px; }
+.send-tx-hash { overflow-wrap: anywhere; word-break: break-all; color: var(--text); }
 .wallet-balance-box { margin-bottom: 24px; }
 .wallet-address-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .balance-amount { font-size: 28px; font-weight: 600; color: var(--text); }
 .text-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.tx-address-cell { display: inline-flex; align-items: center; gap: 6px; }
+.copy-icon-btn { display: inline-flex; align-items: center; gap: 3px; padding: 2px 4px; border: none; background: transparent; color: var(--muted); cursor: pointer; border-radius: 3px; line-height: 1; }
+.copy-icon-btn:hover { color: var(--accent); background: #eff6ff; }
+.copy-icon-btn.copied { color: var(--success); }
+.copy-label { font-size: 11px; font-weight: 500; }
+.pagination-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.pagination-info { display: flex; align-items: center; gap: 10px; }
+.pagination-select { padding: 4px 8px; font-size: 12px; font-family: inherit; color: var(--text); background: #fff; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.pagination-controls { display: flex; align-items: center; gap: 4px; }
+.btn-page { padding: 4px 9px; font-size: 12px; font-family: inherit; background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.btn-page:hover:not(:disabled) { background: #f9fafb; border-color: #d1d5db; }
+.btn-page.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 500; }
+.btn-page:disabled { opacity: 0.45; cursor: not-allowed; }
+.pagination-ellipsis { padding: 0 4px; }
 .text-center { text-align: center; margin-top: 16px; }
 .muted { color: var(--muted); }

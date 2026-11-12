@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { walletApi } from '../../api/endpoints';
 import { getCurrentCoords } from '../../hooks/useLocation';
+import { CopyButton } from '../../components/CopyButton';
 
 interface SendFormProps {
   onSent: () => void;
@@ -110,14 +111,25 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
 
       {txHash && (
         <div className="send-result">
-          <span>Sent! </span>
-          <a
-            href={explorerUrl || `https://testnet.mstscan.com/tx/${txHash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            View transaction ↗
-          </a>
+          <div className="inline-row">
+            <span>
+              <strong>Sent!</strong>{' '}
+              <a
+                href={explorerUrl || `https://testnet.mstscan.com/tx/${txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View transaction ↗
+              </a>
+            </span>
+          </div>
+          <div className="send-tx-row">
+            <span className="muted">Tx Hash:</span>
+            <span className="text-mono send-tx-hash" title={txHash}>
+              {txHash}
+            </span>
+            <CopyButton text={txHash} ariaLabel="Copy transaction hash" />
+          </div>
         </div>
       )}
     </div>

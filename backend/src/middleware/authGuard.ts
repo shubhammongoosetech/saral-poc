@@ -22,17 +22,19 @@ declare global {
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   let token: string | undefined;
 
-  // 1. Prefer cookie-based token
-  if (req.cookies && typeof req.cookies.access_token === 'string') {
-    token = req.cookies.access_token as string;
+  // 1. Prefer explicit Authorization: Bearer header so active client tokens
+  //    (account switches or API callers) are never overridden by stale cookies
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const bearerToken = authHeader.slice(7).trim();
+    if (bearerToken) {
+      token = bearerToken;
+    }
   }
 
-  // 2. Fall back to Authorization: Bearer header (legacy / API clients)
-  if (!token) {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.split(' ')[1];
-    }
+  // 2. Fall back to httpOnly cookie-based token
+  if (!token && req.cookies && typeof req.cookies.access_token === 'string') {
+    token = req.cookies.access_token as string;
   }
 
   if (!token) {

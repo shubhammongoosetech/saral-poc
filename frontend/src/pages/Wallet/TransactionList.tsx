@@ -1,4 +1,5 @@
 import React from 'react';
+import { CopyButton } from '../../components/CopyButton';
 
 export interface TransactionItem {
   tx_hash: string;
@@ -40,11 +41,16 @@ export const TransactionList: React.FC<TransactionListProps> = ({ transactions }
                   ? new Date(tx.created_at).toLocaleDateString()
                   : '-';
 
+                const rowKey = hash || String(idx);
+
                 return (
-                  <tr key={hash || idx}>
+                  <tr key={rowKey}>
                     <td className="muted">{formattedDate}</td>
-                    <td className="text-mono" title={toAddr}>
-                      {shortTo}
+                    <td title={toAddr}>
+                      <div className="tx-address-cell">
+                        <span className="text-mono">{shortTo}</span>
+                        {toAddr && <CopyButton text={toAddr} ariaLabel="Copy recipient address" />}
+                      </div>
                     </td>
                     <td>{tx.amount} MSTC</td>
                     <td>

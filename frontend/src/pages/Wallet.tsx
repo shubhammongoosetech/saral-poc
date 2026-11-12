@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { walletApi, WalletData } from '../api/endpoints';
 import { WalletHeader } from './Wallet/WalletHeader';
 import { SendForm } from './Wallet/SendForm';
@@ -12,6 +12,14 @@ export const Wallet: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pollTimersRef = useRef<number[]>([]);
+
+  const clearPollTimers = useCallback(() => {
+    pollTimersRef.current.forEach((id) => window.clearTimeout(id));
+    pollTimersRef.current = [];
+  }, []);
+
+  useEffect(() => clearPollTimers, [clearPollTimers]);
 
   const fetchTransactions = useCallback(async () => {
     try {
@@ -36,7 +44,7 @@ export const Wallet: React.FC = () => {
     }
   }, []);
 
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async (): Promise<string | null> => {
     try {
       setRefreshing(true);
       setError(null);
@@ -44,12 +52,32 @@ export const Wallet: React.FC = () => {
       setHasWallet(res.hasWallet);
       setWallet(res.wallet);
       await fetchTransactions();
+      return res.wallet?.balance ?? null;
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to refresh balance');
+      return null;
     } finally {
       setRefreshing(false);
     }
-  };
+  }, [fetchTransactions]);
+
+  const handleAfterSend = useCallback(async () => {
+    clearPollTimers();
+    const initialBalance = wallet?.balance ?? null;
+    const updatedBalance = await handleRefresh();
+
+    if (initialBalance === null || updatedBalance === initialBalance) {
+      for (const delayMs of [3500, 7500]) {
+        const timerId = window.setTimeout(async () => {
+          const nextBalance = await handleRefresh();
+          if (nextBalance !== null && initialBalance !== null && nextBalance !== initialBalance) {
+            clearPollTimers();
+          }
+        }, delayMs);
+        pollTimersRef.current.push(timerId);
+      }
+    }
+  }, [clearPollTimers, handleRefresh, wallet?.balance]);
 
   useEffect(() => {
     loadWallet();
@@ -109,7 +137,7 @@ export const Wallet: React.FC = () => {
             refreshing={refreshing}
           />
 
-          <SendForm onSent={handleRefresh} />
+          <SendForm onSent={handleAfterSend} />
 
           <TransactionList transactions={transactions} />
         </div>
