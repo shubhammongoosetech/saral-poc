@@ -5,16 +5,28 @@ import { CopyButton } from '../../components/CopyButton';
 
 interface SendFormProps {
   onSent: () => void;
+  activeNetwork?: 'mst-testnet' | 'solana-devnet' | 'polygon-amoy';
+  onNetworkChange?: (network: 'mst-testnet' | 'solana-devnet' | 'polygon-amoy') => void;
 }
 
-export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
-  const [chain, setChain] = useState<'mst-testnet' | 'solana-devnet' | 'polygon-amoy'>('mst-testnet');
+export const SendForm: React.FC<SendFormProps> = ({
+  onSent,
+  activeNetwork,
+  onNetworkChange,
+}) => {
+  const [internalChain, setInternalChain] = useState<'mst-testnet' | 'solana-devnet' | 'polygon-amoy'>('mst-testnet');
   const [to, setTo] = useState('');
   const [amount, setAmount] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [explorerUrl, setExplorerUrl] = useState<string | null>(null);
+
+  const chain = activeNetwork || internalChain;
+  const setChain = (nextChain: 'mst-testnet' | 'solana-devnet' | 'polygon-amoy') => {
+    setInternalChain(nextChain);
+    onNetworkChange?.(nextChain);
+  };
 
   const isSolana = chain === 'solana-devnet';
   const currencySymbol = isSolana ? 'SOL' : chain === 'polygon-amoy' ? 'MATIC' : 'MSTC';

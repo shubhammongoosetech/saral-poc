@@ -34,6 +34,8 @@ export interface WalletData {
   address: string;
   publicKey: string;
   balance: string;
+  solanaAddress?: string;
+  solanaBalance?: string;
   n: number;
   threshold: number;
   createdAt?: string;

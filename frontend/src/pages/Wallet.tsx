@@ -5,6 +5,7 @@ import { SendForm } from './Wallet/SendForm';
 import { TransactionList, TransactionItem } from './Wallet/TransactionList';
 
 export const Wallet: React.FC = () => {
+  const [selectedNetwork, setSelectedNetwork] = useState<'mst-testnet' | 'solana-devnet'>('mst-testnet');
   const [hasWallet, setHasWallet] = useState<boolean | null>(null);
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
@@ -133,11 +134,23 @@ export const Wallet: React.FC = () => {
           <WalletHeader
             address={wallet?.address || ''}
             balance={wallet?.balance || '0.00'}
+            solanaAddress={wallet?.solanaAddress}
+            solanaBalance={wallet?.solanaBalance}
+            activeNetwork={selectedNetwork}
+            onNetworkChange={setSelectedNetwork}
             onRefresh={handleRefresh}
             refreshing={refreshing}
           />
 
-          <SendForm onSent={handleAfterSend} />
+          <SendForm
+            onSent={handleAfterSend}
+            activeNetwork={selectedNetwork}
+            onNetworkChange={(n) => {
+              if (n === 'solana-devnet' || n === 'mst-testnet') {
+                setSelectedNetwork(n);
+              }
+            }}
+          />
 
           <TransactionList transactions={transactions} />
         </div>

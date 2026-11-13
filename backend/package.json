@@ -23,6 +23,7 @@
   "type": "commonjs",
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@solana/web3.js": "^1.98.0",
     "cors": "^2.8.6",
     "dotenv": "^18.0.9",
     "ethers": "^6.17.0",

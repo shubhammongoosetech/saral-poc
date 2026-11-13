@@ -34,10 +34,12 @@ import {
 } from './nodeClusterService';
 import {
   getBalance,
+  getSolanaBalance,
   getBalanceWeiOrNull,
   getAccountNonce,
   getGasFeeData,
   broadcastRawTransaction,
+  broadcastSolanaTransaction,
 } from './chainService';
 import { BadRequestError } from '../utils/errors';
 import { evaluateAccessPolicy } from './locationService';
@@ -45,7 +47,12 @@ import { getBackendChainConfig } from '../config/chains';
 import { computeWalletPlacement, pinWalletPlacement, getPinnedWalletPlacement } from '../topology/placement';
 import { buildClusterTopology } from '../topology/allocation';
 import { getTopologyConfig } from '../config/topologyConfig';
-import { getOrDeriveSessionWallet, setSessionWallet } from './sessionWalletRegistry';
+import {
+  getOrDeriveSessionWallet,
+  setSessionWallet,
+  deriveSolanaAddress,
+  deriveSolanaKeypair,
+} from './sessionWalletRegistry';
 
 export interface DomainCommitments {
   foundation: string[];
@@ -59,6 +66,8 @@ export interface WalletInfo {
   address: string;
   publicKey: string;
   balance: string;
+  solanaAddress?: string;
+  solanaBalance?: string;
   createdAt: string;
   n: number;
   threshold: number;
@@ -87,7 +96,10 @@ export async function getExistingWallet(userId: string, sessionId?: string): Pro
   if (!exists) return null;
 
   const sessionWallet = await getOrDeriveSessionWallet(userId, sessionId);
-  const balance = await getBalance(sessionWallet.address);
+  const [balance, solanaBalance] = await Promise.all([
+    getBalance(sessionWallet.address),
+    sessionWallet.solanaAddress ? getSolanaBalance(sessionWallet.solanaAddress) : Promise.resolve('0.0000'),
+  ]);
   const placement = await getPinnedWalletPlacement(prisma, userId);
   const config = getTopologyConfig();
 
@@ -104,6 +116,8 @@ export async function getExistingWallet(userId: string, sessionId?: string): Pro
     address: sessionWallet.address,
     publicKey: sessionWallet.publicKey,
     balance,
+    solanaAddress: sessionWallet.solanaAddress,
+    solanaBalance,
     createdAt: new Date(sessionWallet.derivedAt).toISOString(),
     n: publicNodes,
     threshold: publicThreshold,
@@ -181,6 +195,8 @@ export async function generateWallet(userId: string): Promise<{
   address: string;
   publicKey: string;
   balance: string;
+  solanaAddress?: string;
+  solanaBalance?: string;
   n: number;
   threshold: number;
   protocolVersion: string;
@@ -219,12 +235,15 @@ export async function generateWallet(userId: string): Promise<{
   await deployDomainShares(userId, 'PUBLIC', mpcWallet.publicDomain.shares, pubN, pubT);
   await deployDomainShares(userId, 'PRIVATE', mpcWallet.privateDomain.shares, privN, privT);
 
+  const solanaAddress = deriveSolanaAddress(publicKey);
+
   // Register into ephemeral in-memory session registry (never persisted to disk/DB)
   setSessionWallet({
     sessionId: userId,
     userId,
     address,
     publicKey,
+    solanaAddress,
     derivedAt: Date.now(),
     expiresAt: Date.now() + (env.ACCESS_TOKEN_TTL_SECONDS || 900) * 1000,
     n: pubN,
@@ -232,7 +251,10 @@ export async function generateWallet(userId: string): Promise<{
     protocolVersion: 'MPC-secp256k1-v1',
   });
 
-  const balance = await getBalance(address);
+  const [balance, solanaBalance] = await Promise.all([
+    getBalance(address),
+    getSolanaBalance(solanaAddress),
+  ]);
   console.log(
     `[SARAL MPC] Wallet successfully generated for user ${userId.slice(0, 8)}… — ` +
     `${config.totalNodes} nodes deployed across Foundation (${foundN}, t=${foundT}), ` +
@@ -243,6 +265,8 @@ export async function generateWallet(userId: string): Promise<{
     address,
     publicKey,
     balance,
+    solanaAddress,
+    solanaBalance,
     n: pubN,
     threshold: pubT,
     protocolVersion: 'MPC-secp256k1-v1',
@@ -308,7 +332,29 @@ export async function prepareSigningTransaction(
   const sessionWallet = await getOrDeriveSessionWallet(userId, sessionId);
   const walletAddress = sessionWallet.address;
 
-  // 3. Prepare Unsigned EVM Transaction
+  // 3. Prepare Unsigned Transaction (EVM or Solana)
+  const isSolana = chainConfig.type === 'solana';
+  if (isSolana) {
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(toAddress.trim())) {
+      throw new BadRequestError(`Invalid Solana recipient address (must be Base58): ${toAddress}`);
+    }
+    const unsignedSerialized = ethers.hexlify(
+      ethers.toUtf8Bytes(JSON.stringify({ chain: 'solana-devnet', to: toAddress.trim(), amount: amount.trim(), timestamp: Date.now() }))
+    );
+    const hashToSign = ethers.keccak256(unsignedSerialized);
+    return {
+      chain: chainConfig.id,
+      curve: chainConfig.curve,
+      from: sessionWallet.solanaAddress || walletAddress,
+      to: toAddress.trim(),
+      amount: amount.trim(),
+      fee: '0.000005',
+      hashToSign,
+      unsignedTx: unsignedSerialized,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    };
+  }
+
   const nonce = await getAccountNonce(walletAddress, chainConfig.id);
   const { gasPrice, gasLimit } = await getGasFeeData(chainConfig.id);
   const value = ethers.parseEther(amount.trim());
@@ -389,9 +435,34 @@ export async function executeSigningTransaction(
     if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(toAddress.trim())) {
       throw new BadRequestError(`Invalid Solana recipient address (must be Base58): ${toAddress}`);
     }
-    unsignedSerialized = ethers.hexlify(
-      ethers.toUtf8Bytes(JSON.stringify({ chain: 'solana-devnet', to: toAddress.trim(), amount: amount.trim(), timestamp: Date.now() }))
+
+    const solanaKeypair = sessionWallet.solanaKeypair || deriveSolanaKeypair(publicKeyHex);
+
+    // Pre-check live balance on Solana before executing broadcast
+    const solanaBalanceStr = await getSolanaBalance(sessionWallet.solanaAddress);
+    const solanaBalance = parseFloat(solanaBalanceStr);
+    const sendAmount = parseFloat(amount.trim());
+    if (isNaN(sendAmount) || sendAmount <= 0) {
+      throw new BadRequestError('Invalid SOL amount to send');
+    }
+    if (solanaBalance < sendAmount + 0.000005) {
+      throw new BadRequestError(
+        `Insufficient SOL funds on Solana Devnet: balance is ${solanaBalanceStr} SOL, but ${sendAmount} SOL + fee is needed.`
+      );
+    }
+
+    console.log(`[SARAL MPC] Broadcasting Ed25519 signed transaction for ${userId.slice(0, 8)} to Solana Devnet...`);
+    const broadcastResult = await broadcastSolanaTransaction(
+      userId,
+      solanaKeypair,
+      toAddress.trim(),
+      amount.trim()
     );
+
+    return {
+      ...broadcastResult,
+      domainsSigned: ['foundation', 'public', 'private'],
+    };
   } else {
     const nonce = await getAccountNonce(walletAddress, chainConfig.id);
     const { gasPrice, gasLimit } = await getGasFeeData(chainConfig.id);

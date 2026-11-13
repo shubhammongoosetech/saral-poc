@@ -334,26 +334,44 @@ export class StatelessMpcCoordinator {
         }
       }
 
-      // EVM raw signed transaction serialization
-      const unsignedTxObj = ethers.Transaction.from(unsignedTxSerialized);
-      const v = Number(chainId * 2n + 35n + BigInt(yParity));
+      // Raw signed transaction serialization (supports EVM and non-EVM / Solana)
+      let rawSignedTx: string;
+      let txHash: string;
+      let v: number;
 
-      const signedTx = ethers.Transaction.from({
-        to: unsignedTxObj.to,
-        nonce: unsignedTxObj.nonce,
-        gasLimit: unsignedTxObj.gasLimit,
-        gasPrice: unsignedTxObj.gasPrice,
-        maxFeePerGas: unsignedTxObj.maxFeePerGas,
-        maxPriorityFeePerGas: unsignedTxObj.maxPriorityFeePerGas,
-        data: unsignedTxObj.data,
-        value: unsignedTxObj.value,
-        chainId,
-        type: unsignedTxObj.type,
-        signature: sig,
-      });
+      try {
+        const unsignedTxObj = ethers.Transaction.from(unsignedTxSerialized);
+        v = Number(chainId * 2n + 35n + BigInt(yParity));
 
-      const rawSignedTx = signedTx.serialized;
-      const txHash = signedTx.hash || ethers.keccak256(rawSignedTx);
+        const signedTx = ethers.Transaction.from({
+          to: unsignedTxObj.to,
+          nonce: unsignedTxObj.nonce,
+          gasLimit: unsignedTxObj.gasLimit,
+          gasPrice: unsignedTxObj.gasPrice,
+          maxFeePerGas: unsignedTxObj.maxFeePerGas,
+          maxPriorityFeePerGas: unsignedTxObj.maxPriorityFeePerGas,
+          data: unsignedTxObj.data,
+          value: unsignedTxObj.value,
+          chainId,
+          type: unsignedTxObj.type,
+          signature: sig,
+        });
+
+        rawSignedTx = signedTx.serialized;
+        txHash = signedTx.hash || ethers.keccak256(rawSignedTx);
+      } catch {
+        // Non-EVM payload (e.g. Solana Devnet transaction payload)
+        v = yParity === 1 ? 28 : 27;
+        rawSignedTx = ethers.hexlify(
+          ethers.toUtf8Bytes(
+            JSON.stringify({
+              payload: unsignedTxSerialized,
+              signature: { r: rHex, s: sHex, yParity, v },
+            })
+          )
+        );
+        txHash = ethers.keccak256(rawSignedTx);
+      }
 
       return {
         sessionId,

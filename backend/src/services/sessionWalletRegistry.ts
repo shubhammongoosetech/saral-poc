@@ -14,7 +14,9 @@
  *     fails closed with an error. Never returns a fake or zero address.
  */
 
+import crypto from 'crypto';
 import { ethers } from 'ethers';
+import { Keypair } from '@solana/web3.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { DomainType } from '../crypto/thresholdEcdsa';
 import { computeLagrangeCoefficient } from '../crypto/shamirField';
@@ -23,11 +25,51 @@ import { getPinnedWalletPlacement } from '../topology/placement';
 import { prisma } from '../config/db';
 import { env } from '../config/env';
 
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+export function encodeBase58(buffer: Uint8Array | Buffer): string {
+  const digits: number[] = [0];
+  for (let i = 0; i < buffer.length; i++) {
+    for (let j = 0; j < digits.length; j++) digits[j] <<= 8;
+    digits[0] += buffer[i];
+    let carry = 0;
+    for (let j = 0; j < digits.length; j++) {
+      digits[j] += carry;
+      carry = (digits[j] / 58) | 0;
+      digits[j] %= 58;
+    }
+    while (carry) {
+      digits.push(carry % 58);
+      carry = (carry / 58) | 0;
+    }
+  }
+  let str = '';
+  for (let i = 0; i < buffer.length && buffer[i] === 0; i++) str += '1';
+  for (let i = digits.length - 1; i >= 0; i--) str += BASE58_ALPHABET[digits[i]];
+  return str;
+}
+
+export function deriveSolanaKeypair(publicKeyHex: string): Keypair {
+  const clean = publicKeyHex.startsWith('0x') ? publicKeyHex.slice(2) : publicKeyHex;
+  const pt = secp256k1.ProjectivePoint.fromHex(clean);
+  const seed = crypto
+    .createHmac('sha256', 'SARAL_SOLANA_ED25519_KEY_SEED')
+    .update(Buffer.from(pt.toHex(true), 'hex'))
+    .digest();
+  return Keypair.fromSeed(seed);
+}
+
+export function deriveSolanaAddress(publicKeyHex: string): string {
+  return deriveSolanaKeypair(publicKeyHex).publicKey.toBase58();
+}
+
 export interface SessionWalletEntry {
   sessionId: string;
   userId: string;
   address: string;
   publicKey: string;
+  solanaAddress: string;
+  solanaKeypair?: Keypair;
   derivedAt: number;
   expiresAt: number;
   n: number;
@@ -193,12 +235,16 @@ export async function deriveWalletFromNodes(userId: string): Promise<SessionWall
 
   const publicKey = '0x' + qAgg.toHex(false);
   const address = ethers.computeAddress(publicKey);
+  const solanaKeypair = deriveSolanaKeypair(publicKey);
+  const solanaAddress = solanaKeypair.publicKey.toBase58();
 
   const entry: SessionWalletEntry = {
     sessionId: userId,
     userId,
     address,
     publicKey,
+    solanaAddress,
+    solanaKeypair,
     derivedAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS,
     n: placement.public.assignedNodeIds.length,
@@ -219,6 +265,10 @@ export async function getOrDeriveSessionWallet(
 ): Promise<SessionWalletEntry> {
   const cached = getSessionWallet(sessionId || userId) || getSessionWallet(userId);
   if (cached) {
+    if ((!cached.solanaKeypair || !cached.solanaAddress) && cached.publicKey) {
+      cached.solanaKeypair = deriveSolanaKeypair(cached.publicKey);
+      cached.solanaAddress = cached.solanaKeypair.publicKey.toBase58();
+    }
     return cached;
   }
   const derived = await deriveWalletFromNodes(userId);

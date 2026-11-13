@@ -7,6 +7,7 @@ export interface TransactionItem {
   amount: string;
   created_at: string;
   status?: string;
+  chain?: string;
 }
 
 interface TransactionListProps {
@@ -41,6 +42,18 @@ export const TransactionList: React.FC<TransactionListProps> = ({ transactions }
                   ? new Date(tx.created_at).toLocaleDateString()
                   : '-';
 
+                const isSolana =
+                  tx.chain === 'solana-devnet' ||
+                  (!toAddr.startsWith('0x') && toAddr.length >= 32);
+                const isPolygon = tx.chain === 'polygon-amoy';
+                const currency = isSolana ? 'SOL' : isPolygon ? 'MATIC' : 'MSTC';
+
+                const explorerUrl = isSolana
+                  ? `https://explorer.solana.com/tx/${hash}?cluster=devnet`
+                  : isPolygon
+                  ? `https://amoy.polygonscan.com/tx/${hash}`
+                  : `https://testnet.mstscan.com/tx/${hash}`;
+
                 const rowKey = hash || String(idx);
 
                 return (
@@ -52,24 +65,18 @@ export const TransactionList: React.FC<TransactionListProps> = ({ transactions }
                         {toAddr && <CopyButton text={toAddr} ariaLabel="Copy recipient address" />}
                       </div>
                     </td>
-                    <td>{tx.amount} MSTC</td>
+                    <td>
+                      {tx.amount} {currency}
+                    </td>
                     <td>
                       {tx.status === 'BROADCASTED' && hash ? (
-                        <a
-                          href={`https://testnet.mstscan.com/tx/${hash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
+                        <a href={explorerUrl} target="_blank" rel="noopener noreferrer">
                           Confirmed ↗
                         </a>
                       ) : tx.status && tx.status.toUpperCase().includes('FAILED') ? (
                         <span className="status-failed">Failed</span>
                       ) : !tx.status && hash ? (
-                        <a
-                          href={`https://testnet.mstscan.com/tx/${hash}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
+                        <a href={explorerUrl} target="_blank" rel="noopener noreferrer">
                           Confirmed ↗
                         </a>
                       ) : (
