@@ -50,8 +50,21 @@ export const generateWalletSchema = z
   });
 
 export const sendTransactionSchema = z.object({
-  toAddress: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Invalid Ethereum recipient address'),
+  chain: z.string().optional().default('mst-testnet'),
+  toAddress: z.string().min(1, 'Recipient address is required'),
   amount: z.string().regex(/^\d+(\.\d+)?$/, 'Amount must be a valid positive number string'),
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
+  unsignedTx: z.string().optional(),
+  hashToSign: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+});
+
+export const prepareTransactionSchema = z.object({
+  chain: z.string().optional().default('mst-testnet'),
+  toAddress: z.string().min(1, 'Recipient address is required'),
+  amount: z.string().regex(/^\d+(\.\d+)?$/, 'Amount must be a valid positive number string'),
+  memo: z.string().optional(),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
 });

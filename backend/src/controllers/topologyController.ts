@@ -38,7 +38,7 @@ export async function handleGetTopology(
           },
           public: {
             name: 'Public Domain',
-            role: 'Open Decentralized Staking Quorum',
+            role: 'Public Independent Validator Nodes',
             nodes: topology.public.count,
             count: topology.public.count,
             threshold: topology.public.threshold,
@@ -47,7 +47,7 @@ export async function handleGetTopology(
           },
           private: {
             name: 'Private Domain',
-            role: 'Sovereign User Devices, Backups & Guardians',
+            role: 'Sovereign User Nodes',
             nodes: topology.private.count,
             count: topology.private.count,
             threshold: topology.private.threshold,

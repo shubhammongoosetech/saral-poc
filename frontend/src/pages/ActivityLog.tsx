@@ -47,14 +47,6 @@ function humanizeEvent(eventType: string, details?: string): string {
       return 'Sent transaction';
     case 'POLICY_UPDATED':
       return 'Updated working hours';
-    case 'DEVICE_ENROLLED':
-      return 'Added device';
-    case 'GUARDIAN_ENROLLED':
-      return 'Added guardian';
-    case 'RECOVERY_REQUESTED':
-      return 'Requested recovery';
-    case 'RECOVERY_CANCELLED':
-      return 'Cancelled recovery';
     default:
       return eventType.toLowerCase().replace(/_/g, ' ');
   }

@@ -8,8 +8,6 @@
  *  - Distributed Key Generation (DKG) with Zero Central Private Key.
  *  - Dynamic Distributed Storage Nodes across the 3 Trust Domains configured via .env.
  *  - Genuine Multi-Party Computation (MPC) Threshold Signing for EVM.
- *  - Guarded Break-Glass Recovery (Patent FIG. 3).
- *  - Adaptive Multi-Asset Economic Security Integration (Patent FIG. 4).
  *  - Strict Zero-Key Database Storage: No private keys or plaintext shares in PostgreSQL.
  */
 
@@ -48,8 +46,7 @@ import {
 } from './chainService';
 import { BadRequestError } from '../utils/errors';
 import { evaluateAccessPolicy } from './locationService';
-import { initializeWalletRecovery } from './recoveryService';
-import { economicSecurity } from './economicService';
+import { getBackendChainConfig } from '../config/chains';
 import { computeWalletPlacement, pinWalletPlacement, getPinnedWalletPlacement } from '../topology/placement';
 import { buildClusterTopology } from '../topology/allocation';
 import { getTopologyConfig } from '../config/topologyConfig';
@@ -121,8 +118,8 @@ export async function getExistingWallet(userId: string, sessionId?: string): Pro
     protocolVersion: sessionWallet.protocolVersion,
     domains: {
       foundation: { role: 'Institutional Administration', nodes: foundationNodes, threshold: foundationThreshold },
-      public: { role: 'Decentralized Staking Quorum', nodes: publicNodes, threshold: publicThreshold },
-      private: { role: 'Sovereign User Devices & Guardians', nodes: privateNodes, threshold: privateThreshold },
+      public: { role: 'Public Independent Validator Nodes', nodes: publicNodes, threshold: publicThreshold },
+      private: { role: 'Sovereign User Nodes', nodes: privateNodes, threshold: privateThreshold },
     },
   };
 }
@@ -139,8 +136,6 @@ export async function getExistingWallet(userId: string, sessionId?: string): Pro
  * 7. Encrypts each share with AES-256-GCM using domain-separated HKDF keys.
  * 8. Deploys each share to its respective node container.
  * 9. Stores ONLY metadata in PostgreSQL (NO private keys or plaintext shares).
- * 10. Initializes Guarded Break-Glass Recovery subsystem (Patent FIG. 3).
- * 11. Registers wallet in Adaptive Multi-Asset Economic Subsystem (Patent FIG. 4).
  *
  * CRITICAL ARCHITECTURAL GUARANTEE:
  * The complete private key x is NEVER formed or reconstructed in any variable or Buffer.
@@ -225,7 +220,7 @@ export async function generateWallet(userId: string): Promise<{
     });
   }
 
-  // 3. Private Domain: n sovereign user/guardian nodes
+  // 3. Private Domain: n sovereign user nodes
   for (const s of mpcWallet.privateDomain.shares) {
     const encrypted = encryptShareGcm(
       JSON.stringify({ index: s.index, value: scalarToHex(s.value) }),
@@ -246,9 +241,6 @@ export async function generateWallet(userId: string): Promise<{
     });
   }
 
-  // Initialize Guarded Break-Glass Recovery (Patent FIG. 3)
-  initializeWalletRecovery(userId, 3, 5, 48);
-
   // Register into ephemeral in-memory session registry (never persisted to disk/DB)
   setSessionWallet({
     sessionId: userId,
@@ -261,9 +253,6 @@ export async function generateWallet(userId: string): Promise<{
     threshold: pubT,
     protocolVersion: 'MPC-secp256k1-v1',
   });
-
-  // Update Economic Security TVS (Patent FIG. 4)
-  economicSecurity.updateTvs(economicSecurity.getState().totalValueSecuredMstc + 1000);
 
   const balance = await getBalance(address);
   console.log(
@@ -299,11 +288,81 @@ export async function generateWallet(userId: string): Promise<{
  *     Joint distributed nonce generation, cross-term computation, partial signatures.
  *  8. Verify aggregated signature against public key Q.
  *  9. Broadcast raw signed transaction directly to MST Testnet.
- *  10. Process economic usage fee and record audit trail.
+ *  10. Record audit trail.
  *
  * CRITICAL ARCHITECTURAL GUARANTEE:
  * Complete private key is NEVER reconstructed in memory, string, or Buffer.
  */
+/**
+ * Prepares transaction preview without signing or broadcasting.
+ */
+export async function prepareSigningTransaction(
+  userId: string,
+  loginMethod: 'google' | 'mobile',
+  mfaVerified: boolean,
+  toAddress: string,
+  amount: string,
+  lat?: number,
+  lng?: number,
+  chain?: string,
+  memo?: string,
+  sessionId?: string
+): Promise<{
+  chain: string;
+  curve: string;
+  from: string;
+  to: string;
+  amount: string;
+  fee: string;
+  hashToSign: string;
+  unsignedTx: string;
+  expiresAt: number;
+}> {
+  const chainConfig = getBackendChainConfig(chain);
+
+  // 1. Policy Gate
+  const policyCheck = await evaluateAccessPolicy(userId, loginMethod, mfaVerified, lat, lng);
+  if (!policyCheck.allowed) {
+    throw new Error(`Access Denied: ${policyCheck.reason}`);
+  }
+
+  // 2. In-Memory Session Derivation (Zero storage)
+  const sessionWallet = await getOrDeriveSessionWallet(userId, sessionId);
+  const walletAddress = sessionWallet.address;
+
+  // 3. Prepare Unsigned EVM Transaction
+  const nonce = await getAccountNonce(walletAddress, chainConfig.id);
+  const { gasPrice, gasLimit } = await getGasFeeData(chainConfig.id);
+  const value = ethers.parseEther(amount.trim());
+  const chainId = BigInt(chainConfig.chainId || 91562037);
+
+  const unsignedTx = ethers.Transaction.from({
+    to: ethers.getAddress(toAddress.trim()),
+    value,
+    nonce,
+    gasPrice,
+    gasLimit,
+    chainId,
+    type: chainConfig.defaultTxType || 0,
+  });
+
+  const unsignedSerialized = unsignedTx.unsignedSerialized;
+  const hashToSign = ethers.keccak256(unsignedSerialized);
+  const fee = ethers.formatEther(gasPrice * gasLimit);
+
+  return {
+    chain: chainConfig.id,
+    curve: chainConfig.curve,
+    from: walletAddress,
+    to: ethers.getAddress(toAddress.trim()),
+    amount: amount.trim(),
+    fee,
+    hashToSign,
+    unsignedTx: unsignedSerialized,
+    expiresAt: Date.now() + 5 * 60 * 1000,
+  };
+}
+
 export async function executeSigningTransaction(
   userId: string,
   loginMethod: 'google' | 'mobile',
@@ -312,8 +371,18 @@ export async function executeSigningTransaction(
   amount: string,
   lat?: number,
   lng?: number,
+  chain?: string,
   sessionId?: string
-): Promise<{ txHash: string; broadcasted: boolean; message: string; explorerUrl: string }> {
+): Promise<{
+  txHash: string;
+  broadcasted: boolean;
+  message: string;
+  explorerUrl: string;
+  domainsSigned?: string[];
+  signature?: { r: string; s: string; yParity: number; v: number };
+}> {
+  const chainConfig = getBackendChainConfig(chain);
+
   // 1. Policy Gate
   const policyCheck = await evaluateAccessPolicy(userId, loginMethod, mfaVerified, lat, lng);
   if (!policyCheck.allowed) {
@@ -334,20 +403,20 @@ export async function executeSigningTransaction(
   const privateThreshold = placement?.private.threshold ?? activeTopology.private.threshold;
 
   // 3. Prepare Unsigned EVM Transaction
-  const nonce = await getAccountNonce(walletAddress);
-  const { gasPrice, gasLimit } = await getGasFeeData();
+  const nonce = await getAccountNonce(walletAddress, chainConfig.id);
+  const { gasPrice, gasLimit } = await getGasFeeData(chainConfig.id);
   const value = ethers.parseEther(amount.trim());
-  const chainId = BigInt(env.CHAIN_ID);
+  const chainId = BigInt(chainConfig.chainId || 91562037);
 
   // Pre-check live balance before running MPC signing or logging a failed tx row
-  const liveBalanceWei = await getBalanceWeiOrNull(walletAddress);
+  const liveBalanceWei = await getBalanceWeiOrNull(walletAddress, chainConfig.id);
   const gasFeeWei = gasPrice * gasLimit;
   const totalRequiredWei = value + gasFeeWei;
   if (liveBalanceWei !== null && liveBalanceWei < totalRequiredWei) {
     const shortfallWei = totalRequiredWei - liveBalanceWei;
     const maxSendableWei = liveBalanceWei > gasFeeWei ? liveBalanceWei - gasFeeWei : 0n;
     throw new BadRequestError(
-      `Insufficient funds: balance is ${ethers.formatEther(liveBalanceWei)} MSTC, but ${ethers.formatEther(totalRequiredWei)} MSTC is needed (${ethers.formatEther(value)} + ${ethers.formatEther(gasFeeWei)} gas; short by ${ethers.formatEther(shortfallWei)} MSTC). Max sendable: ${ethers.formatEther(maxSendableWei)} MSTC.`
+      `Insufficient funds: balance is ${ethers.formatEther(liveBalanceWei)} ${chainConfig.symbol}, but ${ethers.formatEther(totalRequiredWei)} ${chainConfig.symbol} is needed (${ethers.formatEther(value)} + ${ethers.formatEther(gasFeeWei)} gas; short by ${ethers.formatEther(shortfallWei)} ${chainConfig.symbol}). Max sendable: ${ethers.formatEther(maxSendableWei)} ${chainConfig.symbol}.`
     );
   }
 
@@ -358,7 +427,7 @@ export async function executeSigningTransaction(
     gasPrice,
     gasLimit,
     chainId,
-    type: 0,
+    type: chainConfig.defaultTxType || 0,
   });
 
   const unsignedSerialized = unsignedTx.unsignedSerialized;
@@ -420,26 +489,16 @@ export async function executeSigningTransaction(
   console.log('[SARAL MPC] Executing 3-Domain Decentralized Interactive Threshold Signing protocol...');
   const commitments = walletCommitmentsStore.get(userId);
 
-  let mpcResult;
-  try {
-    mpcResult = await statelessMpcCoordinator.coordinateSigningSession(
-      participantClients,
-      unsignedSerialized,
-      chainId,
-      publicKeyHex,
-      commitments,
-      publicThreshold,
-      privateThreshold,
-      foundationThreshold
-    );
-  } catch (err: any) {
-    if (err.message?.includes('Feldman VSS verification failed')) {
-      for (const row of publicRows) {
-        economicSecurity.slashNode(row.containerName, 'TAMPERED_SHARE', 500_000);
-      }
-    }
-    throw err;
-  }
+  const mpcResult = await statelessMpcCoordinator.coordinateSigningSession(
+    participantClients,
+    unsignedSerialized,
+    chainId,
+    publicKeyHex,
+    commitments,
+    publicThreshold,
+    privateThreshold,
+    foundationThreshold
+  );
 
   // 6. Broadcast Signed Raw Transaction
   console.log(`[SARAL MPC] Threshold signature produced. Broadcasting raw tx (Hash: ${mpcResult.txHash})...`);
@@ -447,14 +506,18 @@ export async function executeSigningTransaction(
     userId,
     mpcResult.rawSignedTx,
     toAddress,
-    amount
+    amount,
+    chainConfig.id
   );
 
-  // 7. Process Economic Usage Fee (only after successful broadcast)
-  if (broadcastResult.broadcasted) {
-    const gasFeeMstc = parseFloat(ethers.formatEther(gasPrice * gasLimit));
-    economicSecurity.processUsageFee(Math.max(gasFeeMstc, 0.0001));
-  }
-
-  return broadcastResult;
+  return {
+    ...broadcastResult,
+    domainsSigned: (mpcResult as any).domainsSigned || ['foundation', 'public', 'private'],
+    signature: {
+      r: mpcResult.r,
+      s: mpcResult.s,
+      yParity: mpcResult.yParity,
+      v: mpcResult.v,
+    },
+  };
 }

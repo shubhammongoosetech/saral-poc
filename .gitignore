@@ -48,3 +48,5 @@ tests/
 */tests/
 test/
 */test/
+!packages/**/tests/**
+!packages/**/tests

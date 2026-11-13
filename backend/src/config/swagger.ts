@@ -10,7 +10,7 @@ export const swaggerDocument: Record<string, any> = {
     title: 'SARAL API — Cryptographic Key Management & Wallet',
     version: '1.0.0',
     description: `
-**SARAL** is a Non-Custodial, Separation-of-Powers Cryptographic Key Management System with an Adaptive Multi-Asset Economic Security Layer.
+**SARAL** is a Non-Custodial, Separation-of-Powers Cryptographic Key Management System.
 
 ### Core Security Architecture:
 - **3-Domain Separation of Powers:** Keys are additively distributed across Foundation, Public, and Private domains with genuine Threshold MPC signing.

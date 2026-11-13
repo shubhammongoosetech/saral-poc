@@ -8,31 +8,23 @@
  *  - Real-time distributed cluster health monitoring.
  *  - Zero-Trust Context access evaluation.
  *  - Genuine Threshold MPC transaction signing.
- *  - Guarded Break-Glass Recovery lifecycle.
- *  - Adaptive Multi-Asset Economic Security stats.
  */
 
 import { Request, Response, NextFunction } from 'express';
 import {
   generateWalletSchema,
   sendTransactionSchema,
+  prepareTransactionSchema,
   checkAccessSchema,
 } from '../utils/validation';
 import {
   getExistingWallet,
   generateWallet,
+  prepareSigningTransaction,
   executeSigningTransaction,
 } from '../services/walletService';
 import { evaluateAccessPolicy } from '../services/locationService';
 import { nodeCluster } from '../services/nodeClusterService';
-import { economicSecurity } from '../services/economicService';
-import {
-  initiateBreakGlassRecovery,
-  cancelRecoveryRequest,
-  submitCustodianApproval,
-  executeGuardedRecovery,
-  getRecoveryAuditLogs,
-} from '../services/recoveryService';
 import { prisma } from '../config/db';
 import { getTopologyConfig } from '../config/topologyConfig';
 
@@ -99,6 +91,38 @@ export async function handleCheckAccess(
   }
 }
 
+export async function handlePrepareTransaction(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.user!.userId;
+    const validated = prepareTransactionSchema.parse(req.body);
+
+    const result = await prepareSigningTransaction(
+      userId,
+      req.user!.loginMethod,
+      req.user!.mfaVerified,
+      validated.toAddress,
+      validated.amount,
+      validated.lat,
+      validated.lng,
+      validated.chain,
+      validated.memo,
+      (req.user as any)?.sessionId || userId
+    );
+
+    res.json(result);
+  } catch (err: any) {
+    if (err.message && err.message.includes('Access Denied')) {
+      res.status(403).json({ error: err.message });
+      return;
+    }
+    next(err);
+  }
+}
+
 export async function handleSignTransaction(
   req: Request,
   res: Response,
@@ -116,6 +140,7 @@ export async function handleSignTransaction(
       validated.amount,
       validated.lat,
       validated.lng,
+      validated.chain,
       (req.user as any)?.sessionId || userId
     );
 
@@ -126,6 +151,8 @@ export async function handleSignTransaction(
       broadcasted: result.broadcasted,
       message: result.message,
       explorerUrl: result.explorerUrl,
+      domainsSigned: result.domainsSigned,
+      signature: result.signature,
     });
   } catch (err: any) {
     if (err.message && err.message.includes('Access Denied')) {
@@ -143,12 +170,16 @@ export async function handleGetTransactions(
 ): Promise<void> {
   try {
     const userId = req.user!.userId;
+    const chain = req.query.chain as string | undefined;
 
     const rawTx = await prisma.transaction.findMany({
-      where: { userId },
+      where: {
+        userId,
+        ...(chain ? { chain } : {}),
+      },
       orderBy: { createdAt: 'desc' },
       take: 50,
-      select: { txHash: true, toAddress: true, amount: true, status: true, createdAt: true },
+      select: { txHash: true, toAddress: true, amount: true, status: true, chain: true, createdAt: true },
     });
 
     const transactions = rawTx.map((t) => ({
@@ -156,6 +187,7 @@ export async function handleGetTransactions(
       to_address: t.toAddress,
       amount: t.amount,
       status: t.status,
+      chain: t.chain,
       created_at: t.createdAt.toISOString(),
       txHash: t.txHash,
       toAddress: t.toAddress,
@@ -180,115 +212,6 @@ export async function handleGetClusterHealth(
     const userId = req.user!.userId;
     const status = await nodeCluster.checkClusterHealth(userId);
     res.json(status);
-  } catch (err) {
-    next(err);
-  }
-}
-
-/**
- * Economic Security Subsystem Stats Endpoint (Patent FIG. 4)
- */
-export async function handleGetEconomicStats(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const state = economicSecurity.getState();
-    const params = economicSecurity.getParameters();
-    res.json({
-      state,
-      params,
-      slashingHistory: economicSecurity.getSlashingHistory(),
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-/**
- * Guarded Break-Glass Recovery Endpoints (Patent FIG. 3)
- */
-export async function handleInitiateRecovery(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const userId = req.user!.userId;
-    const { reason, timelockHours } = req.body;
-    const request = initiateBreakGlassRecovery(
-      userId,
-      reason || 'Emergency wallet recovery requested',
-      timelockHours,
-      req.ip
-    );
-    res.status(201).json({
-      success: true,
-      request,
-      message: `Recovery requested. Mandatory ${request.timelockDurationHours}-hour timelock initiated.`,
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function handleCancelRecovery(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const userId = req.user!.userId;
-    const { requestId, reason } = req.body;
-    const cancelled = cancelRecoveryRequest(userId, requestId, reason);
-    res.json({
-      success: true,
-      request: cancelled,
-      message: 'Recovery request was successfully challenged and aborted.',
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function handleSubmitCustodianApproval(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const { requestId, custodianId, shareIndex, shareValueHex } = req.body;
-    const result = submitCustodianApproval(requestId, custodianId, shareIndex, shareValueHex);
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function handleExecuteRecovery(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const { requestId } = req.body;
-    const result = executeGuardedRecovery(requestId);
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function handleGetRecoveryLogs(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const userId = req.user!.userId;
-    const logs = getRecoveryAuditLogs(userId);
-    res.json({ logs });
   } catch (err) {
     next(err);
   }

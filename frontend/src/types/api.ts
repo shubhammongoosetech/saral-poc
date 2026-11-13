@@ -56,25 +56,6 @@ export interface ClusterStatus {
   activeDriver: 'docker' | 'sandbox' | 'remote';
 }
 
-export interface EconomicStats {
-  state: {
-    totalValueSecuredMstc: number;
-    stakedSst: number;
-    stakedSmstc: number;
-    totalEffectiveStake: number;
-    currentSecurityRatio: number;
-    currentEmissionRateApr: number;
-    insuranceTreasuryBalanceMstc: number;
-    totalUsageFeesProcessedMstc: number;
-  };
-  params: {
-    targetSecurityRatio: number;
-    minEmissionRateApr: number;
-    maxEmissionRateApr: number;
-    sstMaxSupplyCeiling: number;
-  };
-}
-
 export interface PolicyCheckResponse {
   allowed: boolean;
   reason: string;

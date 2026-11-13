@@ -214,7 +214,7 @@ export function aggregateDomainPublicKeys(
  * Decomposes key generation into three independent domain boundaries:
  *  1. Foundation institutional boundary: (t_F-of-n_F, n_F >= 3)
  *  2. Public validator domain boundary: (t_P-of-n_P, n_P >= 3)
- *  3. Private sovereign guardian boundary: (t_U-of-n_U, n_U >= 3)
+ *  3. Private sovereign user boundary: (t_U-of-n_U, n_U >= 3)
  *
  * Public key Q is aggregated via elliptic-curve point addition:
  *   Q = Q_F + Q_P + Q_U
@@ -242,7 +242,7 @@ export function generateSaralWalletMpc(
     nodeIdPlacements?.foundation
   );
 
-  // Domain 2: Public (t_P-of-n_P independent staking validator nodes)
+  // Domain 2: Public (t_P-of-n_P independent validator nodes)
   const publicDomain = generateDomainKeyContribution(
     'PUBLIC',
     nShares,
@@ -250,7 +250,7 @@ export function generateSaralWalletMpc(
     nodeIdPlacements?.public
   );
 
-  // Domain 3: Private (t_U-of-n_U sovereign user devices / guardians)
+  // Domain 3: Private (t_U-of-n_U sovereign user nodes)
   const privN = privateTotalShares ?? nShares;
   const privT = privateThreshold ?? threshold;
   const privateDomain = generateDomainKeyContribution(

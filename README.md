@@ -44,10 +44,6 @@ Compatible with EVM chains and the **MST Testnet**.
   Key shares are encrypted with **AES-256-GCM** using domain-separated keys and stored across isolated node storage (`fileStore`, sandbox vault, or Docker containers) pinned via Rendezvous (HRW) hashing in `wallet_placements`.
 * **Zero-Trust Access Policies (`locationService.ts`)**:
   Access evaluation and transaction signing enforce MFA verification, original `loginMethod` matching, timezone-aware working hours, Haversine GPS geofencing (`radiusKm`, default `25 km`), and a 24-hour impossible-velocity check (`> 1,200 km/h` over `> 5 km`).
-* **Guarded Break-Glass Recovery (`recoveryService.ts`)**:
-  Generates an independent 3-of-5 Shamir recovery secret at wallet creation with a mandatory timelock challenge window (default `48h`), sovereign user cancellation, and Feldman commitment verification. *(See [Section 11](#11-current-poc-status--known-limitations) for current POC boundaries.)*
-* **Adaptive Multi-Asset Economic Security (`economicService.ts`)**:
-  Tracks Total Value Secured (TVS), staking reserves, fee routing, and slashing telemetry.
 
 ---
 
@@ -75,15 +71,15 @@ saral-poc/
 │   │   └── schema.prisma         # Prisma ORM schema & relations
 │   ├── src/
 │   │   ├── config/               # env.ts, topologyConfig.ts, db.ts, swagger.ts
-│   │   ├── controllers/          # auth, mfa, profile, wallet, device, topology, activity
+│   │   ├── controllers/          # auth, mfa, profile, wallet, topology, activity
 │   │   ├── crypto/               # DKG, threshold ECDSA, mpcCoordinator, shamirField, paillierCrypto
-│   │   ├── db/                   # schema.sql & SQL migrations (incl. 005_remove_wallet_address_and_public_key.sql)
+│   │   ├── db/                   # schema.sql & SQL migrations (incl. 006_remove_recovery_economic_devices.sql)
 │   │   ├── middleware/           # authGuard, cookieParser, csrf, errorHandler
 │   │   ├── nodes/                # nodeLauncher, dockerComposeGen
 │   │   ├── participant/          # MPC participant daemons, IPC protocol, nodeIdentityManager
-│   │   ├── routes/               # auth, mfa, profile, wallet, devices, topology, activity
+│   │   ├── routes/               # auth, mfa, profile, wallet, topology, activity
 │   │   ├── scripts/              # clearDb.ts
-│   │   ├── services/             # authService, walletService, sessionWalletRegistry, locationService, recoveryService, nodeClusterService, economicService, etc.
+│   │   ├── services/             # authService, walletService, sessionWalletRegistry, locationService, nodeClusterService, etc.
 │   │   ├── storage/              # Hardened per-node encrypted FileStore
 │   │   ├── topology/             # HRW rendezvous placement, allocation, apply
 │   │   ├── utils/                # jwt, crypto, errors, logger (with address/key redaction), validation
@@ -125,8 +121,8 @@ saral-poc/
 
 ## 4. Prerequisites
 
-* **Node.js**: v18.0.0 or higher (v20+ recommended). Check with `node -v`.
-* **npm**: v9.0.0 or higher. Check with `npm -v`.
+* **Node.js**: v26.0.0 or higher (`node -v`).
+* **npm**: v11.0.0 or higher (`npm -v`).
 * **PostgreSQL**: v14, v15, or v16 running locally or via Docker (`docker compose up -d postgres`).
 * **Git** installed.
 
@@ -304,7 +300,6 @@ erDiagram
     users ||--o{ security_event_logs : audits
     users ||--o{ transactions : executes
     users ||--o{ otps : verifies
-    users ||--o{ recovery_records : manages
 ```
 
 * `users`: User identity (`google_id`, `email`, `mobile`, `login_method`).
@@ -316,7 +311,6 @@ erDiagram
 * `access_logs`: Audit log of policy evaluations (`allowed`, `reason`, `lat`, `lng`, `attempted_at`).
 * `security_event_logs`: Hash-chained security audit trail (`event_type`, `severity`, `details`, `previous_hash`, `entry_hash`).
 * `otps`: HMAC-SHA256 hashed login/MFA OTP codes with expiration and usage tracking.
-* `recovery_records`: Schema table for break-glass recovery lifecycle records.
 
 ---
 
@@ -336,16 +330,16 @@ erDiagram
 * On `/review`, clicking **Confirm** validates current server time and location via `/api/wallet/check-access`.
 
 ### Step 4: Wallet Creation or Re-derivation (`/wallet`)
-* **First-time user (`hasWallet === false`)**: Click **Create wallet** (`POST /api/wallet/generate`) to execute 3-Domain MPC DKG, pin HRW node placement, deploy AES-256-GCM encrypted shares to nodes, and initialize Break-Glass Recovery. Each user can create at most one wallet.
+* **First-time user (`hasWallet === false`)**: Click **Create wallet** (`POST /api/wallet/generate`) to execute 3-Domain MPC DKG, pin HRW node placement, and deploy AES-256-GCM encrypted shares to nodes. Each user can create at most one wallet.
 * **Returning user (`hasWallet === true`)**: `sessionWalletRegistry.ts` queries the pinned nodes for public share points ($s_i \cdot G$), derives $Q = Q_F + Q_P + Q_U$ and the EVM address in memory, and fetches the live MST Testnet balance without storing keys or addresses in PostgreSQL.
 
 ### Step 5: Threshold MPC Signing (`POST /api/wallet/sign`)
 * Evaluates `evaluateAccessPolicy()` (MFA, `loginMethod` match, server-side working hours in `policy.timezone`, 24-hour velocity check, and Haversine geofence radius).
 * Coordinates interactive 3-domain threshold ECDSA signing (`mpcCoordinator.ts`) and broadcasts the signed raw transaction to the MST Testnet (`chainService.ts`).
 
-### Step 6: Settings, Devices, Recovery & Activity (`/settings`, `/activity`)
-* `/settings` consolidates Account info, Working Hours updates, Devices & Guardians enrollment/revocation, Break-Glass Recovery (initiate / countdown / cancel), and Advanced Topology & Economic stats.
-* `/activity` displays unified `access_logs` and `security_event_logs`. *(Legacy routes `/devices`, `/topology`, `/recovery`, `/security` redirect to `/settings`.)*
+### Step 6: Settings & Activity (`/settings`, `/activity`)
+* `/settings` consolidates Account info, Working Hours updates, and Key Storage topology.
+* `/activity` displays unified `access_logs` and `security_event_logs`.
 
 ---
 
@@ -367,24 +361,13 @@ Interactive Swagger UI documentation is available at **[http://localhost:3001/do
 * **Profile & Policy** (`/api/profile`):
   * `GET /api/profile` — Fetch profile status (`mfaVerified`, `hasPolicy`, `hasWallet`) and policy
   * `POST /api/profile/policy` — Save or update time & geofencing policy
-* **Wallet, Signing & Recovery** (`/api/wallet`):
+* **Wallet & Signing** (`/api/wallet`):
   * `GET /api/wallet` — Derive/retrieve wallet metadata and live balance
   * `POST /api/wallet/generate` — Execute 3-Domain MPC DKG (once per user)
   * `POST /api/wallet/check-access` — Evaluate Zero-Trust policy gate
   * `POST /api/wallet/sign` — Execute Threshold MPC ECDSA signing & broadcast
   * `GET /api/wallet/transactions` — Fetch transaction history
   * `GET /api/wallet/cluster-health` — Real-time health status of configured storage nodes
-  * `GET /api/wallet/economic-stats` — Economic security state, parameters, and slashing history
-  * `POST /api/wallet/recovery/initiate` — Initiate break-glass recovery with timelock
-  * `POST /api/wallet/recovery/cancel` — Challenge & cancel active recovery request
-  * `POST /api/wallet/recovery/approve` — Submit custodian approval & share
-  * `POST /api/wallet/recovery/execute` — Execute guarded recovery verification
-  * `GET /api/wallet/recovery/logs` — Fetch recovery audit logs
-* **Devices & Guardians** (`/api/devices`):
-  * `GET /api/devices` — List enrolled private-domain devices & guardians
-  * `POST /api/devices/enroll` — Enroll a device
-  * `POST /api/devices/guardian` — Enroll a guardian
-  * `DELETE /api/devices/:id` — Revoke a device/guardian
 * **Topology** (`/api/topology`):
   * `GET /api/topology` — Active dynamic cluster topology
   * `GET /api/topology/nodes` — Node list across domains
@@ -396,12 +379,9 @@ Interactive Swagger UI documentation is available at **[http://localhost:3001/do
 
 ## 11. Current POC Status & Known Limitations
 
-1. **Break-Glass Recovery (`recoveryService.ts` / `RecoverySection.tsx`)**:
-   * Timelock enforcement, cancellation, custodian share verification, and JSON audit persistence (`backend/.saral_registry/recovery_state.json`) are implemented.
-   * However, `executeGuardedRecovery()` computes a PSS zero-polynomial locally without applying share rotation to `nodeCluster` / `nodeFileStore` / `mpcParticipantDaemon`, and `RecoverySection.tsx` only exposes Start, Countdown, and Cancel (no UI for custodian approval/execution). The Prisma `recovery_records` table is currently unused by `recoveryService.ts`.
-2. **Send Form GPS Coordinates (`SendForm.tsx`)**:
+1. **Send Form GPS Coordinates (`SendForm.tsx`)**:
    * `evaluateAccessPolicy()` requires `lat` and `lng`, while `SendForm.tsx` currently submits `{ toAddress, amount }` without coordinates. Sending via API clients works when `lat`/`lng` are supplied in the payload.
-3. **MFA Freshness**:
+2. **MFA Freshness**:
    * `authGuard.ts` (`requireMfa`) verifies `mfaVerified: true` in the JWT; a strict 5-minute `mfa.verifiedAt` recency check is not yet enforced at the middleware layer.
 
 ---

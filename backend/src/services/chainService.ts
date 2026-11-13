@@ -13,29 +13,35 @@
 import { ethers } from 'ethers';
 import { env } from '../config/env';
 import { prisma } from '../config/db';
+import { getBackendChainConfig, BackendChainConfig } from '../config/chains';
 
-let providerInstance: ethers.JsonRpcProvider | null = null;
+const providersMap = new Map<string, ethers.JsonRpcProvider>();
 
-export function getProvider(): ethers.JsonRpcProvider {
-  if (!providerInstance) {
+export function getProvider(chainOrId?: string): ethers.JsonRpcProvider {
+  const chainConfig = getBackendChainConfig(chainOrId);
+  const cacheKey = chainConfig.id;
+
+  let provider = providersMap.get(cacheKey);
+  if (!provider) {
     const network = ethers.Network.from({
-      chainId: env.CHAIN_ID,
-      name: 'mst-testnet',
+      chainId: chainConfig.chainId || env.CHAIN_ID,
+      name: chainConfig.id,
     });
-    providerInstance = new ethers.JsonRpcProvider(env.RPC_URL, network, {
+    provider = new ethers.JsonRpcProvider(chainConfig.rpcUrl, network, {
       staticNetwork: network,
     });
+    providersMap.set(cacheKey, provider);
   }
-  return providerInstance;
+  return provider;
 }
 
 /**
  * Fetches live wei balance for an EVM address with a bounded timeout,
  * returning null if the RPC node is unreachable or times out.
  */
-export async function getBalanceWeiOrNull(address: string): Promise<bigint | null> {
+export async function getBalanceWeiOrNull(address: string, chainOrId?: string): Promise<bigint | null> {
   try {
-    const provider = getProvider();
+    const provider = getProvider(chainOrId);
     let cleanAddress = address.trim();
     try {
       cleanAddress = ethers.getAddress(cleanAddress.toLowerCase());
@@ -52,13 +58,13 @@ export async function getBalanceWeiOrNull(address: string): Promise<bigint | nul
   }
 }
 
-export async function getBalance(address: string): Promise<string> {
-  const balanceWei = await getBalanceWeiOrNull(address);
+export async function getBalance(address: string, chainOrId?: string): Promise<string> {
+  const balanceWei = await getBalanceWeiOrNull(address, chainOrId);
   return balanceWei !== null ? ethers.formatEther(balanceWei) : '0.0000';
 }
 
-export async function getAccountNonce(address: string): Promise<number> {
-  const provider = getProvider();
+export async function getAccountNonce(address: string, chainOrId?: string): Promise<number> {
+  const provider = getProvider(chainOrId);
   try {
     return await provider.getTransactionCount(address, 'latest');
   } catch {
@@ -66,8 +72,8 @@ export async function getAccountNonce(address: string): Promise<number> {
   }
 }
 
-export async function getGasFeeData(): Promise<{ gasPrice: bigint; gasLimit: bigint }> {
-  const provider = getProvider();
+export async function getGasFeeData(chainOrId?: string): Promise<{ gasPrice: bigint; gasLimit: bigint }> {
+  const provider = getProvider(chainOrId);
   try {
     const feeData = await provider.getFeeData();
     const gasPrice = feeData.gasPrice || ethers.parseUnits('1', 'gwei');
@@ -119,7 +125,8 @@ export async function broadcastRawTransaction(
   userId: string,
   rawSignedTx: string,
   toAddress: string,
-  amount: string
+  amount: string,
+  chainOrId?: string
 ): Promise<{
   txHash: string;
   broadcasted: boolean;
@@ -127,7 +134,8 @@ export async function broadcastRawTransaction(
   explorerUrl: string;
   rpcError?: string;
 }> {
-  const provider = getProvider();
+  const chainConfig = getBackendChainConfig(chainOrId);
+  const provider = getProvider(chainConfig.id);
 
   let cleanToAddress = toAddress.trim();
   try {
@@ -170,6 +178,7 @@ export async function broadcastRawTransaction(
       where: { txHash },
       update: {
         status: broadcasted ? 'BROADCASTED' : 'FAILED_RPC_REJECTED',
+        chain: chainConfig.id,
       },
       create: {
         userId,
@@ -177,17 +186,21 @@ export async function broadcastRawTransaction(
         toAddress: cleanToAddress,
         amount,
         status: broadcasted ? 'BROADCASTED' : 'FAILED_RPC_REJECTED',
+        chain: chainConfig.id,
       },
     });
   } catch (err) {
     console.error('[chainService] Error recording transaction in DB:', err);
   }
 
+  const explorerBase = chainConfig.explorerUrl.replace(/\/+$/, '');
+  const explorerUrl = `${explorerBase}/tx/${txHash}`;
+
   return {
     txHash,
     broadcasted,
     message,
-    explorerUrl: `https://testnet.mstscan.com/tx/${txHash}`,
+    explorerUrl,
     rpcError,
   };
 }

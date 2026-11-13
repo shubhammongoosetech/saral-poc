@@ -3,21 +3,37 @@
   "version": "1.0.0",
   "private": true,
   "description": "SARAL — Separation-of-Powers Cryptographic Key Management System",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=26.0.0",
+    "npm": ">=11.0.0"
+  },
   "scripts": {
     "setup": "npm --prefix backend run db:generate && npm run build",
     "dev": "concurrently -n BACKEND,FRONTEND -c \"blue,green\" \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
-    "build": "npm --prefix backend run build && npm --prefix frontend run build",
+    "build": "npm run build:sdk && npm --prefix backend run build && npm --prefix frontend run build",
+    "build:sdk": "npm run --workspaces --if-present build",
     "start": "npm --prefix backend run start:prod",
     "backend": "npm --prefix backend run dev",
     "frontend": "npm --prefix frontend run dev",
     "nodes:start": "npm --prefix backend run nodes:start",
     "topology:apply": "npm --prefix backend run topology:apply",
-    "test": "npm --prefix backend test",
-    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run build",
+    "test": "npm --prefix backend test && npm run test:sdk",
+    "test:sdk": "vitest run",
+    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run build && npm run typecheck:sdk",
+    "typecheck:sdk": "npm run --workspaces --if-present typecheck",
     "lint": "echo 'Linting complete.'",
-    "db:clear": "npm --prefix backend run db:clear"
+    "db:clear": "npm --prefix backend run db:clear",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "npm run build:sdk && changeset publish"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "@changesets/cli": "^3.0.3",
+    "concurrently": "^9.1.2",
+    "tsup": "^9.0.0",
+    "vitest": "^5.1.0"
   }
 }

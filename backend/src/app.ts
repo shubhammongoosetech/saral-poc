@@ -8,7 +8,6 @@ import authRoutes from './routes/auth';
 import mfaRoutes from './routes/mfa';
 import profileRoutes from './routes/profile';
 import walletRoutes from './routes/wallet';
-import deviceRoutes from './routes/devices';
 import topologyRoutes from './routes/topology';
 import activityRoutes from './routes/activity';
 import { errorHandler } from './middleware/errorHandler';
@@ -106,7 +105,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/mfa', mfaRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/wallet', walletRoutes);
-app.use('/api/devices', deviceRoutes);
 app.use('/api/topology', topologyRoutes);
 app.use('/api/activity', activityRoutes);
 

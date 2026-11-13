@@ -70,21 +70,10 @@ CREATE TABLE IF NOT EXISTS security_event_logs (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS recovery_records (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  request_id VARCHAR(100) NOT NULL UNIQUE,
-  state VARCHAR(50) NOT NULL DEFAULT 'PENDING_TIMELOCK',
-  timelock_expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-  authorized_custodians TEXT,
-  reason TEXT,
-  executed_at TIMESTAMP WITH TIME ZONE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chain VARCHAR(50) NOT NULL DEFAULT 'mst-testnet',
   tx_hash VARCHAR(255) NOT NULL UNIQUE,
   to_address VARCHAR(255) NOT NULL,
   amount VARCHAR(100) NOT NULL,
@@ -126,6 +115,5 @@ CREATE INDEX IF NOT EXISTS idx_key_shares_user_id ON key_shares(user_id);
 CREATE INDEX IF NOT EXISTS idx_key_shares_container_name ON key_shares(container_name);
 CREATE INDEX IF NOT EXISTS idx_access_logs_user_id ON access_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_security_logs_user_event ON security_event_logs(user_id, event_type);
-CREATE INDEX IF NOT EXISTS idx_recovery_records_user_state ON recovery_records(user_id, state);
 CREATE INDEX IF NOT EXISTS idx_otps_user_purpose ON otps(user_id, purpose, used);
 CREATE INDEX IF NOT EXISTS idx_wallet_placements_user_id ON wallet_placements(user_id);

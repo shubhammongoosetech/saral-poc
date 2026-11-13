@@ -5,8 +5,8 @@
  *
  * Implements 3-Domain Separation of Powers:
  *   - Foundation Domain: 9 Institutional / Regulatory Nodes
- *   - Public Domain:     9 Decentralized Staking Validator Nodes
- *   - Private Domain:    9 Sovereign User / Guardian Nodes
+ *   - Public Domain:     9 Independent Validator Nodes
+ *   - Private Domain:    9 Sovereign User Nodes
  *
  * Architectural Features:
  *   - Pluggable Node Storage Drivers: Docker Containers, Multi-Host Remote Nodes,

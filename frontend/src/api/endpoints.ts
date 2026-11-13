@@ -5,7 +5,6 @@ import {
   WorkPolicy,
   WalletData,
   ClusterStatus,
-  EconomicStats,
   PolicyCheckResponse,
   TransactionRecord,
   SignTransactionResult,
@@ -111,26 +110,6 @@ export const walletApi = {
 
   getClusterHealth: async (): Promise<ClusterStatus> => {
     const res = await apiClient.get<ClusterStatus>('/wallet/cluster-health');
-    return res.data;
-  },
-
-  getEconomicStats: async (): Promise<EconomicStats> => {
-    const res = await apiClient.get<EconomicStats>('/wallet/economic-stats');
-    return res.data;
-  },
-
-  initiateRecovery: async (reason: string, timelockHours?: number): Promise<{ success: boolean; message: string; request: any }> => {
-    const res = await apiClient.post('/wallet/recovery/initiate', { reason, timelockHours });
-    return res.data;
-  },
-
-  cancelRecovery: async (requestId: string, reason?: string): Promise<{ success: boolean; message: string }> => {
-    const res = await apiClient.post('/wallet/recovery/cancel', { requestId, reason });
-    return res.data;
-  },
-
-  getRecoveryLogs: async (): Promise<{ logs: any[] }> => {
-    const res = await apiClient.get('/wallet/recovery/logs');
     return res.data;
   },
 };

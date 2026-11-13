@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { apiClient as api } from '../api/client';
 import { AccountSection } from './Settings/AccountSection';
 import { WorkingHoursSection } from './Settings/WorkingHoursSection';
-import { DevicesSection } from './Settings/DevicesSection';
-import { RecoverySection } from './Settings/RecoverySection';
 import { AdvancedSection } from './Settings/AdvancedSection';
 
 export const Settings: React.FC = () => {
@@ -45,10 +43,6 @@ export const Settings: React.FC = () => {
       <AccountSection user={profile?.user} />
 
       <WorkingHoursSection initialPolicy={profile?.policy} />
-
-      <DevicesSection />
-
-      <RecoverySection />
 
       <AdvancedSection />
     </div>

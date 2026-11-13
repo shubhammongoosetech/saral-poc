@@ -27,11 +27,8 @@ export const App: React.FC = () => {
               <Route path="/activity" element={<ActivityLog />} />
               <Route path="/settings" element={<Settings />} />
 
-              {/* Redirect old routes to their new places in Settings */}
-              <Route path="/devices" element={<Navigate to="/settings" replace />} />
+              {/* Redirect topology route to settings */}
               <Route path="/topology" element={<Navigate to="/settings" replace />} />
-              <Route path="/recovery" element={<Navigate to="/settings" replace />} />
-              <Route path="/security" element={<Navigate to="/settings" replace />} />
 
               {/* Fallback */}
               <Route path="*" element={<Navigate to="/wallet" replace />} />
