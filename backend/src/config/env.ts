@@ -17,8 +17,6 @@ const envSchema = z.object({
     .string()
     .min(32)
     .default('saral_refresh_secret_change_in_production_min_32_ch'),
-  CSRF_SECRET: z.string().min(16).default('saral_csrf_secret_change'),
-
   // Frontend URL for CORS
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
 
@@ -73,7 +71,6 @@ const rawConfig = {
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN,
   REFRESH_TOKEN_SECRET: process.env.REFRESH_TOKEN_SECRET,
-  CSRF_SECRET: process.env.CSRF_SECRET,
   FRONTEND_URL: process.env.FRONTEND_URL,
   ACCESS_TOKEN_TTL_SECONDS: process.env.ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_TTL_DAYS: process.env.REFRESH_TOKEN_TTL_DAYS,

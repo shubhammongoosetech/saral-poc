@@ -103,5 +103,3 @@ export const CopyButton: React.FC<CopyButtonProps> = ({ text, ariaLabel = 'Copy 
   );
 };
 
-export default CopyButton;
-

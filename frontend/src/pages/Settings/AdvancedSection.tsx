@@ -75,5 +75,3 @@ export const AdvancedSection: React.FC<AdvancedSectionProps> = ({
     </details>
   );
 };
-
-export default AdvancedSection;

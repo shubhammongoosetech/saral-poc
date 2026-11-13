@@ -398,31 +398,3 @@ export async function executeMpcThresholdSign(
     minPrivateThreshold
   );
 }
-
-/**
- * Verifies that a given subset of domain shares satisfies the 3-domain quorum.
- */
-export function verifyThreeDomainQuorum(
-  foundationPresent: boolean,
-  publicNodesCount: number,
-  privateNodesCount: number,
-  minPublicThreshold: number = 5,
-  minPrivateThreshold: number = 5
-): { authorized: boolean; reason?: string } {
-  if (!foundationPresent) {
-    return { authorized: false, reason: 'Missing Foundation domain institutional authorization' };
-  }
-  if (publicNodesCount < minPublicThreshold) {
-    return {
-      authorized: false,
-      reason: `Public domain quorum shortfall: ${publicNodesCount} nodes active, minimum ${minPublicThreshold} required`,
-    };
-  }
-  if (privateNodesCount < minPrivateThreshold) {
-    return {
-      authorized: false,
-      reason: `Private sovereign domain quorum shortfall: ${privateNodesCount} nodes active, minimum ${minPrivateThreshold} required`,
-    };
-  }
-  return { authorized: true };
-}

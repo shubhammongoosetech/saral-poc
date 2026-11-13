@@ -81,5 +81,3 @@ export const AccountSection: React.FC<AccountSectionProps> = ({ user }) => {
   );
 };
 
-export default AccountSection;
-

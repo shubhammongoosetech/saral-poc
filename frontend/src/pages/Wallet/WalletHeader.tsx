@@ -48,5 +48,3 @@ export const WalletHeader: React.FC<WalletHeaderProps> = ({
   );
 };
 
-export default WalletHeader;
-

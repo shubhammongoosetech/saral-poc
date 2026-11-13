@@ -16,13 +16,9 @@ import { prisma } from '../config/db';
 import { env } from '../config/env';
 import {
   generateSaralWalletMpc,
-  executeMpcThresholdSign,
   DomainType,
 } from '../crypto/thresholdEcdsa';
 import { statelessMpcCoordinator } from '../crypto/mpcCoordinator';
-import {
-  verifyShareWithCommitments,
-} from '../crypto/shamirField';
 import {
   scalarToHex,
 } from '../crypto/secp256k1Math';
@@ -34,7 +30,6 @@ import {
 } from '../participant/participantClient';
 import {
   nodeCluster,
-  normalizeDomain,
   getDomainLegacyAliases,
 } from './nodeClusterService';
 import {
@@ -51,7 +46,6 @@ import { computeWalletPlacement, pinWalletPlacement, getPinnedWalletPlacement } 
 import { buildClusterTopology } from '../topology/allocation';
 import { getTopologyConfig } from '../config/topologyConfig';
 import { getOrDeriveSessionWallet, setSessionWallet } from './sessionWalletRegistry';
-import { redactSensitive } from '../utils/logger';
 
 export interface DomainCommitments {
   foundation: string[];
@@ -75,8 +69,6 @@ export interface WalletInfo {
     private: { role: string; nodes: number; threshold: number };
   };
 }
-
-const DOMAINS: DomainType[] = ['FOUNDATION', 'PUBLIC', 'PRIVATE'];
 
 export async function hasExistingWallet(userId: string): Promise<boolean> {
   const [placementCount, shareCount] = await Promise.all([
@@ -122,6 +114,51 @@ export async function getExistingWallet(userId: string, sessionId?: string): Pro
       private: { role: 'Sovereign User Nodes', nodes: privateNodes, threshold: privateThreshold },
     },
   };
+}
+
+async function deployDomainShares(
+  userId: string,
+  domain: DomainType,
+  shares: Array<{ index: number; value: bigint }>,
+  n: number,
+  threshold: number
+): Promise<void> {
+  for (const s of shares) {
+    const encrypted = encryptShareGcm(
+      JSON.stringify({ index: s.index, value: scalarToHex(s.value) }),
+      domain
+    );
+    const nodeInfo = await nodeCluster.deployShareToNode(userId, domain, s.index, encrypted.serialized);
+
+    await prisma.keyShare.create({
+      data: {
+        userId,
+        category: domain,
+        shareIndex: s.index,
+        n,
+        threshold,
+        containerId: nodeInfo.nodeId,
+        containerName: nodeInfo.nodeName,
+      },
+    });
+  }
+}
+
+async function getDomainKeyShareRows(
+  userId: string,
+  domain: DomainType,
+  threshold: number
+) {
+  const aliases = getDomainLegacyAliases(domain);
+  const rows = await prisma.keyShare.findMany({
+    where: { userId, category: { in: aliases } },
+    take: threshold,
+    orderBy: { shareIndex: 'asc' },
+  });
+  if (rows.length < threshold) {
+    throw new Error(`[Separation of Powers] ${domain} domain quorum shortfall: need ${threshold}, found ${rows.length}`);
+  }
+  return rows;
 }
 
 /**
@@ -178,68 +215,9 @@ export async function generateWallet(userId: string): Promise<{
   await pinWalletPlacement(prisma, placement);
 
   // Deploy Nodes across the 3 Domains:
-  // 1. Foundation Domain: distinct independent institutional shares
-  for (const s of mpcWallet.foundation.shares) {
-    const encrypted = encryptShareGcm(
-      JSON.stringify({ index: s.index, value: scalarToHex(s.value) }),
-      'FOUNDATION'
-    );
-    const nodeInfo = await nodeCluster.deployShareToNode(userId, 'FOUNDATION', s.index, encrypted.serialized);
-
-    await prisma.keyShare.create({
-      data: {
-        userId,
-        category: 'FOUNDATION',
-        shareIndex: s.index,
-        n: foundN,
-        threshold: foundT,
-        containerId: nodeInfo.nodeId,
-        containerName: nodeInfo.nodeName,
-      },
-    });
-  }
-
-  // 2. Public Domain: n validator nodes
-  for (const s of mpcWallet.publicDomain.shares) {
-    const encrypted = encryptShareGcm(
-      JSON.stringify({ index: s.index, value: scalarToHex(s.value) }),
-      'PUBLIC'
-    );
-    const nodeInfo = await nodeCluster.deployShareToNode(userId, 'PUBLIC', s.index, encrypted.serialized);
-
-    await prisma.keyShare.create({
-      data: {
-        userId,
-        category: 'PUBLIC',
-        shareIndex: s.index,
-        n: pubN,
-        threshold: pubT,
-        containerId: nodeInfo.nodeId,
-        containerName: nodeInfo.nodeName,
-      },
-    });
-  }
-
-  // 3. Private Domain: n sovereign user nodes
-  for (const s of mpcWallet.privateDomain.shares) {
-    const encrypted = encryptShareGcm(
-      JSON.stringify({ index: s.index, value: scalarToHex(s.value) }),
-      'PRIVATE'
-    );
-    const nodeInfo = await nodeCluster.deployShareToNode(userId, 'PRIVATE', s.index, encrypted.serialized);
-
-    await prisma.keyShare.create({
-      data: {
-        userId,
-        category: 'PRIVATE',
-        shareIndex: s.index,
-        n: privN,
-        threshold: privT,
-        containerId: nodeInfo.nodeId,
-        containerName: nodeInfo.nodeName,
-      },
-    });
-  }
+  await deployDomainShares(userId, 'FOUNDATION', mpcWallet.foundation.shares, foundN, foundT);
+  await deployDomainShares(userId, 'PUBLIC', mpcWallet.publicDomain.shares, pubN, pubT);
+  await deployDomainShares(userId, 'PRIVATE', mpcWallet.privateDomain.shares, privN, privT);
 
   // Register into ephemeral in-memory session registry (never persisted to disk/DB)
   setSessionWallet({
@@ -434,44 +412,16 @@ export async function executeSigningTransaction(
 
   // 4. Retrieve Shares from Nodes for All 3 Domains strictly adhering to pinned quorums
   // A. Foundation Quorum
-  const foundationAliases = getDomainLegacyAliases('FOUNDATION');
-  const foundationRows = await prisma.keyShare.findMany({
-    where: { userId, category: { in: foundationAliases } },
-    take: foundationThreshold,
-    orderBy: { shareIndex: 'asc' },
-  });
-  if (foundationRows.length < foundationThreshold) {
-    throw new Error(`[Separation of Powers] Foundation domain authorization shortfall: need ${foundationThreshold}, found ${foundationRows.length}`);
-  }
-
-  // B. Public Domain Quorum
-  const publicAliases = getDomainLegacyAliases('PUBLIC');
-  const publicRows = await prisma.keyShare.findMany({
-    where: { userId, category: { in: publicAliases } },
-    take: publicThreshold,
-    orderBy: { shareIndex: 'asc' },
-  });
-  if (publicRows.length < publicThreshold) {
-    throw new Error(`[Separation of Powers] Public domain quorum shortfall: need ${publicThreshold}, found ${publicRows.length}`);
-  }
-
-  // C. Private Domain Quorum
-  const privateAliases = getDomainLegacyAliases('PRIVATE');
-  const privateRows = await prisma.keyShare.findMany({
-    where: { userId, category: { in: privateAliases } },
-    take: privateThreshold,
-    orderBy: { shareIndex: 'asc' },
-  });
-  if (privateRows.length < privateThreshold) {
-    throw new Error(`[Separation of Powers] Private sovereign quorum shortfall: need ${privateThreshold}, found ${privateRows.length}`);
-  }
+  const foundationRows = await getDomainKeyShareRows(userId, 'FOUNDATION', foundationThreshold);
+  const publicRows = await getDomainKeyShareRows(userId, 'PUBLIC', publicThreshold);
+  const privateRows = await getDomainKeyShareRows(userId, 'PRIVATE', privateThreshold);
 
   // 4. Retrieve Independent MPC Participant Clients for All 3 Domains
   // CRITICAL SECURITY GUARANTEE:
   // The coordinator NEVER retrieves, decrypts, or holds any participant's private share!
   // Encrypted shares are dispatched to and decrypted strictly within each participant service process.
   // The coordinator interacts exclusively via the AuthenticatedParticipantClient interface.
-  const clientPromises: Promise<AuthenticatedParticipantClient>[] = [
+  const participantClients = await Promise.all([
     ...foundationRows.map((r) =>
       nodeCluster.getParticipantClient(userId, 'FOUNDATION', r.shareIndex, r.shareIndex, r.containerName)
     ),
@@ -481,9 +431,7 @@ export async function executeSigningTransaction(
     ...privateRows.map((r) =>
       nodeCluster.getParticipantClient(userId, 'PRIVATE', r.shareIndex, r.shareIndex, r.containerName)
     ),
-  ];
-
-  const participantClients = await Promise.all(clientPromises);
+  ]);
 
   // 5. Execute True Decentralized Interactive MPC Protocol
   console.log('[SARAL MPC] Executing 3-Domain Decentralized Interactive Threshold Signing protocol...');

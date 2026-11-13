@@ -127,5 +127,3 @@ export const Review: React.FC = () => {
     </div>
   );
 };
-
-export default Review;

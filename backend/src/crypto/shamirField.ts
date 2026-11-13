@@ -133,80 +133,6 @@ export function verifyShareWithCommitments(
 }
 
 /**
- * Generates a Zero-Polynomial for Proactive Secret Sharing (PSS) key refresh:
- *   h(z) = b_1 * z + b_2 * z^2 + ... + b_{threshold-1} * z^{threshold-1} (mod n)
- * Notice: h(0) = 0. The constant term is strictly zero.
- */
-export function generateZeroPolynomial(threshold: number): bigint[] {
-  if (threshold < 2) {
-    throw new Error('Zero-polynomial requires threshold >= 2');
-  }
-  const coefficients: bigint[] = [0n]; // b_0 = 0
-  for (let i = 1; i < threshold; i++) {
-    coefficients.push(randomScalar());
-  }
-  return coefficients;
-}
-
-/**
- * Evaluates a zero-polynomial at position x:
- *   delta = h(x) = sum_{k=1}^{t-1} b_k * x^k (mod n)
- */
-export function evaluateZeroPolynomial(coefficients: bigint[], x: bigint): bigint {
-  return evaluatePolynomial(coefficients, x);
-}
-
-/**
- * Refreshes an existing field share using a zero-polynomial contribution:
- *   s_i' = (s_i + h(i)) mod n
- * Reconstructed secret f'(0) = f(0) + h(0) = secret + 0 = secret (mod n).
- */
-export function proactiveRefreshShare(
-  oldShare: FieldShare,
-  zeroPolyOrDelta: bigint[] | bigint
-): FieldShare {
-  const delta = Array.isArray(zeroPolyOrDelta)
-    ? evaluateZeroPolynomial(zeroPolyOrDelta, BigInt(oldShare.index))
-    : zeroPolyOrDelta;
-  const refreshedValue = modN(oldShare.value + delta);
-  return {
-    index: oldShare.index,
-    value: refreshedValue,
-  };
-}
-
-/**
- * Updates Feldman commitments for the refreshed polynomial:
- *   C_0' = C_0  (constant term unchanged: public key is preserved!)
- *   C_k' = C_k + (b_k * G) for k >= 1
- */
-export function refreshFeldmanCommitments(
-  oldCommitmentsHex: string[],
-  zeroPolyCoeffs: bigint[]
-): string[] {
-  const newCommitments: string[] = [];
-
-  for (let k = 0; k < oldCommitmentsHex.length; k++) {
-    const cleanHex = oldCommitmentsHex[k].startsWith('0x')
-      ? oldCommitmentsHex[k].slice(2)
-      : oldCommitmentsHex[k];
-    const oldPoint = secp256k1.ProjectivePoint.fromHex(cleanHex);
-
-    if (k === 0 || k >= zeroPolyCoeffs.length) {
-      // C_0 is unchanged because b_0 = 0
-      newCommitments.push(oldPoint.toHex(true));
-    } else {
-      const b_k = zeroPolyCoeffs[k];
-      const deltaPoint = scalarMultiplyG(b_k);
-      const updatedPoint = oldPoint.add(deltaPoint);
-      newCommitments.push(updatedPoint.toHex(true));
-    }
-  }
-
-  return newCommitments;
-}
-
-/**
  * Computes the Lagrange basis coefficient lambda_j(0) for party j in a subset S:
  *   lambda_j(0) = prod_{m in S, m != j} (0 - m) / (j - m)  (mod n)
  */
@@ -231,38 +157,4 @@ export function computeLagrangeCoefficient(
 
   const denominatorInv = modInverse(denominator, CURVE_ORDER);
   return modN(numerator * denominatorInv);
-}
-
-/**
- * Reconstructs the secret scalar from at least threshold shares using Lagrange interpolation.
- */
-export function reconstructSecretField(
-  shares: FieldShare[],
-  threshold: number
-): bigint {
-  if (shares.length < threshold) {
-    throw new Error(`Insufficient shares: need ${threshold}, provided ${shares.length}`);
-  }
-
-  // Deduplicate and validate indices
-  const uniqueIndices = new Set<number>();
-  for (const s of shares) {
-    if (s.index < 1) throw new Error(`Invalid share index: ${s.index}`);
-    if (uniqueIndices.has(s.index)) {
-      throw new Error(`Duplicate share index detected: ${s.index}`);
-    }
-    uniqueIndices.add(s.index);
-  }
-
-  const activeSubset = shares.slice(0, threshold);
-  const activeIndices = activeSubset.map((s) => s.index);
-
-  let secret = 0n;
-  for (const s of activeSubset) {
-    const lambda = computeLagrangeCoefficient(s.index, activeIndices);
-    const term = modN(lambda * s.value);
-    secret = modN(secret + term);
-  }
-
-  return secret;
 }

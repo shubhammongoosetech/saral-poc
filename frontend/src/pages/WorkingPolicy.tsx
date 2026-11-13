@@ -126,5 +126,3 @@ export const WorkingPolicy: React.FC = () => {
     </div>
   );
 };
-
-export default WorkingPolicy;

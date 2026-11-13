@@ -136,5 +136,3 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
   );
 };
 
-export default SendForm;
-

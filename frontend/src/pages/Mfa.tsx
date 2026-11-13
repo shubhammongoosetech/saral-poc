@@ -124,5 +124,3 @@ export const Mfa: React.FC = () => {
     </div>
   );
 };
-
-export default Mfa;

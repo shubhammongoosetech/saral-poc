@@ -119,5 +119,3 @@ export const WorkingHoursSection: React.FC<WorkingHoursSectionProps> = ({ initia
   );
 };
 
-export default WorkingHoursSection;
-

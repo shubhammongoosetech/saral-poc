@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
-export const DEFAULT_FALLBACK_COORDS = { lat: 22.7196, lng: 75.8577 };
+const DEFAULT_FALLBACK_COORDS = { lat: 22.7196, lng: 75.8577 };
 
 export interface LocationState {
   lat: number | null;
