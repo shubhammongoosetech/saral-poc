@@ -180,20 +180,45 @@ npm --prefix frontend install
 
 * **Option A: Using Docker (Recommended)**:
   ```bash
-  docker compose up -d postgres
+  docker compose up -d
   ```
+  *(Starts the PostgreSQL 16 container `saral-poc-postgres` on port `5433`)*
 * **Option B: Using Local PostgreSQL**:
-  Ensure PostgreSQL is running on port `5432` (or update `DATABASE_URL`).
+  Ensure PostgreSQL is running on port `5432` (or update `DATABASE_URL` in `backend/.env`).
 
 * **Generate Prisma Client & Push Schema**:
   ```bash
-  cd backend
-  npm run db:generate
-  npm run db:push
-  cd ..
+  npm --prefix backend run db:generate
+  npm --prefix backend run db:push
   ```
 
-### Step 4: Start the Development Servers
+### Step 4: Run 27 Isolated Docker Node Containers (Separation-of-Powers Cluster)
+
+SARAL runs 27 isolated Docker containers (9 Foundation + 9 Public + 9 Private) with dedicated encrypted storage volumes:
+
+1. **Generate Docker Compose configuration for 27 Nodes**:
+   ```bash
+   npm --prefix backend run docker:compose:gen
+   ```
+   *(Reads node counts from `backend/.env` and generates `backend/docker-compose.generated.yml`)*
+
+2. **Start all 27 Node Containers in the Background**:
+   ```bash
+   docker compose -f backend/docker-compose.generated.yml up -d
+   ```
+   *(Spawns `saral-foundation-1..9`, `saral-public-1..9`, and `saral-private-1..9` with `--network none` isolation and dedicated volumes)*
+
+3. **Verify Running Containers**:
+   ```bash
+   docker ps
+   ```
+
+4. **Stop Node Containers (When needed)**:
+   ```bash
+   docker compose -f backend/docker-compose.generated.yml down
+   ```
+
+### Step 5: Start the Development Servers
 
 Run both Backend and Frontend concurrently from the project root:
 ```bash
@@ -207,6 +232,17 @@ npm run dev
 ---
 
 ## 6. All Necessary CLI Commands
+
+### Docker & 27-Node Cluster Commands
+
+| Command | Description |
+|---|---|
+| `docker compose up -d` | Start PostgreSQL 16 container on port 5433 |
+| `npm --prefix backend run docker:compose:gen` | Generate dynamic Docker Compose file (`docker-compose.generated.yml`) for all 27 nodes |
+| `docker compose -f backend/docker-compose.generated.yml up -d` | Start all 27 isolated node containers in the background |
+| `docker ps` | View all active containers (PostgreSQL + 27 nodes) |
+| `docker compose -f backend/docker-compose.generated.yml down` | Stop and remove the 27 node containers |
+| `docker compose down` | Stop and remove the PostgreSQL container |
 
 ### Root Workspace Commands
 

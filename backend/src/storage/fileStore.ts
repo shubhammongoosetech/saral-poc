@@ -43,7 +43,17 @@ export class NodeFileStore {
   private nodeKeysCache = new Map<string, Buffer>();
 
   constructor(customBaseDir?: string) {
-    this.baseDataDir = customBaseDir || path.resolve(process.cwd(), 'data');
+    if (customBaseDir) {
+      this.baseDataDir = customBaseDir;
+    } else if (process.env.SARAL_DATA_DIR) {
+      this.baseDataDir = path.resolve(process.env.SARAL_DATA_DIR);
+    } else {
+      // Anchor permanently to the single project root data/ directory (outside backend/)
+      const projectRoot = fs.existsSync(path.resolve(process.cwd(), 'backend')) && fs.existsSync(path.resolve(process.cwd(), 'packages'))
+        ? process.cwd()
+        : path.resolve(__dirname, '../../..');
+      this.baseDataDir = path.resolve(projectRoot, 'data');
+    }
     this.ensureDir(this.baseDataDir, 0o700);
   }
 
