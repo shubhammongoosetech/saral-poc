@@ -8,6 +8,7 @@ interface SendFormProps {
 }
 
 export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
+  const [chain, setChain] = useState<'mst-testnet' | 'solana-devnet' | 'polygon-amoy'>('mst-testnet');
   const [to, setTo] = useState('');
   const [amount, setAmount] = useState('');
   const [loading, setLoading] = useState(false);
@@ -15,12 +16,25 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
   const [txHash, setTxHash] = useState<string | null>(null);
   const [explorerUrl, setExplorerUrl] = useState<string | null>(null);
 
+  const isSolana = chain === 'solana-devnet';
+  const currencySymbol = isSolana ? 'SOL' : chain === 'polygon-amoy' ? 'MATIC' : 'MSTC';
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!to.trim().startsWith('0x') || to.trim().length !== 42) {
-      setError('Please enter a valid recipient address (0x...)');
-      return;
+
+    if (isSolana) {
+      const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+      if (!base58Regex.test(to.trim())) {
+        setError('Please enter a valid Solana address (Base58, e.g. 4Nd1mBQtr...)');
+        return;
+      }
+    } else {
+      if (!to.trim().startsWith('0x') || to.trim().length !== 42) {
+        setError('Please enter a valid EVM address (0x...)');
+        return;
+      }
     }
+
     if (!amount || parseFloat(amount) <= 0) {
       setError('Please enter a valid amount');
       return;
@@ -34,6 +48,7 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
 
       const coords = await getCurrentCoords();
       const res = await walletApi.signTransaction({
+        chain,
         toAddress: to.trim(),
         amount: amount.trim(),
         lat: coords.lat,
@@ -47,7 +62,7 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
       }
 
       setTxHash(res.txHash);
-      setExplorerUrl(res.explorerUrl || `https://testnet.mstscan.com/tx/${res.txHash}`);
+      setExplorerUrl(res.explorerUrl || (isSolana ? `https://explorer.solana.com/tx/${res.txHash}?cluster=devnet` : `https://testnet.mstscan.com/tx/${res.txHash}`));
       setTo('');
       setAmount('');
       onSent();
@@ -69,14 +84,35 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
 
       <form onSubmit={handleSubmit}>
         <div className="field">
+          <label className="label" htmlFor="chainSelect">
+            Network
+          </label>
+          <select
+            id="chainSelect"
+            className="input"
+            value={chain}
+            onChange={(e) => {
+              setChain(e.target.value as any);
+              setError(null);
+              setTo('');
+            }}
+            disabled={loading}
+          >
+            <option value="mst-testnet">MST Testnet (MSTC)</option>
+            <option value="solana-devnet">Solana Devnet (SOL)</option>
+            <option value="polygon-amoy">Polygon Amoy (MATIC)</option>
+          </select>
+        </div>
+
+        <div className="field">
           <label className="label" htmlFor="recipientInput">
-            To
+            {isSolana ? 'To (Solana Base58 Address)' : 'To (EVM Address)'}
           </label>
           <input
             id="recipientInput"
             type="text"
             className="input text-mono"
-            placeholder="0x..."
+            placeholder={isSolana ? 'e.g. 4Nd1mBQtrMJVYVfKf2PJy9NZPdde5VUkrMaD4W1U4q69' : '0x...'}
             value={to}
             onChange={(e) => setTo(e.target.value)}
             disabled={loading}
@@ -86,7 +122,7 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
 
         <div className="field">
           <label className="label" htmlFor="amountInput">
-            Amount
+            Amount ({currencySymbol})
           </label>
           <input
             id="amountInput"
@@ -105,7 +141,7 @@ export const SendForm: React.FC<SendFormProps> = ({ onSent }) => {
           className="btn btn-primary"
           disabled={loading || !to.trim() || !amount.trim()}
         >
-          {loading ? 'Sending...' : 'Send'}
+          {loading ? 'Signing via 3-Domain MPC...' : `Send ${currencySymbol}`}
         </button>
       </form>
 

@@ -98,6 +98,7 @@ export const walletApi = {
     amount: string;
     lat?: number;
     lng?: number;
+    chain?: string;
   }): Promise<SignTransactionResult> => {
     const res = await apiClient.post<SignTransactionResult>('/wallet/sign', data);
     return res.data;

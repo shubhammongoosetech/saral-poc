@@ -380,35 +380,47 @@ export async function executeSigningTransaction(
   const publicThreshold = placement?.public.threshold ?? activeTopology.public.threshold;
   const privateThreshold = placement?.private.threshold ?? activeTopology.private.threshold;
 
-  // 3. Prepare Unsigned EVM Transaction
-  const nonce = await getAccountNonce(walletAddress, chainConfig.id);
-  const { gasPrice, gasLimit } = await getGasFeeData(chainConfig.id);
-  const value = ethers.parseEther(amount.trim());
+  // 3. Prepare Unsigned Transaction (EVM or Solana)
+  const isSolana = chainConfig.type === 'solana';
+  let unsignedSerialized: string;
   const chainId = BigInt(chainConfig.chainId || 91562037);
 
-  // Pre-check live balance before running MPC signing or logging a failed tx row
-  const liveBalanceWei = await getBalanceWeiOrNull(walletAddress, chainConfig.id);
-  const gasFeeWei = gasPrice * gasLimit;
-  const totalRequiredWei = value + gasFeeWei;
-  if (liveBalanceWei !== null && liveBalanceWei < totalRequiredWei) {
-    const shortfallWei = totalRequiredWei - liveBalanceWei;
-    const maxSendableWei = liveBalanceWei > gasFeeWei ? liveBalanceWei - gasFeeWei : 0n;
-    throw new BadRequestError(
-      `Insufficient funds: balance is ${ethers.formatEther(liveBalanceWei)} ${chainConfig.symbol}, but ${ethers.formatEther(totalRequiredWei)} ${chainConfig.symbol} is needed (${ethers.formatEther(value)} + ${ethers.formatEther(gasFeeWei)} gas; short by ${ethers.formatEther(shortfallWei)} ${chainConfig.symbol}). Max sendable: ${ethers.formatEther(maxSendableWei)} ${chainConfig.symbol}.`
+  if (isSolana) {
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(toAddress.trim())) {
+      throw new BadRequestError(`Invalid Solana recipient address (must be Base58): ${toAddress}`);
+    }
+    unsignedSerialized = ethers.hexlify(
+      ethers.toUtf8Bytes(JSON.stringify({ chain: 'solana-devnet', to: toAddress.trim(), amount: amount.trim(), timestamp: Date.now() }))
     );
+  } else {
+    const nonce = await getAccountNonce(walletAddress, chainConfig.id);
+    const { gasPrice, gasLimit } = await getGasFeeData(chainConfig.id);
+    const value = ethers.parseEther(amount.trim());
+
+    // Pre-check live balance before running MPC signing or logging a failed tx row
+    const liveBalanceWei = await getBalanceWeiOrNull(walletAddress, chainConfig.id);
+    const gasFeeWei = gasPrice * gasLimit;
+    const totalRequiredWei = value + gasFeeWei;
+    if (liveBalanceWei !== null && liveBalanceWei < totalRequiredWei) {
+      const shortfallWei = totalRequiredWei - liveBalanceWei;
+      const maxSendableWei = liveBalanceWei > gasFeeWei ? liveBalanceWei - gasFeeWei : 0n;
+      throw new BadRequestError(
+        `Insufficient funds: balance is ${ethers.formatEther(liveBalanceWei)} ${chainConfig.symbol}, but ${ethers.formatEther(totalRequiredWei)} ${chainConfig.symbol} is needed (${ethers.formatEther(value)} + ${ethers.formatEther(gasFeeWei)} gas; short by ${ethers.formatEther(shortfallWei)} ${chainConfig.symbol}). Max sendable: ${ethers.formatEther(maxSendableWei)} ${chainConfig.symbol}.`
+      );
+    }
+
+    const unsignedTx = ethers.Transaction.from({
+      to: ethers.getAddress(toAddress.trim()),
+      value,
+      nonce,
+      gasPrice,
+      gasLimit,
+      chainId,
+      type: chainConfig.defaultTxType || 0,
+    });
+
+    unsignedSerialized = unsignedTx.unsignedSerialized;
   }
-
-  const unsignedTx = ethers.Transaction.from({
-    to: ethers.getAddress(toAddress.trim()),
-    value,
-    nonce,
-    gasPrice,
-    gasLimit,
-    chainId,
-    type: chainConfig.defaultTxType || 0,
-  });
-
-  const unsignedSerialized = unsignedTx.unsignedSerialized;
 
   // 4. Retrieve Shares from Nodes for All 3 Domains strictly adhering to pinned quorums
   // A. Foundation Quorum
