@@ -13,6 +13,7 @@ export const Wallet: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetTrigger, setResetTrigger] = useState(0);
   const pollTimersRef = useRef<number[]>([]);
 
   const clearPollTimers = useCallback(() => {
@@ -62,23 +63,24 @@ export const Wallet: React.FC = () => {
     }
   }, [fetchTransactions]);
 
+  const handleManualRefresh = useCallback(async (): Promise<string | null> => {
+    setResetTrigger((prev) => prev + 1);
+    return await handleRefresh();
+  }, [handleRefresh]);
+
   const handleAfterSend = useCallback(async () => {
     clearPollTimers();
-    const initialBalance = wallet?.balance ?? null;
-    const updatedBalance = await handleRefresh();
+    // Immediate refresh
+    await handleRefresh();
 
-    if (initialBalance === null || updatedBalance === initialBalance) {
-      for (const delayMs of [3500, 7500]) {
-        const timerId = window.setTimeout(async () => {
-          const nextBalance = await handleRefresh();
-          if (nextBalance !== null && initialBalance !== null && nextBalance !== initialBalance) {
-            clearPollTimers();
-          }
-        }, delayMs);
-        pollTimersRef.current.push(timerId);
-      }
+    // Multi-interval auto-refresh after transaction broadcast so on-chain balance updates live
+    for (const delayMs of [1500, 3000, 5000, 8000, 12000]) {
+      const timerId = window.setTimeout(async () => {
+        await handleRefresh();
+      }, delayMs);
+      pollTimersRef.current.push(timerId);
     }
-  }, [clearPollTimers, handleRefresh, wallet?.balance]);
+  }, [clearPollTimers, handleRefresh]);
 
   useEffect(() => {
     loadWallet();
@@ -138,7 +140,7 @@ export const Wallet: React.FC = () => {
             solanaBalance={wallet?.solanaBalance}
             activeNetwork={selectedNetwork}
             onNetworkChange={setSelectedNetwork}
-            onRefresh={handleRefresh}
+            onRefresh={handleManualRefresh}
             refreshing={refreshing}
           />
 
@@ -150,6 +152,9 @@ export const Wallet: React.FC = () => {
                 setSelectedNetwork(n);
               }
             }}
+            balance={wallet?.balance}
+            solanaBalance={wallet?.solanaBalance}
+            resetTrigger={resetTrigger}
           />
 
           <TransactionList transactions={transactions} />

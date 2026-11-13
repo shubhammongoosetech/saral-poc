@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { walletApi } from '../../api/endpoints';
 import { getCurrentCoords } from '../../hooks/useLocation';
 import { CopyButton } from '../../components/CopyButton';
@@ -7,12 +7,18 @@ interface SendFormProps {
   onSent: () => void;
   activeNetwork?: 'mst-testnet' | 'solana-devnet' | 'polygon-amoy';
   onNetworkChange?: (network: 'mst-testnet' | 'solana-devnet' | 'polygon-amoy') => void;
+  balance?: string;
+  solanaBalance?: string;
+  resetTrigger?: number;
 }
 
 export const SendForm: React.FC<SendFormProps> = ({
   onSent,
   activeNetwork,
   onNetworkChange,
+  balance,
+  solanaBalance,
+  resetTrigger,
 }) => {
   const [internalChain, setInternalChain] = useState<'mst-testnet' | 'solana-devnet' | 'polygon-amoy'>('mst-testnet');
   const [to, setTo] = useState('');
@@ -30,6 +36,55 @@ export const SendForm: React.FC<SendFormProps> = ({
 
   const isSolana = chain === 'solana-devnet';
   const currencySymbol = isSolana ? 'SOL' : chain === 'polygon-amoy' ? 'MATIC' : 'MSTC';
+
+  // Clear error, input fields, and old transaction status on manual Refresh
+  useEffect(() => {
+    if (resetTrigger && resetTrigger > 0) {
+      setTo('');
+      setAmount('');
+      setError(null);
+      setTxHash(null);
+      setExplorerUrl(null);
+    }
+  }, [resetTrigger]);
+
+  // Clear error, input fields, and transaction status when switching network
+  useEffect(() => {
+    setTo('');
+    setAmount('');
+    setError(null);
+    setTxHash(null);
+    setExplorerUrl(null);
+  }, [chain]);
+
+  const handleMaxClick = () => {
+    const rawBalance = isSolana ? solanaBalance || '0' : balance || '0';
+    const numBalance = parseFloat(rawBalance);
+    if (isNaN(numBalance) || numBalance <= 0) {
+      setAmount('0');
+      return;
+    }
+
+    // Reserve network gas/fee so transaction does not fail due to insufficient funds:
+    // Solana Devnet fee: 5000 lamports (reserve 0.00001 SOL buffer)
+    // Polygon Amoy gas fee: ~0.005 MATIC
+    // MST Testnet gas fee: ~0.0005 MSTC
+    const feeReserve = isSolana ? 0.00001 : chain === 'polygon-amoy' ? 0.005 : 0.0005;
+
+    const maxSendable = Math.max(0, numBalance - feeReserve);
+    if (maxSendable <= 0) {
+      setAmount('0');
+      setError(`Balance is too low to cover network gas fee (~${feeReserve} ${currencySymbol}).`);
+      return;
+    }
+
+    const formatted = isSolana
+      ? maxSendable.toFixed(6).replace(/\.?0+$/, '')
+      : maxSendable.toFixed(4).replace(/\.?0+$/, '');
+
+    setAmount(formatted);
+    setError(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -133,9 +188,25 @@ export const SendForm: React.FC<SendFormProps> = ({
         </div>
 
         <div className="field">
-          <label className="label" htmlFor="amountInput">
-            Amount ({currencySymbol})
-          </label>
+          <div className="inline-row" style={{ marginBottom: '6px' }}>
+            <label className="label" htmlFor="amountInput" style={{ margin: 0 }}>
+              Amount ({currencySymbol})
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="helper-text muted" style={{ fontSize: '12px' }}>
+                Bal: {isSolana ? solanaBalance || '0.00' : balance || '0.00'} {currencySymbol}
+              </span>
+              <button
+                type="button"
+                className="btn-link helper-text"
+                style={{ fontWeight: 600, textTransform: 'uppercase', color: 'var(--accent)', cursor: 'pointer' }}
+                onClick={handleMaxClick}
+                disabled={loading}
+              >
+                Max
+              </button>
+            </div>
+          </div>
           <input
             id="amountInput"
             type="text"
@@ -146,6 +217,11 @@ export const SendForm: React.FC<SendFormProps> = ({
             disabled={loading}
             required
           />
+          <span className="helper-text muted" style={{ display: 'block', marginTop: '4px', fontSize: '11px' }}>
+            {isSolana
+              ? 'Estimated network fee (~0.000005 SOL) is automatically deducted'
+              : 'Estimated gas fee is automatically deducted from max send'}
+          </span>
         </div>
 
         <button

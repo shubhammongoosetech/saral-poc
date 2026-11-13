@@ -15,6 +15,15 @@ import { getStartupMetrics } from './bootstrap';
 import { env } from './config/env';
 
 export const app = express();
+app.set('etag', false);
+
+// Disable HTTP caching on all API routes so live balances & transactions are never served from 304 cache
+app.use('/api', (_req: Request, res: Response, next: NextFunction): void => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
 
 // --- Security middleware ---
 

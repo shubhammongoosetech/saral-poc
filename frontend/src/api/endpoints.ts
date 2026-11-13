@@ -76,7 +76,10 @@ export const profileApi = {
 
 export const walletApi = {
   getWallet: async (): Promise<{ hasWallet: boolean; wallet: WalletData | null }> => {
-    const res = await apiClient.get('/wallet');
+    const res = await apiClient.get('/wallet', {
+      params: { _t: Date.now() },
+      headers: { 'Cache-Control': 'no-cache' },
+    });
     return res.data;
   },
 
@@ -105,7 +108,10 @@ export const walletApi = {
   },
 
   getTransactions: async (): Promise<{ transactions: TransactionRecord[] }> => {
-    const res = await apiClient.get('/wallet/transactions');
+    const res = await apiClient.get('/wallet/transactions', {
+      params: { _t: Date.now() },
+      headers: { 'Cache-Control': 'no-cache' },
+    });
     return res.data;
   },
 
