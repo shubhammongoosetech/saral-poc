@@ -81,9 +81,12 @@ export interface SignResponse {
 
 export interface Transaction {
   tx_hash: string;
+  txHash?: string;
   to_address: string;
+  toAddress?: string;
   amount: string;
   created_at: string;
+  createdAt?: string;
   status?: string;
   chain?: string;
   direction?: 'sent' | 'received';

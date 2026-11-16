@@ -5,8 +5,8 @@ import { Badge } from '@/shared/ui/Badge';
 import { Skeleton } from '@/shared/ui/Skeleton';
 import { EmptyState } from '@/shared/ui/EmptyState';
 import { CopyButton } from '@/shared/ui/CopyButton';
-import { formatRelativeTime, truncateAddress } from '@/shared/lib/format';
-import { IconSend, IconReceive } from '@/shared/ui/icons';
+import { formatRelativeTime, truncateAddress, getExplorerTxUrl } from '@/shared/lib/format';
+import { IconSend, IconReceive, IconExternal } from '@/shared/ui/icons';
 
 export const Activity: React.FC = () => {
   const { data, isLoading } = useTransactionsQuery();
@@ -68,6 +68,7 @@ export const Activity: React.FC = () => {
               <thead>
                 <tr className="border-b border-border bg-surface-2/50 text-muted">
                   <th className="py-3 px-4 font-medium">Type</th>
+                  <th className="py-3 px-4 font-medium">Tx Hash</th>
                   <th className="py-3 px-4 font-medium">To</th>
                   <th className="py-3 px-4 font-medium">Amount</th>
                   <th className="py-3 px-4 font-medium">Status</th>
@@ -76,6 +77,8 @@ export const Activity: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-border">
                 {filtered.map((tx) => {
+                  const hash = tx.tx_hash || tx.txHash || '';
+                  const explorerUrl = getExplorerTxUrl(tx.chain, hash);
                   const isRecv = tx.direction === 'received';
                   const isPending = !tx.status || tx.status.toLowerCase() === 'pending';
                   const isFailed = tx.status?.toLowerCase().includes('fail');
@@ -83,7 +86,7 @@ export const Activity: React.FC = () => {
                   const badgeLabel = isFailed ? 'Failed' : isPending ? 'Pending' : 'Confirmed';
 
                   return (
-                    <tr key={tx.tx_hash} className="hover:bg-surface-2/40 transition-colors">
+                    <tr key={hash || tx.created_at} className="hover:bg-surface-2/40 transition-colors">
                       <td className="py-3.5 px-4 font-medium text-text">
                         <div className="flex items-center gap-2">
                           <div className="w-6 h-6 rounded-full bg-surface-2 flex items-center justify-center text-muted">
@@ -93,9 +96,28 @@ export const Activity: React.FC = () => {
                         </div>
                       </td>
                       <td className="py-3.5 px-4 font-mono text-muted">
+                        {hash ? (
+                          <div className="flex items-center gap-1.5">
+                            <a
+                              href={explorerUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-accent hover:underline flex items-center gap-1 group font-mono"
+                              title="Verify on explorer"
+                            >
+                              <span>{truncateAddress(hash, 6, 4)}</span>
+                              <IconExternal size={13} className="opacity-70 group-hover:opacity-100 transition-opacity" />
+                            </a>
+                            <CopyButton text={hash} />
+                          </div>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-muted">
                         <div className="flex items-center gap-1.5">
-                          <span>{truncateAddress(tx.to_address, 6, 4)}</span>
-                          <CopyButton text={tx.to_address} />
+                          <span>{truncateAddress(tx.to_address || tx.toAddress || '', 6, 4)}</span>
+                          {(tx.to_address || tx.toAddress) && <CopyButton text={tx.to_address || tx.toAddress || ''} />}
                         </div>
                       </td>
                       <td className="py-3.5 px-4 font-mono font-medium text-text">
@@ -107,7 +129,7 @@ export const Activity: React.FC = () => {
                         </Badge>
                       </td>
                       <td className="py-3.5 px-4 text-right text-muted">
-                        {formatRelativeTime(tx.created_at)}
+                        {formatRelativeTime(tx.created_at || tx.createdAt || '')}
                       </td>
                     </tr>
                   );
@@ -119,6 +141,8 @@ export const Activity: React.FC = () => {
           {/* Mobile List View (visible on small screens) */}
           <div className="block md:hidden divide-y divide-border">
             {filtered.map((tx) => {
+              const hash = tx.tx_hash || tx.txHash || '';
+              const explorerUrl = getExplorerTxUrl(tx.chain, hash);
               const isRecv = tx.direction === 'received';
               const isPending = !tx.status || tx.status.toLowerCase() === 'pending';
               const isFailed = tx.status?.toLowerCase().includes('fail');
@@ -126,9 +150,9 @@ export const Activity: React.FC = () => {
               const badgeLabel = isFailed ? 'Failed' : isPending ? 'Pending' : 'Confirmed';
 
               return (
-                <div key={tx.tx_hash} className="flex items-center justify-between p-3.5 text-xs">
+                <div key={hash || tx.created_at} className="flex items-center justify-between p-3.5 text-xs">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-7 h-7 rounded-full bg-surface-2 flex items-center justify-center text-muted">
+                    <div className="w-7 h-7 rounded-full bg-surface-2 flex items-center justify-center text-muted shrink-0">
                       {isRecv ? <IconReceive size={14} /> : <IconSend size={14} />}
                     </div>
                     <div className="flex flex-col min-w-0">
@@ -141,15 +165,30 @@ export const Activity: React.FC = () => {
                         </Badge>
                       </div>
                       <span className="text-[11px] text-muted font-mono truncate">
-                        {truncateAddress(tx.to_address, 4, 4)}
+                        To: {truncateAddress(tx.to_address || tx.toAddress || '', 4, 4)}
                       </span>
+                      {hash && (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <a
+                            href={explorerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] font-mono text-accent hover:underline flex items-center gap-1"
+                            title="Verify on explorer"
+                          >
+                            <span>Tx: {truncateAddress(hash, 4, 4)}</span>
+                            <IconExternal size={11} />
+                          </a>
+                          <CopyButton text={hash} />
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-0.5">
+                  <div className="flex flex-col items-end gap-0.5 shrink-0 ml-2">
                     <span className="font-mono font-medium text-text">
                       {tx.amount} {tx.chain === 'solana-devnet' ? 'SOL' : 'MSTC'}
                     </span>
-                    <span className="text-[10px] text-muted">{formatRelativeTime(tx.created_at)}</span>
+                    <span className="text-[10px] text-muted">{formatRelativeTime(tx.created_at || tx.createdAt || '')}</span>
                   </div>
                 </div>
               );

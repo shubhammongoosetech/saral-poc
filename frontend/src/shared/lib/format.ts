@@ -72,3 +72,18 @@ export function mapApiError(err: unknown, fallback = 'Request failed'): string {
 
   return fallback;
 }
+
+export function getExplorerTxUrl(chain?: string, txHash?: string): string {
+  if (!txHash) return '';
+  const cleanHash = txHash.trim();
+  const c = (chain || '').toLowerCase();
+
+  if (c.includes('solana') || (!cleanHash.startsWith('0x') && cleanHash.length > 64)) {
+    return `https://explorer.solana.com/tx/${cleanHash}?cluster=devnet`;
+  }
+  if (c.includes('polygon') || c.includes('amoy')) {
+    return `https://amoy.polygonscan.com/tx/${cleanHash}`;
+  }
+  // Default to MST Testnet (EVM)
+  return `https://testnet.mstscan.com/tx/${cleanHash}`;
+}

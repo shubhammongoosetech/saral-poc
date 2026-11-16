@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Link, Outlet, useNavigate } from 'react-router-dom';
 import { useSession } from '@/features/auth/useSession';
 import { useBreakpoint } from '@/shared/hooks/useBreakpoint';
 import { useTheme } from '@/shared/hooks/useTheme';
-import { truncateAddress } from '@/shared/lib/format';
 import { walletApi } from '@/shared/api/endpoints';
 import { getCurrentCoords } from '@/shared/hooks/useLocation';
 import { Avatar } from '@/shared/ui/Avatar';
@@ -11,30 +10,19 @@ import {
   IconWallet,
   IconActivity,
   IconSettings,
-  IconCopy,
-  IconCheck,
   IconAlert,
 } from '@/shared/ui/icons';
 
 export const AppLayout: React.FC = () => {
   const { user, logout, lastAccessCheck, setLastAccessCheck } = useSession();
-  const { isMobile, isDesktop } = useBreakpoint();
+  const { isMobile } = useBreakpoint();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
 
-  const [copied, setCopied] = useState(false);
   const [retryingAccess, setRetryingAccess] = useState(false);
 
-  const displayName = user?.name || 'Account 1';
-  const displayAddress = user?.id || '';
-
-  const handleCopy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {}
-  };
+  const displayName = user?.name || user?.email || 'Account 1';
+  const displaySub = user?.name && user?.email ? user.email : user?.mobile || '';
 
   const handleRetryAccess = async () => {
     try {
@@ -86,9 +74,9 @@ export const AppLayout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-bg flex">
-      {/* Desktop Left Sidebar (>=1024px) */}
-      {isDesktop && (
-        <aside className="w-64 bg-surface border-r border-border flex flex-col justify-between shrink-0 h-screen sticky top-0">
+      {/* Left Sidebar (Tablet & Desktop: >=768px) */}
+      {!isMobile && (
+        <aside className="w-64 bg-surface border-r border-border hidden md:flex flex-col justify-between shrink-0 h-screen sticky top-0">
           <div>
             {/* Brand Header */}
             <div className="p-5 flex items-center gap-3 border-b border-border/60">
@@ -172,18 +160,13 @@ export const AppLayout: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-3 pt-2">
-              <Avatar seed={displayAddress || 'saral'} size="md" />
+              <Avatar seed={displayName} size="md" />
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-semibold text-text truncate">{displayName}</div>
-                {displayAddress && (
-                  <button
-                    type="button"
-                    onClick={() => handleCopy(displayAddress)}
-                    className="flex items-center gap-1.5 text-[11px] font-mono text-muted hover:text-text"
-                  >
-                    <span>{truncateAddress(displayAddress)}</span>
-                    {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
-                  </button>
+                {displaySub && (
+                  <div className="text-[11px] text-muted truncate" title={displaySub}>
+                    {displaySub}
+                  </div>
                 )}
               </div>
             </div>
@@ -201,19 +184,33 @@ export const AppLayout: React.FC = () => {
 
       {/* Main Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Mobile / Tablet Topbar */}
-        {!isDesktop && (
-          <header className="h-14 bg-surface border-b border-border px-4 flex items-center justify-between sticky top-0 z-20">
-            <div className="flex items-center gap-2.5">
-              <Avatar seed={displayAddress || 'saral'} size="sm" />
-              <span className="font-semibold text-text text-sm truncate max-w-[140px]">
-                {displayName}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-semibold bg-surface-2 text-muted px-2 py-0.5 rounded">
+        {/* Mobile Topbar (<768px) */}
+        {isMobile && (
+          <header className="h-14 bg-surface border-b border-border px-4 flex items-center justify-between sticky top-0 z-20 md:hidden">
+            {/* Left: SARAL Brand Header */}
+            <Link to="/wallet" className="flex items-center gap-2.5 shrink-0">
+              <div className="w-7 h-7 rounded-lg bg-accent text-accent-contrast flex items-center justify-center font-bold text-sm">
+                S
+              </div>
+              <span className="font-semibold text-text text-base">SARAL</span>
+              <span className="text-[10px] font-semibold bg-surface-2 text-muted px-1.5 py-0.5 rounded">
                 Testnet
               </span>
+            </Link>
+
+            {/* Right: User Profile */}
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="flex flex-col items-end min-w-0">
+                <span className="font-semibold text-text text-xs truncate max-w-[120px]">
+                  {displayName}
+                </span>
+                {displaySub && (
+                  <span className="text-[10px] text-muted truncate max-w-[120px]" title={displaySub}>
+                    {displaySub}
+                  </span>
+                )}
+              </div>
+              <Avatar seed={displayName} size="sm" />
             </div>
           </header>
         )}
@@ -225,7 +222,7 @@ export const AppLayout: React.FC = () => {
 
         {/* Mobile Bottom Tabbar (<768px) */}
         {isMobile && (
-          <nav className="fixed bottom-0 inset-x-0 h-14 bg-surface border-t border-border flex items-center justify-around z-20 pb-[env(safe-area-inset-bottom)]">
+          <nav className="fixed bottom-0 inset-x-0 h-14 bg-surface border-t border-border flex items-center justify-around z-20 pb-[env(safe-area-inset-bottom)] md:hidden">
             <NavLink
               to="/wallet"
               className={({ isActive }) =>

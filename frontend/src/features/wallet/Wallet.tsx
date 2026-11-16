@@ -15,8 +15,8 @@ import { Sheet, SheetContent } from '@/shared/ui/Sheet';
 import { Dialog, DialogContent } from '@/shared/ui/Dialog';
 import { Amount } from '@/shared/ui/Amount';
 import { AddressText } from '@/shared/ui/AddressText';
-import { formatRelativeTime } from '@/shared/lib/format';
-import { IconSend, IconReceive, IconRefresh } from '@/shared/ui/icons';
+import { formatRelativeTime, truncateAddress, getExplorerTxUrl } from '@/shared/lib/format';
+import { IconSend, IconReceive, IconRefresh, IconExternal } from '@/shared/ui/icons';
 
 export const Wallet: React.FC = () => {
   const { isDesktop } = useBreakpoint();
@@ -157,29 +157,47 @@ export const Wallet: React.FC = () => {
             <EmptyState title="No transactions yet" />
           ) : (
             <Card className="divide-y divide-border p-0 overflow-hidden">
-              {transactions.slice(0, 5).map((tx) => (
-                <div key={tx.tx_hash} className="flex items-center justify-between p-3.5 text-xs">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-7 h-7 rounded-full bg-surface-2 flex items-center justify-center text-muted">
-                      {tx.direction === 'received' ? <IconReceive size={14} /> : <IconSend size={14} />}
+              {transactions.slice(0, 5).map((tx) => {
+                const hash = tx.tx_hash || (tx as any).txHash || '';
+                const explorerUrl = getExplorerTxUrl(tx.chain, hash);
+                return (
+                  <div key={hash || tx.created_at} className="flex items-center justify-between p-3.5 text-xs">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-7 h-7 rounded-full bg-surface-2 flex items-center justify-center text-muted shrink-0">
+                        {tx.direction === 'received' ? <IconReceive size={14} /> : <IconSend size={14} />}
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-medium text-text truncate">
+                          {tx.direction === 'received' ? 'Received' : 'Sent'}
+                        </span>
+                        <div className="flex items-center gap-2 text-[11px] text-muted font-mono flex-wrap">
+                          {tx.to_address && (
+                            <span>To: {truncateAddress(tx.to_address, 4, 4)}</span>
+                          )}
+                          {hash && (
+                            <a
+                              href={explorerUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-accent hover:underline flex items-center gap-0.5"
+                              title="Verify on explorer"
+                            >
+                              <span>Tx: {truncateAddress(hash, 4, 4)}</span>
+                              <IconExternal size={11} />
+                            </a>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex flex-col min-w-0">
-                      <span className="font-medium text-text truncate">
-                        {tx.direction === 'received' ? 'Received' : 'Sent'}
+                    <div className="flex flex-col items-end gap-0.5 shrink-0 ml-2">
+                      <span className="font-mono font-medium text-text">
+                        {tx.amount} {tx.chain === 'solana-devnet' ? 'SOL' : 'MSTC'}
                       </span>
-                      <span className="text-[11px] text-muted font-mono truncate">
-                        {tx.to_address ? `${tx.to_address.slice(0, 6)}...${tx.to_address.slice(-4)}` : ''}
-                      </span>
+                      <span className="text-[10px] text-muted">{formatRelativeTime(tx.created_at)}</span>
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-0.5">
-                    <span className="font-mono font-medium text-text">
-                      {tx.amount} {tx.chain === 'solana-devnet' ? 'SOL' : 'MSTC'}
-                    </span>
-                    <span className="text-[10px] text-muted">{formatRelativeTime(tx.created_at)}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </Card>
           )}
         </div>
