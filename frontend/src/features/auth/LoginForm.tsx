@@ -81,10 +81,34 @@ export const LoginForm: React.FC = () => {
     }
   }, [setSessionToken]);
 
+  const handleMobileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Extract only digits
+    let digits = e.target.value.replace(/\D/g, '');
+    // If pasted with India country code prefix (+91 / 91) and 12 digits, strip country code
+    if (digits.length === 12 && digits.startsWith('91')) {
+      digits = digits.slice(2);
+    } else if (digits.length === 11 && digits.startsWith('0')) {
+      digits = digits.slice(1);
+    }
+    // Limit to exactly 10 digits
+    const cleaned = digits.slice(0, 10);
+    setMobile(cleaned);
+    if (error) setError(null);
+  };
+
   const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!mobile.trim()) {
+    const cleanMobile = mobile.trim();
+    if (!cleanMobile) {
       setError('Mobile number required');
+      return;
+    }
+    if (cleanMobile.length !== 10) {
+      setError('Please enter a valid 10-digit mobile number');
+      return;
+    }
+    if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+      setError('Mobile number must be a valid 10-digit number starting with 6, 7, 8, or 9');
       return;
     }
 
@@ -92,7 +116,7 @@ export const LoginForm: React.FC = () => {
       setLoading(true);
       setError(null);
       setDevOtp(null);
-      const res = await authApi.requestOtp(mobile.trim());
+      const res = await authApi.requestOtp(cleanMobile);
       setCodeSent(true);
       if (import.meta.env.DEV && res.devOtp) {
         setDevOtp(res.devOtp);
@@ -144,19 +168,41 @@ export const LoginForm: React.FC = () => {
 
       {!codeSent ? (
         <form onSubmit={handleSendCode} noValidate className="flex flex-col gap-4">
-          <Field label="Mobile number" htmlFor="mobileInput">
-            <Input
-              id="mobileInput"
-              type="tel"
-              placeholder="+91 98765 43210"
-              value={mobile}
-              onChange={(e) => setMobile(e.target.value)}
-              disabled={loading}
-              autoComplete="tel"
-            />
+          <Field
+            label="Mobile number"
+            htmlFor="mobileInput"
+            hint={
+              mobile.length > 0 && mobile.length < 10
+                ? `${mobile.length}/10 digits entered`
+                : undefined
+            }
+          >
+            <div className="relative flex items-center">
+              <span className="absolute left-3 text-sm font-medium text-muted select-none pointer-events-none">
+                +91
+              </span>
+              <Input
+                id="mobileInput"
+                type="tel"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                placeholder="9876543210"
+                value={mobile}
+                onChange={handleMobileChange}
+                maxLength={10}
+                className="pl-12 font-mono tracking-wide"
+                disabled={loading}
+                autoComplete="tel"
+              />
+            </div>
           </Field>
 
-          <Button type="submit" loading={loading} disabled={!mobile.trim()} fullWidth>
+          <Button
+            type="submit"
+            loading={loading}
+            disabled={loading || mobile.length !== 10}
+            fullWidth
+          >
             Continue
           </Button>
         </form>

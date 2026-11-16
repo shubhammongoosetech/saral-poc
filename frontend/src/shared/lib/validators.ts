@@ -21,7 +21,7 @@ export function isValidAddress(
 export function isValidMobile(mobile: string): boolean {
   if (!mobile || typeof mobile !== 'string') return false;
   const clean = mobile.replace(/[\s-]/g, '');
-  return /^\+?[0-9]{8,15}$/.test(clean);
+  return /^[6-9]\d{9}$/.test(clean) || /^\+?91[6-9]\d{9}$/.test(clean);
 }
 
 export function isValidOtp(otp: string): boolean {
