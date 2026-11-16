@@ -69,7 +69,7 @@ export const Activity: React.FC = () => {
                 <tr className="border-b border-border bg-surface-2/50 text-muted">
                   <th className="py-3 px-4 font-medium">Type</th>
                   <th className="py-3 px-4 font-medium">Tx Hash</th>
-                  <th className="py-3 px-4 font-medium">To</th>
+                  <th className="py-3 px-4 font-medium">To / From</th>
                   <th className="py-3 px-4 font-medium">Amount</th>
                   <th className="py-3 px-4 font-medium">Status</th>
                   <th className="py-3 px-4 font-medium text-right">Time</th>
@@ -165,7 +165,7 @@ export const Activity: React.FC = () => {
                         </Badge>
                       </div>
                       <span className="text-[11px] text-muted font-mono truncate">
-                        To: {truncateAddress(tx.to_address || tx.toAddress || '', 4, 4)}
+                        {isRecv ? 'From: ' : 'To: '}{truncateAddress(tx.to_address || tx.toAddress || '', 4, 4)}
                       </span>
                       {hash && (
                         <div className="flex items-center gap-1 mt-0.5">

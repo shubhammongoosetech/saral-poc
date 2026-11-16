@@ -353,3 +353,128 @@ export async function broadcastRawTransaction(
     rpcError,
   };
 }
+
+export interface InboundTransaction {
+  tx_hash: string;
+  txHash: string;
+  to_address: string;
+  toAddress: string;
+  amount: string;
+  status: string;
+  chain: string;
+  direction: 'received';
+  created_at: string;
+  createdAt: string;
+}
+
+/**
+ * Live-queries the public blockchain explorer / RPC for inbound transfers
+ * to the session wallet addresses (without persisting the user's address in PostgreSQL).
+ */
+export async function fetchIncomingTransactions(
+  evmAddress?: string,
+  solanaAddress?: string,
+  chainFilter?: string
+): Promise<InboundTransaction[]> {
+  const results: InboundTransaction[] = [];
+
+  // 1. Fetch MST Testnet incoming transactions via Explorer API
+  if ((!chainFilter || chainFilter === 'mst-testnet') && evmAddress) {
+    try {
+      const cleanEvm = evmAddress.trim();
+      const url = `https://testnet.mstscan.com/api?module=account&action=txlist&address=${cleanEvm}&page=1&offset=25&sort=desc`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      const data = (await res.json()) as any;
+      if (data && Array.isArray(data.result)) {
+        const lowerEvm = cleanEvm.toLowerCase();
+        for (const tx of data.result) {
+          if (tx.to && tx.to.toLowerCase() === lowerEvm && tx.from && tx.from.toLowerCase() !== lowerEvm) {
+            const timeMs = Number(tx.timeStamp) * 1000;
+            const iso = !isNaN(timeMs) && timeMs > 0 ? new Date(timeMs).toISOString() : new Date().toISOString();
+            const valWei = tx.value ? BigInt(tx.value) : 0n;
+            const amountStr = ethers.formatEther(valWei);
+            results.push({
+              tx_hash: tx.hash,
+              txHash: tx.hash,
+              to_address: tx.from,
+              toAddress: tx.from,
+              amount: amountStr,
+              status: tx.isError === '0' ? 'CONFIRMED' : 'FAILED',
+              chain: 'mst-testnet',
+              direction: 'received',
+              created_at: iso,
+              createdAt: iso,
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[chainService] Failed to fetch MST incoming transactions:', err);
+    }
+  }
+
+  // 2. Fetch Solana Devnet incoming transactions via RPC
+  if ((!chainFilter || chainFilter === 'solana-devnet') && solanaAddress) {
+    try {
+      const solClean = solanaAddress.trim();
+      const res = await fetch('https://api.devnet.solana.com', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(6000),
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getSignaturesForAddress',
+          params: [solClean, { limit: 10 }],
+        }),
+      });
+      const data = (await res.json()) as any;
+      const sigs: string[] = Array.isArray(data?.result) ? data.result.map((s: any) => s.signature) : [];
+
+      for (const sig of sigs.slice(0, 5)) {
+        try {
+          const txRes = await fetch('https://api.devnet.solana.com', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(4000),
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 2,
+              method: 'getTransaction',
+              params: [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
+            }),
+          });
+          const txData = (await txRes.json()) as any;
+          const instructions = txData?.result?.transaction?.message?.instructions || [];
+          const blockTime = txData?.result?.blockTime;
+          const iso = blockTime ? new Date(blockTime * 1000).toISOString() : new Date().toISOString();
+
+          for (const ix of instructions) {
+            if (ix?.parsed?.type === 'transfer') {
+              const info = ix.parsed.info;
+              if (info?.destination === solClean && info?.source !== solClean) {
+                const lamports = Number(info.lamports) || 0;
+                results.push({
+                  tx_hash: sig,
+                  txHash: sig,
+                  to_address: info.source,
+                  toAddress: info.source,
+                  amount: (lamports / 1e9).toFixed(4),
+                  status: 'CONFIRMED',
+                  chain: 'solana-devnet',
+                  direction: 'received',
+                  created_at: iso,
+                  createdAt: iso,
+                });
+              }
+            }
+          }
+        } catch {}
+      }
+    } catch (err) {
+      console.warn('[chainService] Failed to fetch Solana incoming transactions:', err);
+    }
+  }
+
+  return results;
+}

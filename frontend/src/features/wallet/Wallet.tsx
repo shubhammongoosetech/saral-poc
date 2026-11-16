@@ -172,7 +172,7 @@ export const Wallet: React.FC = () => {
                         </span>
                         <div className="flex items-center gap-2 text-[11px] text-muted font-mono flex-wrap">
                           {tx.to_address && (
-                            <span>To: {truncateAddress(tx.to_address, 4, 4)}</span>
+                            <span>{tx.direction === 'received' ? 'From: ' : 'To: '}{truncateAddress(tx.to_address, 4, 4)}</span>
                           )}
                           {hash && (
                             <a
