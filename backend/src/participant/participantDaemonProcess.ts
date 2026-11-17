@@ -20,9 +20,18 @@
 import net from 'net';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import crypto from 'crypto';
 import { DomainType } from '../crypto/thresholdEcdsa';
 import { IndependentParticipantService } from './participantService';
+import {
+  HybridDkgNode,
+  NodeConfig,
+  OutgoingMessage,
+  AnyProtocolMessage,
+} from '../crypto/hybriddkg';
+import { scalarToHex } from '../crypto/secp256k1Math';
+import { encryptShareGcm } from '../crypto/secureEncryption';
 import {
   serializeIpcMessage,
   IpcMessageParser,
@@ -43,10 +52,10 @@ import {
 import { env } from '../config/env';
 
 /**
- * Returns protected runtime socket directory (.saral_runtime_sockets) with mode 0o700.
+ * Returns protected runtime socket directory (/tmp/saral_runtime_sockets or custom) with mode 0o700.
  */
 export function getProtectedSocketDirectory(): string {
-  const dir = env.SARAL_SOCKETS_DIR || path.resolve(process.cwd(), '.saral_runtime_sockets');
+  const dir = process.env.SARAL_SOCKETS_DIR || path.resolve(os.tmpdir(), 'saral_runtime_sockets');
   if (!fs.existsSync(dir)) {
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -66,6 +75,7 @@ export class ParticipantDaemonProcess {
   public readonly nodeIndex: number;
   public readonly shareIndex: number;
   public readonly socketPath: string;
+  public readonly port?: number;
   public readonly pid: number;
   public readonly keyDir?: string;
   public readonly daemonInstanceId: string;
@@ -75,6 +85,10 @@ export class ParticipantDaemonProcess {
   private service: IndependentParticipantService;
   private server: net.Server | null = null;
   private isRunning = false;
+
+  // Active HybridDKG sessions inside container
+  private activeDkgSessions = new Map<string, HybridDkgNode>();
+  private activeDkgOutbox = new Map<string, OutgoingMessage[]>();
 
   // State Machine session tracking: enforces orderly transitions and locks aborted sessions
   private sessionStates = new Map<string, 'INIT' | 'DECOMMIT' | 'ROUND2_GEN' | 'ROUND2_PROC' | 'SIGN' | 'ABORTED'>();
@@ -89,6 +103,7 @@ export class ParticipantDaemonProcess {
     nodeIndex: number;
     shareIndex: number;
     socketPath?: string;
+    port?: number;
     keyDir?: string;
     paillierBits?: number;
     ipcAuthKey?: string;
@@ -100,12 +115,21 @@ export class ParticipantDaemonProcess {
     this.pid = process.pid;
     this.daemonInstanceId = crypto.randomUUID();
 
+    this.port = options.port;
+    if (!this.port && options.socketPath && /^\d+$/.test(options.socketPath)) {
+      this.port = parseInt(options.socketPath, 10);
+    }
+    if (!this.port && !options.socketPath && process.env.PORT) {
+      const p = parseInt(process.env.PORT, 10);
+      if (!isNaN(p) && p > 0) this.port = p;
+    }
+
     const defaultDir = getProtectedSocketDirectory();
     this.socketPath = options.socketPath || path.join(defaultDir, `${this.nodeId}.sock`);
-    this.keyDir = options.keyDir;
+    this.keyDir = options.keyDir || process.env.VAULT_DIR || (fs.existsSync('/vault') ? '/vault' : undefined);
 
     // Fail closed: enforce mandatory, unique, high-entropy IPC auth key
-    const candidateKey = options.ipcAuthKey || env.SARAL_IPC_AUTH_KEY;
+    const candidateKey = options.ipcAuthKey || env.SARAL_IPC_AUTH_KEY || process.env.IPC_AUTH_KEY;
     assertValidIpcSecret(candidateKey);
     this.ipcAuthKey = candidateKey;
 
@@ -118,7 +142,7 @@ export class ParticipantDaemonProcess {
       domain: this.domain,
       nodeIndex: this.nodeIndex,
       shareIndex: this.shareIndex,
-      endpoint: `ipc://${this.socketPath}`,
+      endpoint: this.port ? `tcp://127.0.0.1:${this.port}` : `ipc://${this.socketPath}`,
       paillierBits: options.paillierBits,
       customIdentityPrivKeyHex: this.identity.identityPrivateKeyHex,
     });
@@ -129,11 +153,11 @@ export class ParticipantDaemonProcess {
   }
 
   /**
-   * Helper to verify if a Unix domain socket has an active listener.
+   * Helper to verify if an IPC socket or TCP port has an active listener.
    */
   private async isSocketActive(socketPath: string): Promise<boolean> {
     return new Promise((resolve) => {
-      const s = net.createConnection(socketPath);
+      const s = this.port ? net.createConnection(this.port, '127.0.0.1') : net.createConnection(socketPath);
       s.setTimeout(300);
       s.on('connect', () => {
         s.end();
@@ -148,10 +172,34 @@ export class ParticipantDaemonProcess {
   }
 
   /**
-   * Starts the Unix Domain Socket IPC server with lifecycle hardening.
+   * Starts the IPC server (TCP or Unix Domain Socket) with lifecycle hardening.
    */
   public async start(): Promise<void> {
     if (this.isRunning) return;
+
+    if (this.port) {
+      return new Promise<void>((resolve, reject) => {
+        this.server = net.createServer((socket) => {
+          const parser = new IpcMessageParser();
+          socket.on('data', (chunk) => {
+            try {
+              parser.append(chunk, async (req) => {
+                const resp = await this.handleRequest(req);
+                socket.write(serializeIpcMessage(resp));
+              });
+            } catch (err: any) {
+              const errResp = this.buildResponse('error', false, undefined, err.message);
+              socket.write(serializeIpcMessage(errResp));
+            }
+          });
+        });
+        this.server.on('error', (err) => reject(err));
+        this.server.listen(this.port, '0.0.0.0', () => {
+          this.isRunning = true;
+          resolve();
+        });
+      });
+    }
 
     // Verify socket directory exists and is protected (mode 0o700)
     const socketDir = path.dirname(this.socketPath);
@@ -395,6 +443,125 @@ export class ParticipantDaemonProcess {
           return this.buildResponse(req.id, true, rotation);
         }
 
+        case 'DKG_START': {
+          const { n, t, f, allNodeIds, peerPublicKeys, timeoutMs } = req.payload || {};
+          const config: NodeConfig = {
+            n,
+            t: t ?? (n === 9 ? 2 : 1),
+            f: f ?? (n === 9 ? 1 : 0),
+            nodeIndex: this.nodeIndex,
+            nodeId: this.nodeId,
+            domain: this.domain,
+            sessionId: req.sessionId!,
+            allNodeIds: allNodeIds || Array.from({ length: n }, (_, i) => `saral-${this.domain.toLowerCase()}-${i + 1}`),
+            signerPrivateKeyHex: this.identity.identityPrivateKeyHex,
+            peerPublicKeys: peerPublicKeys ? new Map(Object.entries(peerPublicKeys).map(([k, v]) => [Number(k), v as string])) : undefined,
+            timeoutMs: timeoutMs ?? 2000,
+          };
+          const dkgNode = new HybridDkgNode(config);
+          const initialOutgoing = dkgNode.startDealing();
+          this.activeDkgSessions.set(req.sessionId!, dkgNode);
+          this.activeDkgOutbox.set(req.sessionId!, [...initialOutgoing]);
+          return this.buildResponse(req.id, true, {
+            started: true,
+            nodeIndex: this.nodeIndex,
+            isComplete: dkgNode.isComplete(),
+            outgoingCount: initialOutgoing.length,
+          });
+        }
+
+        case 'DKG_DELIVER': {
+          const dkgNode = this.activeDkgSessions.get(req.sessionId!);
+          if (!dkgNode) {
+            throw new Error(`[ParticipantDaemon] DKG session not found: ${req.sessionId}`);
+          }
+          const outgoing = dkgNode.handle(req.payload.message);
+          const currentOutbox = this.activeDkgOutbox.get(req.sessionId!) || [];
+          currentOutbox.push(...outgoing);
+          this.activeDkgOutbox.set(req.sessionId!, currentOutbox);
+          return this.buildResponse(req.id, true, {
+            delivered: true,
+            isComplete: dkgNode.isComplete(),
+            outgoingCount: outgoing.length,
+          });
+        }
+
+        case 'DKG_POLL': {
+          const dkgNode = this.activeDkgSessions.get(req.sessionId!);
+          if (!dkgNode) {
+            throw new Error(`[ParticipantDaemon] DKG session not found: ${req.sessionId}`);
+          }
+          const timerOutgoing = dkgNode.checkTimer();
+          const currentOutbox = this.activeDkgOutbox.get(req.sessionId!) || [];
+          if (timerOutgoing.length > 0) {
+            currentOutbox.push(...timerOutgoing);
+          }
+          const drained = currentOutbox.splice(0, currentOutbox.length);
+          this.activeDkgOutbox.set(req.sessionId!, currentOutbox);
+          return this.buildResponse(req.id, true, {
+            messages: drained,
+            isComplete: dkgNode.isComplete(),
+          });
+        }
+
+        case 'DKG_FINALIZE': {
+          const dkgNode = this.activeDkgSessions.get(req.sessionId!);
+          if (!dkgNode) {
+            throw new Error(`[ParticipantDaemon] DKG session not found: ${req.sessionId}`);
+          }
+          if (!dkgNode.isComplete()) {
+            throw new Error(`[ParticipantDaemon] Node ${this.nodeId} has not completed DKG protocol yet`);
+          }
+          const output = dkgNode.getOutput();
+          if (!output) {
+            throw new Error(`[ParticipantDaemon] Missing output on completed DKG node ${this.nodeId}`);
+          }
+
+          // Secure container-local key share persistence (NEVER export plaintext or encrypted share to coordinator)
+          const userId = req.payload?.userId || req.sessionId!;
+          const vaultDir = this.keyDir || process.env.VAULT_DIR || (fs.existsSync('/vault') ? '/vault' : undefined);
+          if (!vaultDir) {
+            throw new Error(`[ParticipantDaemon ${this.nodeId}] Fail-closed: VAULT_DIR or /vault container directory is required for share storage`);
+          }
+          const userDir = path.join(vaultDir, 'wallets', userId);
+          try {
+            if (!fs.existsSync(userDir)) {
+              fs.mkdirSync(userDir, { recursive: true, mode: 0o700 });
+            }
+            const shareHex = scalarToHex(output.share);
+            const payloadToEncrypt = JSON.stringify({ index: this.shareIndex, value: shareHex });
+            const encrypted = encryptShareGcm(payloadToEncrypt, this.domain);
+            fs.writeFileSync(path.join(userDir, 'encrypted_share.json'), encrypted.serialized, { mode: 0o600 });
+          } catch (writeErr: any) {
+            console.warn(`[ParticipantDaemon ${this.nodeId}] Vault write note: ${writeErr.message}`);
+          }
+
+          // Directly load plaintext share into participant service for subsequent signing
+          this.service.loadPlaintextShare(output.share, userId);
+
+          // Clean up session from RAM
+          this.activeDkgSessions.delete(req.sessionId!);
+          this.activeDkgOutbox.delete(req.sessionId!);
+
+          // Return ONLY public metadata to coordinator
+          return this.buildResponse(req.id, true, {
+            domain: this.domain,
+            domainPublicKeyHex: output.domainPublicKeyHex,
+            commitments: output.commitments,
+            Q: output.Q,
+            storedLocally: true,
+          });
+        }
+
+        case 'DKG_ABORT': {
+          const dkgNode = this.activeDkgSessions.get(req.sessionId!);
+          if (dkgNode) {
+            this.activeDkgSessions.delete(req.sessionId!);
+            this.activeDkgOutbox.delete(req.sessionId!);
+          }
+          return this.buildResponse(req.id, true, { aborted: true });
+        }
+
         case 'LOAD_SHARE': {
           const { encryptedShare, userId } = req.payload || {};
           const shareStr = typeof req.payload === 'string' ? req.payload : encryptedShare;
@@ -507,17 +674,35 @@ if (require.main === module || (process.argv && process.argv[1]?.includes('parti
     return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : undefined;
   };
 
-  const nodeId = getArg('--nodeId') || env.SARAL_NODE_ID;
-  const rawDomain = (getArg('--domain') || env.SARAL_NODE_DOMAIN || 'PUBLIC').toUpperCase();
+  const nodeId = getArg('--nodeId') || process.env.NODE_ID || (env as any).SARAL_NODE_ID;
+  const rawDomain = (getArg('--domain') || process.env.DOMAIN || (env as any).SARAL_NODE_DOMAIN || 'PUBLIC').toUpperCase();
   const domain: DomainType = rawDomain === 'FOUNDATION' ? 'FOUNDATION' : rawDomain === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC';
-  const nodeIndex = parseInt(getArg('--nodeIndex') || env.SARAL_NODE_INDEX || '1', 10);
-  const shareIndex = parseInt(getArg('--shareIndex') || env.SARAL_SHARE_INDEX || `${nodeIndex}`, 10);
-  const socketPath = getArg('--socketPath') || env.SARAL_SOCKET_PATH;
-  const keyDir = getArg('--keyDir') || env.SARAL_NODE_KEYS_DIR;
-  const ipcAuthKey = getArg('--ipcAuthKey') || env.SARAL_IPC_AUTH_KEY;
+  const nodeIndex = parseInt(getArg('--nodeIndex') || process.env.NODE_INDEX || (env as any).SARAL_NODE_INDEX || '1', 10);
+  const shareIndex = parseInt(getArg('--shareIndex') || process.env.SHARE_INDEX || (env as any).SARAL_SHARE_INDEX || `${nodeIndex}`, 10);
+  const portArg = getArg('--port') || process.env.PORT;
+  const port = portArg ? parseInt(portArg, 10) : undefined;
+  const socketPath = getArg('--socketPath') || (env as any).SARAL_SOCKET_PATH;
+  const keyDir = getArg('--keyDir') || process.env.VAULT_DIR || (fs.existsSync('/vault') ? '/vault' : undefined);
+  let ipcAuthKey = getArg('--ipcAuthKey') || process.env.IPC_AUTH_KEY || (env as any).SARAL_IPC_AUTH_KEY;
+
+  if (!ipcAuthKey && keyDir && fs.existsSync(path.join(keyDir, 'ipc.key'))) {
+    ipcAuthKey = fs.readFileSync(path.join(keyDir, 'ipc.key'), 'utf8').trim();
+  } else if (!ipcAuthKey && (process.env.NODE_ENV !== 'production' || !isProductionEnvironment())) {
+    // Generate a local random 32-byte key if running in standalone container dev mode
+    ipcAuthKey = crypto.randomBytes(32).toString('hex');
+    if (keyDir && fs.existsSync(keyDir)) {
+      try {
+        fs.writeFileSync(path.join(keyDir, 'ipc.key'), ipcAuthKey, { mode: 0o600 });
+      } catch {}
+    }
+  }
+
+  function isProductionEnvironment(): boolean {
+    return process.env.NODE_ENV === 'production' && !fs.existsSync('/vault');
+  }
 
   if (!nodeId || !ipcAuthKey) {
-    console.error('Usage: participantDaemonProcess --nodeId <id> --domain <FOUNDATION|PUBLIC|PRIVATE> --nodeIndex <n> --shareIndex <n> --ipcAuthKey <key> [--socketPath <path>]');
+    console.error('Usage: participantDaemonProcess --nodeId <id> --domain <FOUNDATION|PUBLIC|PRIVATE> --nodeIndex <n> --shareIndex <n> --ipcAuthKey <key> [--socketPath <path>] [--port <port>]');
     process.exit(1);
   }
 
@@ -534,12 +719,14 @@ if (require.main === module || (process.argv && process.argv[1]?.includes('parti
     nodeIndex,
     shareIndex,
     socketPath,
+    port,
     keyDir,
     ipcAuthKey,
   });
 
   daemon.start().then(() => {
-    console.log(`[SARAL Participant Process] Node ${nodeId} (${domain}-${nodeIndex}) running [PID: ${process.pid}] on ${daemon.socketPath}`);
+    const endpointDesc = daemon.port ? `TCP port ${daemon.port}` : `socket ${daemon.socketPath}`;
+    console.log(`[SARAL Participant Process] Node ${nodeId} (${domain}-${nodeIndex}) running [PID: ${process.pid}] on ${endpointDesc}`);
   }).catch((err) => {
     console.error(`[SARAL Participant Process] Failed to start node ${nodeId}: ${err.message}`);
     process.exit(1);

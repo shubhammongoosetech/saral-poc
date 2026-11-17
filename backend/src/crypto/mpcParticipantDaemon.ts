@@ -195,14 +195,14 @@ export class MpcParticipantDaemon {
       throw new Error(`[Daemon ${this.id}] Daemon is not an active participant in session '${config.sessionId}'`);
     }
 
-    // 3. Feldman VSS Self-Verification: Detect if local share was corrupted before signing
+    // 3. DLog Commitment Self-Verification (paper sec 5.3): Detect if local share was corrupted before signing
     if (commitmentsHex && commitmentsHex.length > 0) {
       const isShareValid = verifyShareWithCommitments(
         { index: this.shareIndex, value: this.privateShareValue },
         commitmentsHex
       );
       if (!isShareValid) {
-        throw new Error(`[Daemon ${this.id}] Feldman VSS verification failed: local share corrupted`);
+        throw new Error(`[Daemon ${this.id}] DLog commitment verification failed: local share corrupted`);
       }
     }
 

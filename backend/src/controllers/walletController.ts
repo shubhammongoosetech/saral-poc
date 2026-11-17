@@ -185,7 +185,7 @@ export async function handleGetTransactions(
       select: { txHash: true, toAddress: true, amount: true, status: true, chain: true, createdAt: true },
     });
 
-    const sentTransactions = rawTx.map((t) => ({
+    const sentTransactions = rawTx.map((t: any) => ({
       tx_hash: t.txHash,
       to_address: t.toAddress,
       amount: t.amount,

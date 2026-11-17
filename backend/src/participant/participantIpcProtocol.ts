@@ -31,6 +31,11 @@ export type ParticipantIpcAction =
   | 'PING'
   | 'GET_IDENTITY_POP'
   | 'ROTATE_IDENTITY'
+  | 'DKG_START'
+  | 'DKG_DELIVER'
+  | 'DKG_POLL'
+  | 'DKG_FINALIZE'
+  | 'DKG_ABORT'
   | 'LOAD_SHARE'
   | 'ROUND1_INIT'
   | 'ROUND1_DECOMMIT'
@@ -353,6 +358,42 @@ export function validateActionPayload(action: ParticipantIpcAction, sessionId?: 
     case 'PING':
     case 'GET_IDENTITY_POP':
       // No required complex payload
+      break;
+
+    case 'DKG_START':
+      if (!sessionId || typeof sessionId !== 'string') {
+        throw new Error('[IPC Protocol] Action DKG_START requires non-empty sessionId');
+      }
+      if (!payload || typeof payload !== 'object' || typeof payload.n !== 'number') {
+        throw new Error('[IPC Protocol] Action DKG_START requires valid payload.n');
+      }
+      break;
+
+    case 'DKG_DELIVER':
+      if (!sessionId || typeof sessionId !== 'string') {
+        throw new Error('[IPC Protocol] Action DKG_DELIVER requires non-empty sessionId');
+      }
+      if (!payload || typeof payload !== 'object' || !payload.message) {
+        throw new Error('[IPC Protocol] Action DKG_DELIVER requires payload.message');
+      }
+      break;
+
+    case 'DKG_POLL':
+      if (!sessionId || typeof sessionId !== 'string') {
+        throw new Error('[IPC Protocol] Action DKG_POLL requires non-empty sessionId');
+      }
+      break;
+
+    case 'DKG_FINALIZE':
+      if (!sessionId || typeof sessionId !== 'string') {
+        throw new Error('[IPC Protocol] Action DKG_FINALIZE requires non-empty sessionId');
+      }
+      break;
+
+    case 'DKG_ABORT':
+      if (!sessionId || typeof sessionId !== 'string') {
+        throw new Error('[IPC Protocol] Action DKG_ABORT requires non-empty sessionId');
+      }
       break;
 
     case 'LOAD_SHARE':

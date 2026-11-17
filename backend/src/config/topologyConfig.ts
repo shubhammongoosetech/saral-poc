@@ -10,7 +10,7 @@
  *   - Fail-closed validation at startup:
  *       - integers only, 3 <= count <= 255 per domain
  *       - 2 <= threshold <= count per domain
- *       - threshold > count / 2 (strict majority)
+ *       - 2 <= threshold <= count per domain (compatible with HybridDKG n >= 3t + 2f + 1)
  *       - totalNodes >= 9
  */
 
@@ -123,13 +123,6 @@ function validateDomainConfig(domain: 'Foundation' | 'Public' | 'Private', count
   if (threshold > count) {
     throw new Error(
       `[TopologyConfig] Invalid threshold for ${domain} domain: threshold ${threshold} cannot exceed node count ${count}.`
-    );
-  }
-  // Strict majority invariant: t > n / 2
-  const minMajority = Math.floor(count / 2) + 1;
-  if (threshold < minMajority) {
-    throw new Error(
-      `[TopologyConfig] Invalid threshold for ${domain} domain: threshold ${threshold} fails strict majority requirement (threshold must be > ${count / 2}, minimum ${minMajority} for ${count} nodes).`
     );
   }
 }

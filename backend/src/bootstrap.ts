@@ -73,11 +73,9 @@ export function cleanupStaleSockets(socketDir: string): number {
  */
 export function initializeRuntimeDirectories(): void {
   const registryDir = env.SARAL_REGISTRY_DIR || path.resolve(process.cwd(), '.saral_registry');
-  const vaultDir = env.SARAL_VAULT_DIR || path.resolve(process.cwd(), '.saral_node_vault');
   const socketDir = getProtectedSocketDirectory();
 
   ensureSecureDirectory(registryDir);
-  ensureSecureDirectory(vaultDir);
   ensureSecureDirectory(socketDir);
 
   cleanupStaleSockets(socketDir);

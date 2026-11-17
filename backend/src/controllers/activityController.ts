@@ -73,7 +73,7 @@ export async function handleGetActivityLogs(
           ]);
 
     const merged: MergedActivityEntry[] = [
-      ...accessRows.map((l): MergedActivityEntry => ({
+      ...accessRows.map((l: any): MergedActivityEntry => ({
         kind: 'access',
         sortMs: l.attemptedAt.getTime(),
         data: {
@@ -85,7 +85,7 @@ export async function handleGetActivityLogs(
           lng: l.lng,
         },
       })),
-      ...securityRows.map((s): MergedActivityEntry => ({
+      ...securityRows.map((s: any): MergedActivityEntry => ({
         kind: 'security',
         sortMs: s.createdAt.getTime(),
         data: {

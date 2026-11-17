@@ -218,7 +218,7 @@ export async function generateWallet(userId: string): Promise<{
   const address = mpcWallet.address;
   const publicKey = mpcWallet.aggregatedPublicKeyHex;
 
-  // Store Feldman VSS commitments for share integrity verification in memory
+  // Store DLog commitments (paper sec 5.3) for share integrity verification in memory
   walletCommitmentsStore.set(userId, {
     foundation: mpcWallet.foundation.commitments,
     public: mpcWallet.publicDomain.commitments,
@@ -227,13 +227,17 @@ export async function generateWallet(userId: string): Promise<{
 
   // Dynamic Topology & Rendezvous (HRW) Placement Pinning (Patent Section 2.2)
   const topology = buildClusterTopology(config);
-  const placement = computeWalletPlacement(userId, topology, 1, userId);
+  const placement = computeWalletPlacement(userId, topology, 1, userId, {
+    foundation: mpcWallet.foundation.threshold,
+    public: mpcWallet.publicDomain.threshold,
+    private: mpcWallet.privateDomain.threshold,
+  });
   await pinWalletPlacement(prisma, placement);
 
-  // Deploy Nodes across the 3 Domains:
-  await deployDomainShares(userId, 'FOUNDATION', mpcWallet.foundation.shares, foundN, foundT);
-  await deployDomainShares(userId, 'PUBLIC', mpcWallet.publicDomain.shares, pubN, pubT);
-  await deployDomainShares(userId, 'PRIVATE', mpcWallet.privateDomain.shares, privN, privT);
+  // Deploy Nodes across the 3 Domains with effective DKG polynomial thresholds:
+  await deployDomainShares(userId, 'FOUNDATION', mpcWallet.foundation.shares, foundN, mpcWallet.foundation.threshold);
+  await deployDomainShares(userId, 'PUBLIC', mpcWallet.publicDomain.shares, pubN, mpcWallet.publicDomain.threshold);
+  await deployDomainShares(userId, 'PRIVATE', mpcWallet.privateDomain.shares, privN, mpcWallet.privateDomain.threshold);
 
   const solanaAddress = deriveSolanaAddress(publicKey);
 
@@ -247,7 +251,7 @@ export async function generateWallet(userId: string): Promise<{
     derivedAt: Date.now(),
     expiresAt: Date.now() + (env.ACCESS_TOKEN_TTL_SECONDS || 900) * 1000,
     n: pubN,
-    threshold: pubT,
+    threshold: mpcWallet.publicDomain.threshold,
     protocolVersion: 'MPC-secp256k1-v1',
   });
 
@@ -257,8 +261,8 @@ export async function generateWallet(userId: string): Promise<{
   ]);
   console.log(
     `[SARAL MPC] Wallet successfully generated for user ${userId.slice(0, 8)}… — ` +
-    `${config.totalNodes} nodes deployed across Foundation (${foundN}, t=${foundT}), ` +
-    `Public (${pubN}, t=${pubT}), and Private (${privN}, t=${privT}) domains with zero address/key storage.`
+    `${config.totalNodes} nodes deployed across Foundation (${foundN}, t=${mpcWallet.foundation.threshold}), ` +
+    `Public (${pubN}, t=${mpcWallet.publicDomain.threshold}), and Private (${privN}, t=${mpcWallet.privateDomain.threshold}) domains with zero address/key storage.`
   );
 
   return {
@@ -268,7 +272,7 @@ export async function generateWallet(userId: string): Promise<{
     solanaAddress,
     solanaBalance,
     n: pubN,
-    threshold: pubT,
+    threshold: mpcWallet.publicDomain.threshold,
     protocolVersion: 'MPC-secp256k1-v1',
   };
 }
@@ -422,9 +426,20 @@ export async function executeSigningTransaction(
   const placement = await getPinnedWalletPlacement(prisma, userId);
   const activeTopology = getTopologyConfig();
 
-  const foundationThreshold = placement?.foundation.threshold ?? activeTopology.foundation.threshold;
-  const publicThreshold = placement?.public.threshold ?? activeTopology.public.threshold;
-  const privateThreshold = placement?.private.threshold ?? activeTopology.private.threshold;
+  let foundationThreshold = placement?.foundation.threshold;
+  let publicThreshold = placement?.public.threshold;
+  let privateThreshold = placement?.private.threshold;
+
+  if (foundationThreshold === undefined || publicThreshold === undefined || privateThreshold === undefined) {
+    const [foundShare, pubShare, privShare] = await Promise.all([
+      prisma.keyShare.findFirst({ where: { userId, category: { in: getDomainLegacyAliases('FOUNDATION') } } }),
+      prisma.keyShare.findFirst({ where: { userId, category: { in: getDomainLegacyAliases('PUBLIC') } } }),
+      prisma.keyShare.findFirst({ where: { userId, category: { in: getDomainLegacyAliases('PRIVATE') } } }),
+    ]);
+    foundationThreshold = foundationThreshold ?? foundShare?.threshold ?? activeTopology.foundation.threshold;
+    publicThreshold = publicThreshold ?? pubShare?.threshold ?? activeTopology.public.threshold;
+    privateThreshold = privateThreshold ?? privShare?.threshold ?? activeTopology.private.threshold;
+  }
 
   // 3. Prepare Unsigned Transaction (EVM or Solana)
   const isSolana = chainConfig.type === 'solana';
@@ -494,10 +509,14 @@ export async function executeSigningTransaction(
   }
 
   // 4. Retrieve Shares from Nodes for All 3 Domains strictly adhering to pinned quorums
+  const fThreshold = foundationThreshold ?? activeTopology.foundation.threshold;
+  const pThreshold = publicThreshold ?? activeTopology.public.threshold;
+  const uThreshold = privateThreshold ?? activeTopology.private.threshold;
+
   // A. Foundation Quorum
-  const foundationRows = await getDomainKeyShareRows(userId, 'FOUNDATION', foundationThreshold);
-  const publicRows = await getDomainKeyShareRows(userId, 'PUBLIC', publicThreshold);
-  const privateRows = await getDomainKeyShareRows(userId, 'PRIVATE', privateThreshold);
+  const foundationRows = await getDomainKeyShareRows(userId, 'FOUNDATION', fThreshold);
+  const publicRows = await getDomainKeyShareRows(userId, 'PUBLIC', pThreshold);
+  const privateRows = await getDomainKeyShareRows(userId, 'PRIVATE', uThreshold);
 
   // 4. Retrieve Independent MPC Participant Clients for All 3 Domains
   // CRITICAL SECURITY GUARANTEE:
@@ -505,13 +524,13 @@ export async function executeSigningTransaction(
   // Encrypted shares are dispatched to and decrypted strictly within each participant service process.
   // The coordinator interacts exclusively via the AuthenticatedParticipantClient interface.
   const participantClients = await Promise.all([
-    ...foundationRows.map((r) =>
+    ...foundationRows.map((r: any) =>
       nodeCluster.getParticipantClient(userId, 'FOUNDATION', r.shareIndex, r.shareIndex, r.containerName)
     ),
-    ...publicRows.map((r) =>
+    ...publicRows.map((r: any) =>
       nodeCluster.getParticipantClient(userId, 'PUBLIC', r.shareIndex, r.shareIndex, r.containerName)
     ),
-    ...privateRows.map((r) =>
+    ...privateRows.map((r: any) =>
       nodeCluster.getParticipantClient(userId, 'PRIVATE', r.shareIndex, r.shareIndex, r.containerName)
     ),
   ]);

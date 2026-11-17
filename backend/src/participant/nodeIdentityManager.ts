@@ -18,6 +18,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { CURVE_ORDER, scalarMultiplyG } from '../crypto/secp256k1Math';
@@ -77,7 +78,10 @@ export function validateNodeId(nodeId: string): void {
 }
 
 export function getNodeKeysDirectory(): string {
-  const dir = env.SARAL_NODE_KEYS_DIR || path.resolve(process.cwd(), '.saral_node_keys');
+  const dir = process.env.VAULT_DIR || (fs.existsSync('/vault') ? '/vault' : undefined) || (process.env.NODE_ENV === 'test' ? path.resolve(os.tmpdir(), 'saral_test_vault') : undefined);
+  if (!dir) {
+    throw new Error('[NodeIdentityManager] Fail-closed: VAULT_DIR or /vault container directory is required for node identity storage. Host key storage is strictly prohibited.');
+  }
   if (!fs.existsSync(dir)) {
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

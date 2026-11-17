@@ -8,7 +8,7 @@
  *   2. Local Share Decryption: Decryption occurs strictly inside this service's isolated memory space.
  *   3. Zero Leakage: Plaintext shares (s_i, w_i) and private keys are NEVER exposed over network responses, logs, or metrics.
  *   4. Local Ephemeral Nonces: (k_i, gamma_i) are sampled and zeroized locally.
- *   5. Feldman VSS Self-Validation: Validates local share against commitments before entering Round 1.
+ *   5. DLog Commitment Self-Validation (paper sec 5.3): Validates local share against commitments before entering Round 1.
  */
 
 import fs from 'fs';
@@ -166,6 +166,17 @@ export class IndependentParticipantService {
   }
 
   /**
+   * Directly sets the computed Shamir share from completed DKG.
+   */
+  public loadPlaintextShare(shareValue: bigint, userId?: string): void {
+    this.privateShareValue = modN(shareValue);
+    if (userId) {
+      this.tenantShares.set(userId, this.privateShareValue);
+    }
+    this.isShareLoaded = true;
+  }
+
+  /**
    * Helper to set share directly for memory-isolated unit tests where vault files are not present.
    */
   public setShareForTesting(shareValue: bigint): void {
@@ -220,14 +231,14 @@ export class IndependentParticipantService {
       throw new Error(`[Participant ${this.id}] Enrolled identity verification failed: ${ownCheck.reason}`);
     }
 
-    // 3. Feldman VSS Self-Verification
+    // 3. DLog Commitment Self-Verification (paper sec 5.3)
     if (commitmentsHex && commitmentsHex.length > 0) {
       const isShareValid = verifyShareWithCommitments(
         { index: this.shareIndex, value: this.privateShareValue },
         commitmentsHex
       );
       if (!isShareValid) {
-        throw new Error(`[Participant ${this.id}] Feldman VSS verification failed: local share corrupted`);
+        throw new Error(`[Participant ${this.id}] DLog commitment verification failed: local share corrupted`);
       }
     }
 

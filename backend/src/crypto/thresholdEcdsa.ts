@@ -35,7 +35,7 @@ import {
 import { MpcParticipantDaemon } from './mpcParticipantDaemon';
 import { statelessMpcCoordinator } from './mpcCoordinator';
 import { IMpcParticipantClient } from '../participant/participantTransport';
-import { trustedParticipantRegistry } from './participantRegistry';
+import { trustedParticipantRegistry } from '../participant/participantRegistry';
 import { performEnrollmentCeremony } from '../participant/nodeIdentityManager';
 
 export class DaemonClientAdapter implements IMpcParticipantClient {
@@ -102,25 +102,17 @@ export interface MpcSignatureResult {
   };
 }
 
-import {
-  dkgPhase1_generateContribution,
-  dkgPhase1_computeSubShares,
-  dkgPhase2_verifySubShare,
-  dkgPhase3_accumulateShares,
-  dkgComputeDomainPublicKey,
-  runDomainDkgSimulation,
-  DkgResult,
-} from './dkg';
+import { runHybridDomainDkg, DkgResult } from './hybriddkg';
 
 /**
  * Generates an independent domain cryptographic key contribution via
- * Distributed Key Generation (DKG) with Feldman Verifiable Secret Sharing.
+ * Hybrid Distributed Key Generation (HybridDKG - Kate, Huang, Goldberg 2012).
  *
  * CRITICAL PATENT GUARANTEE (Patent Claims 1, 11, [0019]):
  * No single dealer or party ever samples or possesses the domain secret scalar x_d.
  * Each node independently samples a polynomial contribution, shares sub-shares,
  * verifies peer sub-shares against commitments, and accumulates its share S_{d,j}.
- * Emits ONLY the domain public key Q_d and combined Feldman VSS commitments C_k = Sum_i C_{d,i,k}.
+ * Emits ONLY the domain public key Q_d and combined DLog commitments (paper sec 5.3) C_k = Sum_i C_{d,i,k}.
  */
 export function generateDomainKeyContribution(
   domain: DomainType,
@@ -141,7 +133,10 @@ export function generateDomainKeyContribution(
       ? nodeIds
       : Array.from({ length: totalShares }, (_, i) => `saral-${domain.toLowerCase()}-${i + 1}`);
 
-  const dkgResult = runDomainDkgSimulation(domain, ids, threshold);
+  // Distributed Key Generation via Asynchronous HybridDKG (Kate, Huang, Goldberg 2012)
+  const dkgResult: DkgResult = runHybridDomainDkg(domain, ids);
+
+  const effectiveThreshold = dkgResult.threshold;
 
   // Build FieldShares: index 1..totalShares
   const shares: FieldShare[] = [];
@@ -152,9 +147,9 @@ export function generateDomainKeyContribution(
     shares.push({ index: i + 1, value: val });
   }
 
-  // Combined commitments for verification: Sum_i C_{d,i,k} for each k in 0..threshold-1
+  // Combined commitments for verification: Sum_i C_{d,i,k} for each k in 0..effectiveThreshold-1
   const combinedCommitments: string[] = [];
-  for (let k = 0; k < threshold; k++) {
+  for (let k = 0; k < effectiveThreshold; k++) {
     let sumPoint: ReturnType<typeof secp256k1.ProjectivePoint.fromHex> | null = null;
     for (const [, comms] of dkgResult.allCommitments) {
       const c = comms[k];
@@ -170,7 +165,7 @@ export function generateDomainKeyContribution(
   return {
     domain,
     publicKeyPointHex: dkgResult.domainPublicKeyHex,
-    threshold,
+    threshold: effectiveThreshold,
     totalShares,
     shares,
     commitments: combinedCommitments,

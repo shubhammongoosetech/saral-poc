@@ -5,7 +5,7 @@
  *
  * Actions:
  *  1. Truncates all PostgreSQL database tables (users, mfa, policy, key_shares, logs, txs, otps).
- *  2. Deletes all local node vault share files (.saral_node_vault/*.vault).
+ *  2. Prunes and removes node Docker volumes.
  *  3. Attempts to remove any Docker share containers if Docker is available.
  */
 
@@ -50,22 +50,27 @@ async function clearPostgres() {
   }
 }
 
-async function clearNodeVault() {
-  const vaultDir = path.resolve(__dirname, '../../.saral_node_vault');
-  console.log(`🧹 Clearing local node vault files in: ${vaultDir}`);
-
-  if (fs.existsSync(vaultDir)) {
-    const files = await fs.promises.readdir(vaultDir);
-    let count = 0;
-    for (const file of files) {
-      if (file.endsWith('.vault') || file.endsWith('.json')) {
-        await fs.promises.unlink(path.join(vaultDir, file));
-        count++;
+async function clearDockerVolumes() {
+  console.log('🧹 Checking for SARAL node Docker volumes...');
+  try {
+    const { stdout } = await execFileAsync('docker', [
+      'volume',
+      'ls',
+      '-q',
+      '--filter', 'name=saral',
+    ]);
+    const volumes = stdout.trim().split('\n').filter(Boolean);
+    if (volumes.length > 0) {
+      console.log(`Found ${volumes.length} SARAL node volume(s). Removing...`);
+      for (const vol of volumes) {
+        await execFileAsync('docker', ['volume', 'rm', '-f', vol]).catch(() => {});
       }
+      console.log('✅ Removed SARAL node Docker volumes.');
+    } else {
+      console.log('ℹ️ No SARAL node Docker volumes found.');
     }
-    console.log(`✅ Cleared ${count} node vault share file(s).`);
-  } else {
-    console.log('ℹ️ Node vault directory is already clean.');
+  } catch {
+    console.log('ℹ️ Docker daemon is not active; skipped Docker volume cleanup.');
   }
 }
 
@@ -99,7 +104,7 @@ async function main() {
   console.log('═══════════════════════════════════════════════════════');
 
   await clearPostgres();
-  await clearNodeVault();
+  await clearDockerVolumes();
   await clearDockerContainers();
 
   console.log('═══════════════════════════════════════════════════════');

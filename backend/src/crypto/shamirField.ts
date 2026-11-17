@@ -6,7 +6,7 @@
  *
  * Features:
  *  - Polynomial evaluation & interpolation strictly modulo curve order n.
- *  - Feldman Verifiable Secret Sharing (VSS) point commitments.
+ *  - DLog point commitments (paper sec 5.3).
  *  - Lagrange basis coefficient derivation for non-reconstructing MPC.
  *  - Tamper & invalid share detection.
  */
@@ -28,7 +28,7 @@ export interface FieldShare {
 
 export interface VerifiableSecretSharingResult {
   shares: FieldShare[];
-  commitments: string[]; // Feldman commitments C_k = a_k * G in hex
+  commitments: string[]; // DLog commitments (paper sec 5.3) C_k = a_k * G in hex
   threshold: number;
   totalShares: number;
 }
@@ -51,7 +51,7 @@ export function evaluatePolynomial(coefficients: bigint[], x: bigint): bigint {
 
 /**
  * Splits a secret scalar into N shares with threshold T over F_n.
- * Generates Feldman VSS commitments C_k = a_k * G for share verification.
+ * Generates DLog commitments (paper sec 5.3) C_k = a_k * G for share verification.
  */
 export function splitSecretField(
   secret: bigint,
@@ -76,7 +76,7 @@ export function splitSecretField(
     coefficients.push(randomScalar());
   }
 
-  // Feldman commitments C_k = a_k * G
+  // DLog commitments (paper sec 5.3) C_k = a_k * G
   const commitments: string[] = coefficients.map((coeff) => {
     const pt = scalarMultiplyG(coeff);
     return pt.toHex(true);
@@ -99,7 +99,7 @@ export function splitSecretField(
 }
 
 /**
- * Verifies that a given share (index, value) matches the Feldman commitments.
+ * Verifies that a given share (index, value) matches the DLog commitments (paper sec 5.3).
  * Check: value * G == sum_{k=0}^{T-1} (index^k) * C_k
  */
 export function verifyShareWithCommitments(

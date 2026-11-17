@@ -29,9 +29,8 @@ import { encryptShareGcm, decryptShareGcm } from '../crypto/secureEncryption';
 import { hexToScalar, scalarMultiplyG } from '../crypto/secp256k1Math';
 import { MpcParticipantDaemon } from '../crypto/mpcParticipantDaemon';
 import { AuthenticatedParticipantClient } from '../participant/participantClient';
-import { trustedParticipantRegistry } from '../crypto/participantRegistry';
+import { trustedParticipantRegistry } from '../participant/participantRegistry';
 import { getProtectedSocketDirectory } from '../participant/participantDaemonProcess';
-import { nodeFileStore } from '../storage/fileStore';
 import { env } from '../config/env';
 
 const execFileAsync = promisify(execFile);
@@ -186,164 +185,10 @@ export function buildLegacyContainerName(
   return `saral-share-${shortId}-${category.toLowerCase()}-${shareIndex}`;
 }
 
-// Sandboxed Isolated Storage Directory
-export function getSandboxVaultRoot(): string {
-  const vaultRoot = env.SARAL_VAULT_DIR || path.resolve(process.cwd(), '.saral_node_vault');
-  if (!fs.existsSync(vaultRoot)) {
-    try {
-      fs.mkdirSync(vaultRoot, { recursive: true, mode: 0o700 });
-      fs.chmodSync(vaultRoot, 0o700);
-    } catch {}
-  }
-  return vaultRoot;
-}
-
-/**
- * Generates an HMAC-SHA256 integrity tag over the stored encrypted share
- */
-function computeIntegrityTag(nodeName: string, data: string): string {
-  return crypto.createHmac('sha256', nodeName).update(data).digest('hex');
-}
-
 // Storage Driver Implementations
 
 /**
- * Driver 1: Isolated Encrypted Vault (Multi-process / Standalone / Sandbox safe)
- */
-class SandboxNodeDriver {
-  private getFilePath(nodeName: string): string {
-    return path.join(getSandboxVaultRoot(), `${nodeName}.vault`);
-  }
-
-  private getTenantShareDir(nodeName: string, userId: string): string {
-    const dir = path.join(getSandboxVaultRoot(), nodeName, 'wallets', userId);
-    if (!fs.existsSync(dir)) {
-      try {
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        fs.chmodSync(dir, 0o700);
-      } catch {}
-    }
-    return dir;
-  }
-
-  private getTenantSharePath(nodeName: string, userId: string): string {
-    return path.join(this.getTenantShareDir(nodeName, userId), 'encrypted_share.json');
-  }
-
-  async writeShare(
-    nodeName: string,
-    encryptedShare: string,
-    domain: DomainType,
-    userId?: string
-  ): Promise<NodeInstanceInfo> {
-    const integrityTag = computeIntegrityTag(nodeName, encryptedShare);
-    const payload = JSON.stringify({
-      nodeName,
-      domain,
-      userId: userId || 'default',
-      encryptedShare,
-      integrityTag,
-      updatedAt: new Date().toISOString(),
-    });
-
-    if (userId) {
-      const tenantPath = this.getTenantSharePath(nodeName, userId);
-      await fs.promises.writeFile(tenantPath, payload, { mode: 0o600 });
-    }
-
-    // Also write primary node vault for single-tenant / backward-compatibility
-    const filePath = this.getFilePath(nodeName);
-    await fs.promises.writeFile(filePath, payload, { mode: 0o600 });
-    const nodeId = crypto.createHash('sha256').update(nodeName).digest('hex').slice(0, 12);
-
-    return {
-      nodeId,
-      nodeName,
-      domain,
-      nodeIndex: parseInt(nodeName.split('-').pop() || '1', 10),
-      driver: 'sandbox',
-      status: 'ONLINE',
-      lastHealthCheck: new Date().toISOString(),
-      latencyMs: 1,
-    };
-  }
-
-  async readShare(nodeName: string, userId?: string): Promise<string> {
-    let filePath = this.getFilePath(nodeName);
-
-    if (userId) {
-      const tenantPath = path.join(getSandboxVaultRoot(), nodeName, 'wallets', userId, 'encrypted_share.json');
-      if (fs.existsSync(tenantPath)) {
-        filePath = tenantPath;
-      } else if (!fs.existsSync(filePath)) {
-        throw new Error(`[SandboxNodeDriver] Share not found for user '${userId}' on node '${nodeName}'`);
-      }
-    }
-
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`[SandboxNodeDriver] Node vault file not found: ${nodeName}`);
-    }
-
-    const content = await fs.promises.readFile(filePath, 'utf8');
-    const parsed = JSON.parse(content);
-
-    // Enforce tenant isolation if user was specified
-    if (userId && parsed.userId && parsed.userId !== 'default' && parsed.userId !== userId) {
-      throw new Error(
-        `[SandboxNodeDriver] Cross-tenant access violation: user '${userId}' attempted to access share belonging to '${parsed.userId}' on node '${nodeName}'`
-      );
-    }
-
-    // Verify HMAC integrity tag to detect external file tampering
-    const expectedTag = computeIntegrityTag(nodeName, parsed.encryptedShare);
-    if (parsed.integrityTag !== expectedTag) {
-      throw new Error(`[SandboxNodeDriver] Node integrity verification failed for ${nodeName}: corrupted or tampered share`);
-    }
-
-    return parsed.encryptedShare;
-  }
-
-  async checkHealth(nodeName: string): Promise<NodeHealthReport> {
-    const start = Date.now();
-    const filePath = this.getFilePath(nodeName);
-    const nodeDir = path.join(getSandboxVaultRoot(), nodeName);
-    const exists = fs.existsSync(filePath) || fs.existsSync(nodeDir);
-    const latency = Date.now() - start;
-
-    return {
-      nodeName,
-      domain: nodeName.includes('foundation') ? 'FOUNDATION' : nodeName.includes('private') ? 'PRIVATE' : 'PUBLIC',
-      nodeIndex: parseInt(nodeName.split('-').pop() || '1', 10),
-      healthy: exists,
-      driver: 'sandbox',
-      latencyMs: Math.max(latency, 1),
-      error: exists ? undefined : 'Vault file not initialized',
-    };
-  }
-
-  async deleteShare(nodeName: string, userId?: string): Promise<void> {
-    if (userId) {
-      const tenantPath = path.join(getSandboxVaultRoot(), nodeName, 'wallets', userId, 'encrypted_share.json');
-      if (fs.existsSync(tenantPath)) {
-        await fs.promises.unlink(tenantPath);
-      }
-      const tenantDir = path.join(getSandboxVaultRoot(), nodeName, 'wallets', userId);
-      if (fs.existsSync(tenantDir)) {
-        try {
-          await fs.promises.rmdir(tenantDir);
-        } catch {}
-      }
-    } else {
-      const filePath = this.getFilePath(nodeName);
-      if (fs.existsSync(filePath)) {
-        await fs.promises.unlink(filePath);
-      }
-    }
-  }
-}
-
-/**
- * Driver 2: Docker Container Driver (Alpine Container per Share)
+ * Docker Container Driver for Isolated Container Daemons
  */
 class DockerNodeDriver {
   private isAvailable: boolean | null = null;
@@ -394,13 +239,14 @@ class DockerNodeDriver {
         'run',
         '--detach',
         '--name', nodeName,
-        '--network', 'none',
+        '--network', 'saral-net',
         '--restart', 'unless-stopped',
         '--env', `NODE_NAME=${nodeName}`,
+        '--env', `NODE_ID=${nodeName}`,
         '--env', `DOMAIN=${domain}`,
+        '--env', 'VAULT_DIR=/vault',
         '--volume', `${nodeName}_data:/vault`,
-        'alpine',
-        'tail', '-f', '/dev/null',
+        'saral-node:latest',
       ]);
     } catch (err: any) {
       console.warn(`[DockerNodeDriver] Container initialization warning for ${nodeName}: ${err.message}`);
@@ -533,7 +379,6 @@ class DockerNodeDriver {
 
 export class NodeClusterManager {
   private dockerDriver = new DockerNodeDriver();
-  private sandboxDriver = new SandboxNodeDriver();
   private daemons = new Map<string, MpcParticipantDaemon>();
   private childProcesses = new Map<string, ChildProcess>();
   private participantClients = new Map<string, AuthenticatedParticipantClient>();
@@ -794,25 +639,6 @@ export class NodeClusterManager {
   ): Promise<{ totalNodes: number; initialized: number }> {
     const topo = getInfrastructureTopology(customTopology);
 
-    // Verify existing node data directories match the configured topology count
-    const vaultRoot = getSandboxVaultRoot();
-    if (fs.existsSync(vaultRoot)) {
-      try {
-        const existingEntries = fs.readdirSync(vaultRoot).filter((f) => {
-          try {
-            return fs.statSync(path.join(vaultRoot, f)).isDirectory() && f.startsWith('saral-');
-          } catch {
-            return false;
-          }
-        });
-        if (existingEntries.length > 0 && existingEntries.length !== topo.TOTAL) {
-          console.warn(
-            `[NodeCluster] Topology mismatch: found ${existingEntries.length} existing node data directories but current .env topology requires ${topo.TOTAL} nodes. Nodes will be updated according to current .env.`
-          );
-        }
-      } catch {}
-    }
-
     const topology = [
       { domain: 'FOUNDATION' as const, count: topo.FOUNDATION.count },
       { domain: 'PUBLIC' as const, count: topo.PUBLIC.count },
@@ -864,8 +690,6 @@ export class NodeClusterManager {
           });
         }
 
-        // Write initial health record for sandbox driver if not exists
-        await this.sandboxDriver.writeShare(nodeId, 'INIT', domain);
         initialized++;
       }
     }
@@ -995,11 +819,16 @@ export class NodeClusterManager {
 
   /**
    * Automatically selects the active storage driver.
-   * If Docker daemon is responsive, uses Docker; otherwise falls back to Isolated Sandbox Vault.
+   * Fails closed if Docker daemon is not running.
    */
-  async getPreferredDriver(): Promise<'docker' | 'sandbox'> {
+  async getPreferredDriver(): Promise<'docker'> {
     const dockerOk = await this.dockerDriver.checkDockerDaemon();
-    return dockerOk ? 'docker' : 'sandbox';
+    if (!dockerOk) {
+      throw new Error(
+        '[NodeCluster] Fail-closed: Docker daemon is unavailable. MPC node key operations require active container isolation.'
+      );
+    }
+    return 'docker';
   }
 
   /**
@@ -1012,27 +841,12 @@ export class NodeClusterManager {
     encryptedShare: string
   ): Promise<NodeInstanceInfo> {
     const nodeName = buildInfrastructureNodeId(domain, nodeIndex);
-    const driver = await this.getPreferredDriver();
-
-    if (driver === 'docker') {
-      try {
-        return await this.dockerDriver.writeShare(nodeName, encryptedShare, domain, userId);
-      } catch (err: any) {
-        console.warn(`[NodeCluster] Docker write failed for ${nodeName}, using sandbox fallback: ${err.message}`);
-      }
-    }
-
-    // Also write to hardened per-node encrypted FileStore (data/<domain>/<nodeName>/wallets/<userId>/share.enc)
-    try {
-      nodeFileStore.writeShare(domain, nodeName, userId, 1, nodeIndex, encryptedShare);
-    } catch {}
-
-    return await this.sandboxDriver.writeShare(nodeName, encryptedShare, domain, userId);
+    await this.getPreferredDriver();
+    return await this.dockerDriver.writeShare(nodeName, encryptedShare, domain, userId);
   }
 
   /**
-   * Retrieves an encrypted share from a specific node for a specific tenant.
-   * Checks both Docker and Sandbox Vault for maximum resilience.
+   * Retrieves an encrypted share from a specific node container for a specific tenant.
    */
   async retrieveShareFromNode(
     userId: string,
@@ -1041,12 +855,8 @@ export class NodeClusterManager {
     containerNameHint?: string
   ): Promise<string> {
     const primaryName = buildInfrastructureNodeId(domain, nodeIndex);
+    await this.getPreferredDriver();
 
-    // 0. Try hardened per-node FileStore first
-    try {
-      const stored = nodeFileStore.readShare(domain, primaryName, userId);
-      if (stored && stored.plaintextShare) return stored.plaintextShare;
-    } catch {}
     const candidateNames = [
       primaryName,
       containerNameHint,
@@ -1054,27 +864,15 @@ export class NodeClusterManager {
       buildLegacyContainerName(userId, domain === 'FOUNDATION' ? 'INSTITUTIONAL' : domain === 'PRIVATE' ? 'SOVEREIGN' : 'PUBLIC', nodeIndex),
     ].filter(Boolean) as string[];
 
-    // 1. Try Docker if active
-    const dockerOk = await this.dockerDriver.checkDockerDaemon();
-    if (dockerOk) {
-      for (const name of candidateNames) {
-        try {
-          const share = await this.dockerDriver.readShare(name, userId);
-          if (share) return share;
-        } catch {}
-      }
-    }
-
-    // 2. Try Sandbox Vault
     for (const name of candidateNames) {
       try {
-        const share = await this.sandboxDriver.readShare(name, userId);
+        const share = await this.dockerDriver.readShare(name, userId);
         if (share) return share;
       } catch {}
     }
 
     throw new Error(
-      `[NodeCluster] Share could not be retrieved from node ${primaryName} for user ${userId} (tried candidate names: ${candidateNames.join(', ')})`
+      `[NodeCluster] Share could not be retrieved from Docker container ${primaryName} for user ${userId} (tried candidate names: ${candidateNames.join(', ')})`
     );
   }
 
@@ -1104,25 +902,22 @@ export class NodeClusterManager {
   }
 
   /**
-   * Batch reads shares for multiple nodes efficiently.
+   * Batch reads shares for multiple nodes efficiently from Docker containers.
    */
   async retrieveSharesBatch(
     nodes: Array<{ userId: string; domain: DomainType; nodeIndex: number; containerName: string }>
   ): Promise<Map<string, string>> {
     const results = new Map<string, string>();
-    const dockerOk = await this.dockerDriver.checkDockerDaemon();
+    await this.getPreferredDriver();
 
-    if (dockerOk) {
-      const dockerNames = nodes.map((n) => n.containerName);
-      try {
-        const dockerResults = await this.dockerDriver.readSharesBatch(dockerNames);
-        for (const [k, v] of dockerResults.entries()) {
-          results.set(k, v);
-        }
-      } catch {}
-    }
+    const dockerNames = nodes.map((n) => n.containerName);
+    try {
+      const dockerResults = await this.dockerDriver.readSharesBatch(dockerNames);
+      for (const [k, v] of dockerResults.entries()) {
+        results.set(k, v);
+      }
+    } catch {}
 
-    // Fallback for any missing items
     for (const node of nodes) {
       if (!results.has(node.containerName)) {
         try {
@@ -1174,46 +969,22 @@ export class NodeClusterManager {
     // 1. Foundation nodes
     for (let i = 1; i <= topo.FOUNDATION.count; i++) {
       const nodeName = buildInfrastructureNodeId('FOUNDATION', i);
-      let healthy = false;
-      if (driver === 'docker') {
-        const res = await this.dockerDriver.checkHealth(nodeName);
-        healthy = res.healthy;
-      }
-      if (!healthy) {
-        const res = await this.sandboxDriver.checkHealth(nodeName);
-        healthy = res.healthy;
-      }
-      if (healthy) domainStats.FOUNDATION.online += 1;
+      const res = await this.dockerDriver.checkHealth(nodeName);
+      if (res.healthy) domainStats.FOUNDATION.online += 1;
     }
 
     // 2. Public nodes
     for (let i = 1; i <= topo.PUBLIC.count; i++) {
       const nodeName = buildInfrastructureNodeId('PUBLIC', i);
-      let healthy = false;
-      if (driver === 'docker') {
-        const res = await this.dockerDriver.checkHealth(nodeName);
-        healthy = res.healthy;
-      }
-      if (!healthy) {
-        const res = await this.sandboxDriver.checkHealth(nodeName);
-        healthy = res.healthy;
-      }
-      if (healthy) domainStats.PUBLIC.online += 1;
+      const res = await this.dockerDriver.checkHealth(nodeName);
+      if (res.healthy) domainStats.PUBLIC.online += 1;
     }
 
     // 3. Private nodes
     for (let i = 1; i <= topo.PRIVATE.count; i++) {
       const nodeName = buildInfrastructureNodeId('PRIVATE', i);
-      let healthy = false;
-      if (driver === 'docker') {
-        const res = await this.dockerDriver.checkHealth(nodeName);
-        healthy = res.healthy;
-      }
-      if (!healthy) {
-        const res = await this.sandboxDriver.checkHealth(nodeName);
-        healthy = res.healthy;
-      }
-      if (healthy) domainStats.PRIVATE.online += 1;
+      const res = await this.dockerDriver.checkHealth(nodeName);
+      if (res.healthy) domainStats.PRIVATE.online += 1;
     }
 
     const isHealthy =
@@ -1250,7 +1021,6 @@ export class NodeClusterManager {
         this.participantClients.delete(key);
 
         await this.dockerDriver.deleteShare(nodeId, userId);
-        await this.sandboxDriver.deleteShare(nodeId, userId);
       }
     }
   }

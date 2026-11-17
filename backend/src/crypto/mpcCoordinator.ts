@@ -35,7 +35,7 @@ import {
   IMpcParticipantClient,
   verifyParticipantSignature,
 } from '../participant/participantTransport';
-import { trustedParticipantRegistry } from './participantRegistry';
+import { trustedParticipantRegistry } from '../participant/participantRegistry';
 
 export class StatelessMpcCoordinator {
   /**

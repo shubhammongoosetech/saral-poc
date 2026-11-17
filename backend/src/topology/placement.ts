@@ -111,7 +111,8 @@ export function computeWalletPlacement(
   walletId: string,
   topology: ClusterTopology,
   epoch: number = 1,
-  userId?: string
+  userId?: string,
+  thresholdOverrides?: { foundation?: number; public?: number; private?: number }
 ): WalletPlacement {
   // Select nodes per domain via HRW hashing
   const foundationNodes = selectNodesHrw(
@@ -145,17 +146,17 @@ export function computeWalletPlacement(
     foundation: {
       domain: 'FOUNDATION',
       assignedNodeIds: foundationNodes,
-      threshold: topology.foundation.threshold,
+      threshold: thresholdOverrides?.foundation ?? topology.foundation.threshold,
     },
     public: {
       domain: 'PUBLIC',
       assignedNodeIds: publicNodes,
-      threshold: topology.public.threshold,
+      threshold: thresholdOverrides?.public ?? topology.public.threshold,
     },
     private: {
       domain: 'PRIVATE',
       assignedNodeIds: privateNodes,
-      threshold: topology.private.threshold,
+      threshold: thresholdOverrides?.private ?? topology.private.threshold,
     },
     manifestHash,
     pinnedAt: new Date().toISOString(),

@@ -38,7 +38,7 @@ Supports **EVM Chains** (MST Testnet, Polygon Amoy) and **Solana Devnet** via mo
 * **Single Source of Truth Dynamic Topology (`topologyConfig.ts`)**:
   Node counts and thresholds are configured solely via the six `SARAL_*` variables in `backend/.env` (minimum 3 nodes per domain, strict majority $t > n/2$, max 255). Total cluster size is computed dynamically ($N = N_F + N_P + N_V = 27$). Client overrides are strictly rejected by Zod schema validation.
 * **Distributed Key Generation (DKG) without a Trusted Dealer**:
-  Uses Feldman Verifiable Secret Sharing (VSS). Nodes independently generate secret polynomials, exchange verifiable sub-shares, and aggregate public commitments. The aggregated public key is derived via elliptic curve point addition:
+  Uses asynchronous HybridDKG (*Distributed Key Generation in the Wild*, Kate, Huang, Goldberg 2012) with DLog point commitments (paper sec 5.3). Nodes independently generate symmetric bivariate polynomials, exchange verifiable sub-shares via reliable broadcast, and aggregate public commitments. The aggregated public key is derived via elliptic curve point addition:
   $$Q = Q_{\text{Foundation}} + Q_{\text{Public}} + Q_{\text{Private}}$$
   The EVM Ethereum address is computed from $Q$ (`ethers.computeAddress(Q)`).
 * **Zero-Address & Zero-Key Database Storage (`sessionWalletRegistry.ts`)**:
@@ -77,7 +77,7 @@ SARAL natively supports multi-chain operations across different cryptographic cu
 | **Frontend** | React 18, TypeScript, Vite 6, React Router DOM 6, Axios, Lucide Icons |
 | **Backend** | Node.js (v26+), TypeScript, Express 5, Prisma ORM 6, `tsx`, Helmet, `express-rate-limit`, Zod 3/4 |
 | **SDK Packages** | `@saral-sdk/core`, `@saral-sdk/node`, `@saral-sdk/react`, Vitest, Changesets |
-| **Cryptography** | `@noble/curves` (secp256k1, ed25519), `ethers` v6, `@solana/web3.js`, `bs58`, Feldman VSS, Paillier MtA, AES-256-GCM, HKDF-SHA256 |
+| **Cryptography** | `@noble/curves` (secp256k1, ed25519), `ethers` v6, `@solana/web3.js`, `bs58`, HybridDKG (Kate et al. 2012), Paillier MtA, AES-256-GCM, HKDF-SHA256 |
 | **Database** | PostgreSQL 16 (Local or Docker container via `docker-compose.yml`) |
 | **Authentication** | Google OAuth 2.0 (`google-auth-library`), Mobile SMS OTP, 2FA MFA, JWT (httpOnly cookies) |
 | **Storage & Nodes** | 27 Isolated Docker containers (`saral-foundation-1..9`, `saral-public-1..9`, `saral-private-1..9`) |
@@ -106,7 +106,6 @@ saral-poc/
 │   │   ├── participant/                  # MPC participant daemons, nodeIdentityManager
 │   │   ├── routes/                       # auth, mfa, profile, wallet, topology, activity
 │   │   ├── services/                     # authService, walletService, sessionWalletRegistry, locationService, chainService
-│   │   ├── storage/                      # Hardened per-node encrypted FileStore
 │   │   ├── topology/                     # HRW rendezvous placement, allocation, apply
 │   │   ├── utils/                        # jwt, crypto, errors, logger, validation
 │   │   ├── app.ts                        # Express app setup & middleware
@@ -420,7 +419,7 @@ SARAL provides a modular monorepo SDK under `packages/` for client-side and serv
 ### 1. `@saral-sdk/core` (`packages/sdk-core`)
 Core cryptographic types, mathematical functions, multi-chain adapters, and policy interfaces:
 * `EvmChainAdapter` & `SolanaChainAdapter`
-* Feldman VSS verification & Lagrange interpolation utilities
+* DLog commitment verification & Lagrange interpolation utilities
 * Cross-curve address derivation (`deriveSolanaAddress`, `deriveSolanaKeypair`)
 
 ### 2. `@saral-sdk/node` (`packages/sdk-node`)

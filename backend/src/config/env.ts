@@ -52,9 +52,6 @@ const envSchema = z.object({
 
   // System runtime directories and secrets (centralized so process.env.SARAL_ is only read in config/)
   SARAL_REGISTRY_DIR: z.string().default(path.resolve(process.cwd(), '.saral_registry')),
-  SARAL_VAULT_DIR: z.string().default(path.resolve(process.cwd(), '.saral_node_vault')),
-  SARAL_SOCKETS_DIR: z.string().default(path.resolve(process.cwd(), '.saral_runtime_sockets')),
-  SARAL_NODE_KEYS_DIR: z.string().default(path.resolve(process.cwd(), '.saral_node_keys')),
   SARAL_REGISTRY_ADMIN_SECRET: z.string().optional(),
   SARAL_IPC_AUTH_KEY: z.string().optional(),
   SARAL_NODE_ID: z.string().optional(),
@@ -88,9 +85,6 @@ const rawConfig = {
   SARAL_PERSISTENT_NODE_STORAGE: process.env.SARAL_PERSISTENT_NODE_STORAGE,
 
   SARAL_REGISTRY_DIR: process.env.SARAL_REGISTRY_DIR,
-  SARAL_VAULT_DIR: process.env.SARAL_VAULT_DIR,
-  SARAL_SOCKETS_DIR: process.env.SARAL_SOCKETS_DIR,
-  SARAL_NODE_KEYS_DIR: process.env.SARAL_NODE_KEYS_DIR,
   SARAL_REGISTRY_ADMIN_SECRET: process.env.SARAL_REGISTRY_ADMIN_SECRET,
   SARAL_IPC_AUTH_KEY: process.env.SARAL_IPC_AUTH_KEY,
   SARAL_NODE_ID: process.env.SARAL_NODE_ID,
