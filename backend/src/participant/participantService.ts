@@ -11,8 +11,6 @@
  *   5. DLog Commitment Self-Validation (paper sec 5.3): Validates local share against commitments before entering Round 1.
  */
 
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import {
@@ -27,7 +25,7 @@ import {
   computeLagrangeCoefficient,
   verifyShareWithCommitments,
 } from '../crypto/shamirField';
-import { DomainType } from '../crypto/thresholdEcdsa';
+import { DomainType } from '../types/domain';
 import { decryptShareGcm } from '../crypto/secureEncryption';
 import {
   ParticipantId,

@@ -19,17 +19,11 @@
 import { ethers } from 'ethers';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import {
-  CURVE_ORDER,
   modN,
-  modInverse,
-  randomScalar,
   scalarMultiplyG,
-  G,
-  scalarToHex,
 } from './secp256k1Math';
 import {
   FieldShare,
-  splitSecretField,
   computeLagrangeCoefficient,
 } from './shamirField';
 import { MpcParticipantDaemon } from './mpcParticipantDaemon';
@@ -37,6 +31,9 @@ import { statelessMpcCoordinator } from './mpcCoordinator';
 import { IMpcParticipantClient } from '../participant/participantTransport';
 import { trustedParticipantRegistry } from '../participant/participantRegistry';
 import { performEnrollmentCeremony } from '../participant/nodeIdentityManager';
+import { DomainType } from '../types/domain';
+
+export type { DomainType };
 
 export class DaemonClientAdapter implements IMpcParticipantClient {
   constructor(private daemon: MpcParticipantDaemon) {}
@@ -53,8 +50,6 @@ export class DaemonClientAdapter implements IMpcParticipantClient {
   computePartialSignature(sessionId: string, r: bigint) { return this.daemon.computePartialSignature(sessionId, r); }
   async abortSession(sessionId: string, reason: string): Promise<void> { this.daemon.abortSession(sessionId, reason); }
 }
-
-export type DomainType = 'FOUNDATION' | 'PUBLIC' | 'PRIVATE';
 
 export interface DomainKeySetup {
   domain: DomainType;

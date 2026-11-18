@@ -16,7 +16,7 @@
 import net from 'net';
 import path from 'path';
 import crypto from 'crypto';
-import { DomainType } from '../crypto/thresholdEcdsa';
+import { DomainType } from '../types/domain';
 import {
   ParticipantId,
   MpcSessionConfig,
@@ -26,7 +26,7 @@ import {
   Round2DeltaShareMessage,
   Round3PartialSignatureMessage,
 } from '../crypto/mpcProtocolTypes';
-import { AnyProtocolMessage, OutgoingMessage } from '../crypto/hybriddkg';
+import type { AnyProtocolMessage, OutgoingMessage } from '../crypto/hybriddkg/types';
 import { IMpcParticipantClient } from './participantTransport';
 import { env } from '../config/env';
 import {

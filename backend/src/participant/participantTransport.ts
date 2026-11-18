@@ -15,7 +15,7 @@
 
 import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { DomainType } from '../crypto/thresholdEcdsa';
+import { DomainType } from '../types/domain';
 import {
   ParticipantId,
   MpcSessionConfig,

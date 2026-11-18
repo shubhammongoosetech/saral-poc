@@ -11,7 +11,7 @@
  *   - allocate() is strictly an offline / test helper and is never called at runtime.
  */
 
-import { DomainType } from '../crypto/thresholdEcdsa';
+import { DomainType } from '../types/domain';
 import { getTopologyConfig, TopologyConfig } from '../config/topologyConfig';
 
 export interface TopologyWeights {

@@ -22,8 +22,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { CURVE_ORDER, scalarMultiplyG } from '../crypto/secp256k1Math';
-import { DomainType } from '../crypto/thresholdEcdsa';
-import { env } from '../config/env';
+import { DomainType } from '../types/domain';
 import {
   trustedParticipantRegistry,
   computePoPChallenge,
@@ -78,7 +77,12 @@ export function validateNodeId(nodeId: string): void {
 }
 
 export function getNodeKeysDirectory(): string {
-  const dir = process.env.VAULT_DIR || (fs.existsSync('/vault') ? '/vault' : undefined) || (process.env.NODE_ENV === 'test' ? path.resolve(os.tmpdir(), 'saral_test_vault') : undefined);
+  const dir =
+    process.env.VAULT_DIR ||
+    (fs.existsSync('/vault') ? '/vault' : undefined) ||
+    (process.env.NODE_ENV !== 'production' || process.env.NODE_TEST_CONTEXT
+      ? path.resolve(os.tmpdir(), 'saral_test_vault')
+      : undefined);
   if (!dir) {
     throw new Error('[NodeIdentityManager] Fail-closed: VAULT_DIR or /vault container directory is required for node identity storage. Host key storage is strictly prohibited.');
   }

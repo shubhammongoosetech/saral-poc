@@ -11,8 +11,8 @@
  *   - Cryptographic adherence: Kate, Huang, Goldberg (2012).
  */
 
-import { DomainType } from '../thresholdEcdsa';
-import { AuthenticatedParticipantClient } from '../../participant/participantClient';
+import { DomainType } from '../../types/domain';
+import type { AuthenticatedParticipantClient } from '../../participant/participantClient';
 import { deriveHybridParams } from './hybridDkg';
 import type { DkgResult } from './types';
 

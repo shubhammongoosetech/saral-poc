@@ -18,12 +18,17 @@ import crypto from 'crypto';
 import { ethers } from 'ethers';
 import { Keypair } from '@solana/web3.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { DomainType } from '../crypto/thresholdEcdsa';
+import { DomainType } from '../types/domain';
 import { computeLagrangeCoefficient } from '../crypto/shamirField';
 import { nodeCluster } from './nodeClusterService';
 import { getPinnedWalletPlacement } from '../topology/placement';
 import { prisma } from '../config/db';
 import { env } from '../config/env';
+
+import {
+  deriveTaprootKeysAndParity,
+  encodeBech32mTaprootAddress,
+} from '../tss/protocols/frost-taproot';
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
@@ -63,12 +68,22 @@ export function deriveSolanaAddress(publicKeyHex: string): string {
   return deriveSolanaKeypair(publicKeyHex).publicKey.toBase58();
 }
 
+export function deriveBitcoinTaprootAddress(publicKeyHex: string, network: 'mainnet' | 'testnet' = 'testnet'): string {
+  try {
+    const parity = deriveTaprootKeysAndParity(publicKeyHex);
+    return encodeBech32mTaprootAddress(parity.outputKeyX, network);
+  } catch {
+    return '';
+  }
+}
+
 export interface SessionWalletEntry {
   sessionId: string;
   userId: string;
   address: string;
   publicKey: string;
   solanaAddress: string;
+  bitcoinAddress?: string;
   solanaKeypair?: Keypair;
   derivedAt: number;
   expiresAt: number;
@@ -237,6 +252,7 @@ export async function deriveWalletFromNodes(userId: string): Promise<SessionWall
   const address = ethers.computeAddress(publicKey);
   const solanaKeypair = deriveSolanaKeypair(publicKey);
   const solanaAddress = solanaKeypair.publicKey.toBase58();
+  const bitcoinAddress = deriveBitcoinTaprootAddress(publicKey);
 
   const entry: SessionWalletEntry = {
     sessionId: userId,
@@ -244,6 +260,7 @@ export async function deriveWalletFromNodes(userId: string): Promise<SessionWall
     address,
     publicKey,
     solanaAddress,
+    bitcoinAddress,
     solanaKeypair,
     derivedAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS,

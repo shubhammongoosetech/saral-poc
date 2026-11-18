@@ -7,16 +7,31 @@ import { Badge } from '@/shared/ui/Badge';
 export interface ReceivePanelProps {
   address?: string;
   solanaAddress?: string;
+  bitcoinAddress?: string;
   onClose?: () => void;
 }
 
 export const ReceivePanel: React.FC<ReceivePanelProps> = ({
   address = '',
   solanaAddress = '',
+  bitcoinAddress = '',
 }) => {
-  const [network, setNetwork] = useState<'mst-testnet' | 'solana-devnet'>('mst-testnet');
+  const [network, setNetwork] = useState<'mst-testnet' | 'solana-devnet' | 'bitcoin-taproot'>('mst-testnet');
 
-  const activeAddress = network === 'solana-devnet' ? solanaAddress : address;
+  const activeAddress =
+    network === 'solana-devnet'
+      ? solanaAddress
+      : network === 'bitcoin-taproot'
+      ? bitcoinAddress
+      : address;
+
+  const tabs = [
+    { id: 'mst-testnet', label: 'MST Testnet' },
+    { id: 'solana-devnet', label: 'Solana Devnet' },
+  ];
+  if (bitcoinAddress) {
+    tabs.push({ id: 'bitcoin-taproot', label: 'Bitcoin Taproot' });
+  }
 
   return (
     <Card className="flex flex-col gap-4">
@@ -26,12 +41,9 @@ export const ReceivePanel: React.FC<ReceivePanelProps> = ({
       </div>
 
       <Tabs
-        tabs={[
-          { id: 'mst-testnet', label: 'MST Testnet' },
-          { id: 'solana-devnet', label: 'Solana Devnet' },
-        ]}
+        tabs={tabs}
         activeTab={network}
-        onChange={(id) => setNetwork(id as 'mst-testnet' | 'solana-devnet')}
+        onChange={(id) => setNetwork(id as any)}
       />
 
       <div className="flex flex-col gap-1.5">

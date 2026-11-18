@@ -113,6 +113,94 @@ services:
     networks:
       - saral-net
 
+  saral-foundation-6:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-foundation-6
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4006:4006"
+    environment:
+      - NODE_ID=saral-foundation-6
+      - NODE_NAME=saral-foundation-6
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=6
+      - PORT=4006
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-foundation-6_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-7:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-foundation-7
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4007:4007"
+    environment:
+      - NODE_ID=saral-foundation-7
+      - NODE_NAME=saral-foundation-7
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=7
+      - PORT=4007
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-foundation-7_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-8:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-foundation-8
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4008:4008"
+    environment:
+      - NODE_ID=saral-foundation-8
+      - NODE_NAME=saral-foundation-8
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=8
+      - PORT=4008
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-foundation-8_data:/vault
+    networks:
+      - saral-net
+
+  saral-foundation-9:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-foundation-9
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4009:4009"
+    environment:
+      - NODE_ID=saral-foundation-9
+      - NODE_NAME=saral-foundation-9
+      - DOMAIN=FOUNDATION
+      - NODE_INDEX=9
+      - PORT=4009
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-foundation-9_data:/vault
+    networks:
+      - saral-net
+
   saral-public-1:
     build:
       context: .
@@ -122,13 +210,13 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4006:4006"
+      - "4010:4010"
     environment:
       - NODE_ID=saral-public-1
       - NODE_NAME=saral-public-1
       - DOMAIN=PUBLIC
       - NODE_INDEX=1
-      - PORT=4006
+      - PORT=4010
       - VAULT_DIR=/vault
     volumes:
       - saral-public-1_data:/vault
@@ -144,13 +232,13 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4007:4007"
+      - "4011:4011"
     environment:
       - NODE_ID=saral-public-2
       - NODE_NAME=saral-public-2
       - DOMAIN=PUBLIC
       - NODE_INDEX=2
-      - PORT=4007
+      - PORT=4011
       - VAULT_DIR=/vault
     volumes:
       - saral-public-2_data:/vault
@@ -166,13 +254,13 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4008:4008"
+      - "4012:4012"
     environment:
       - NODE_ID=saral-public-3
       - NODE_NAME=saral-public-3
       - DOMAIN=PUBLIC
       - NODE_INDEX=3
-      - PORT=4008
+      - PORT=4012
       - VAULT_DIR=/vault
     volumes:
       - saral-public-3_data:/vault
@@ -188,13 +276,13 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4009:4009"
+      - "4013:4013"
     environment:
       - NODE_ID=saral-public-4
       - NODE_NAME=saral-public-4
       - DOMAIN=PUBLIC
       - NODE_INDEX=4
-      - PORT=4009
+      - PORT=4013
       - VAULT_DIR=/vault
     volumes:
       - saral-public-4_data:/vault
@@ -210,16 +298,104 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4010:4010"
+      - "4014:4014"
     environment:
       - NODE_ID=saral-public-5
       - NODE_NAME=saral-public-5
       - DOMAIN=PUBLIC
       - NODE_INDEX=5
-      - PORT=4010
+      - PORT=4014
       - VAULT_DIR=/vault
     volumes:
       - saral-public-5_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-6:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-public-6
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4015:4015"
+    environment:
+      - NODE_ID=saral-public-6
+      - NODE_NAME=saral-public-6
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=6
+      - PORT=4015
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-public-6_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-7:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-public-7
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4016:4016"
+    environment:
+      - NODE_ID=saral-public-7
+      - NODE_NAME=saral-public-7
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=7
+      - PORT=4016
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-public-7_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-8:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-public-8
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4017:4017"
+    environment:
+      - NODE_ID=saral-public-8
+      - NODE_NAME=saral-public-8
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=8
+      - PORT=4017
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-public-8_data:/vault
+    networks:
+      - saral-net
+
+  saral-public-9:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-public-9
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4018:4018"
+    environment:
+      - NODE_ID=saral-public-9
+      - NODE_NAME=saral-public-9
+      - DOMAIN=PUBLIC
+      - NODE_INDEX=9
+      - PORT=4018
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-public-9_data:/vault
     networks:
       - saral-net
 
@@ -232,13 +408,13 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4011:4011"
+      - "4019:4019"
     environment:
       - NODE_ID=saral-private-1
       - NODE_NAME=saral-private-1
       - DOMAIN=PRIVATE
       - NODE_INDEX=1
-      - PORT=4011
+      - PORT=4019
       - VAULT_DIR=/vault
     volumes:
       - saral-private-1_data:/vault
@@ -254,13 +430,13 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4012:4012"
+      - "4020:4020"
     environment:
       - NODE_ID=saral-private-2
       - NODE_NAME=saral-private-2
       - DOMAIN=PRIVATE
       - NODE_INDEX=2
-      - PORT=4012
+      - PORT=4020
       - VAULT_DIR=/vault
     volumes:
       - saral-private-2_data:/vault
@@ -276,13 +452,13 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4013:4013"
+      - "4021:4021"
     environment:
       - NODE_ID=saral-private-3
       - NODE_NAME=saral-private-3
       - DOMAIN=PRIVATE
       - NODE_INDEX=3
-      - PORT=4013
+      - PORT=4021
       - VAULT_DIR=/vault
     volumes:
       - saral-private-3_data:/vault
@@ -298,13 +474,13 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4014:4014"
+      - "4022:4022"
     environment:
       - NODE_ID=saral-private-4
       - NODE_NAME=saral-private-4
       - DOMAIN=PRIVATE
       - NODE_INDEX=4
-      - PORT=4014
+      - PORT=4022
       - VAULT_DIR=/vault
     volumes:
       - saral-private-4_data:/vault
@@ -320,16 +496,104 @@ services:
     restart: unless-stopped
     working_dir: /vault
     ports:
-      - "4015:4015"
+      - "4023:4023"
     environment:
       - NODE_ID=saral-private-5
       - NODE_NAME=saral-private-5
       - DOMAIN=PRIVATE
       - NODE_INDEX=5
-      - PORT=4015
+      - PORT=4023
       - VAULT_DIR=/vault
     volumes:
       - saral-private-5_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-6:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-private-6
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4024:4024"
+    environment:
+      - NODE_ID=saral-private-6
+      - NODE_NAME=saral-private-6
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=6
+      - PORT=4024
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-private-6_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-7:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-private-7
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4025:4025"
+    environment:
+      - NODE_ID=saral-private-7
+      - NODE_NAME=saral-private-7
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=7
+      - PORT=4025
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-private-7_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-8:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-private-8
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4026:4026"
+    environment:
+      - NODE_ID=saral-private-8
+      - NODE_NAME=saral-private-8
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=8
+      - PORT=4026
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-private-8_data:/vault
+    networks:
+      - saral-net
+
+  saral-private-9:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    image: saral-node:latest
+    container_name: saral-private-9
+    restart: unless-stopped
+    working_dir: /vault
+    ports:
+      - "4027:4027"
+    environment:
+      - NODE_ID=saral-private-9
+      - NODE_NAME=saral-private-9
+      - DOMAIN=PRIVATE
+      - NODE_INDEX=9
+      - PORT=4027
+      - VAULT_DIR=/vault
+    volumes:
+      - saral-private-9_data:/vault
     networks:
       - saral-net
 
@@ -343,13 +607,25 @@ volumes:
   saral-foundation-3_data:
   saral-foundation-4_data:
   saral-foundation-5_data:
+  saral-foundation-6_data:
+  saral-foundation-7_data:
+  saral-foundation-8_data:
+  saral-foundation-9_data:
   saral-public-1_data:
   saral-public-2_data:
   saral-public-3_data:
   saral-public-4_data:
   saral-public-5_data:
+  saral-public-6_data:
+  saral-public-7_data:
+  saral-public-8_data:
+  saral-public-9_data:
   saral-private-1_data:
   saral-private-2_data:
   saral-private-3_data:
   saral-private-4_data:
   saral-private-5_data:
+  saral-private-6_data:
+  saral-private-7_data:
+  saral-private-8_data:
+  saral-private-9_data:

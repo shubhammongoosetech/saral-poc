@@ -24,7 +24,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { DomainType } from '../crypto/thresholdEcdsa';
+import { DomainType } from '../types/domain';
 import { env } from '../config/env';
 
 export interface OperatorMetadata {

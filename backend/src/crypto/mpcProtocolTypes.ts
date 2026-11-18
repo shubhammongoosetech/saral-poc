@@ -12,7 +12,7 @@
  *  5. Replayed, modified, or out-of-order session messages are strictly rejected.
  */
 
-import { DomainType } from './thresholdEcdsa';
+import { DomainType } from '../types/domain';
 
 export type ParticipantId = string;
 

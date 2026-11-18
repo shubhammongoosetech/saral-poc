@@ -20,7 +20,6 @@ import crypto from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import {
   CURVE_ORDER,
-  modN,
   scalarToHex,
   hexToScalar,
 } from '../secp256k1Math';
@@ -50,7 +49,6 @@ import type {
   VssReadyMsg,
   VssHelpMsg,
   VssHelpReplyMsg,
-  VssReconstructShareMsg,
   HybridVssSharedOutput,
 } from './types';
 
@@ -111,6 +109,14 @@ export class HybridVssNode {
     this.readyInterpolateThreshold = this.t + 1;
     this.readyCompleteThreshold = this.n - this.t - this.f;
     this.helpLimitD = config.helpLimitD ?? 3;
+  }
+
+  getCommitmentMatrix(): string[][] | null {
+    return this.commitmentMatrix;
+  }
+
+  getMatrixHash(): string | null {
+    return this.matrixHash;
   }
 
   /**

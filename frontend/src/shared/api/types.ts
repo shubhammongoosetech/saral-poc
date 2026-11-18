@@ -59,6 +59,8 @@ export interface WalletData {
   balance: string;
   solanaAddress?: string;
   solanaBalance?: string;
+  bitcoinAddress?: string;
+  publicKey?: string;
 }
 
 export interface WalletResponse {

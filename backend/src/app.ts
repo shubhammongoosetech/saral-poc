@@ -10,6 +10,8 @@ import profileRoutes from './routes/profile';
 import walletRoutes from './routes/wallet';
 import topologyRoutes from './routes/topology';
 import activityRoutes from './routes/activity';
+import dkgRoutes from './routes/dkg';
+import mpcRoutes from './routes/mpc';
 import { errorHandler } from './middleware/errorHandler';
 import { getStartupMetrics } from './bootstrap';
 import { env } from './config/env';
@@ -116,6 +118,8 @@ app.use('/api/profile', profileRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/topology', topologyRoutes);
 app.use('/api/activity', activityRoutes);
+app.use('/api/dkg', dkgRoutes);
+app.use('/api/mpc', mpcRoutes);
 
 // --- Global Error Handler ---
 app.use(errorHandler);

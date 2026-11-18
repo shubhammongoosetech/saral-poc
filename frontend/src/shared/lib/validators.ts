@@ -8,12 +8,20 @@ export function isValidSolanaAddress(address: string): boolean {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address.trim());
 }
 
+export function isValidBitcoinAddress(address: string): boolean {
+  if (!address || typeof address !== 'string') return false;
+  return /^(bc1p|tb1p|bcrt1p)[0-9a-z]{58,62}$/i.test(address.trim());
+}
+
 export function isValidAddress(
   address: string,
-  chain: 'mst-testnet' | 'solana-devnet' | 'polygon-amoy'
+  chain: 'mst-testnet' | 'solana-devnet' | 'polygon-amoy' | 'bitcoin-taproot'
 ): boolean {
   if (chain === 'solana-devnet') {
     return isValidSolanaAddress(address);
+  }
+  if (chain === 'bitcoin-taproot') {
+    return isValidBitcoinAddress(address);
   }
   return isValidEvmAddress(address);
 }

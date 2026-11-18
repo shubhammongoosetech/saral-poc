@@ -13,7 +13,7 @@
  */
 
 import crypto from 'crypto';
-import { DomainType } from '../crypto/thresholdEcdsa';
+import { DomainType } from '../types/domain';
 import { ClusterTopology } from './allocation';
 
 export interface DomainPlacement {

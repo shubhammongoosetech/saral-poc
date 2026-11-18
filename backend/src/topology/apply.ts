@@ -10,7 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 import { buildClusterTopology, ClusterTopology } from './allocation';
-import { getTopologyConfig, TopologyConfig } from '../config/topologyConfig';
+import { type TopologyConfig } from '../config/topologyConfig';
 import { nodeCluster } from '../services/nodeClusterService';
 
 export async function applyTopology(customConfig?: TopologyConfig): Promise<void> {

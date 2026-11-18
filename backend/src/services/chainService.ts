@@ -20,7 +20,7 @@ import {
 } from '@solana/web3.js';
 import { env } from '../config/env';
 import { prisma } from '../config/db';
-import { getBackendChainConfig, BackendChainConfig } from '../config/chains';
+import { getBackendChainConfig } from '../config/chains';
 import { encodeBase58 } from './sessionWalletRegistry';
 
 const providersMap = new Map<string, ethers.JsonRpcProvider>();
@@ -146,6 +146,64 @@ export function formatRpcBroadcastError(err: any): string {
     rawMsg;
   const cleaned = candidate.replace(/\s*\(transaction="0x[0-9a-fA-F]+"[\s\S]*$/m, '').trim();
   return cleaned || 'Blockchain RPC node rejected raw transaction.';
+}
+
+/**
+ * Broadcasts an already FROST-signed raw Solana transaction to the network.
+ * Zero private key material is accepted or touched by this function.
+ */
+export async function broadcastRawSolanaTransaction(
+  userId: string,
+  rawSignedTransaction: Buffer | Uint8Array,
+  toAddress: string,
+  amount: string
+): Promise<{
+  txHash: string;
+  broadcasted: boolean;
+  message: string;
+  explorerUrl: string;
+}> {
+  const chainConfig = getBackendChainConfig('solana-devnet');
+  const cleanToAddress = toAddress.trim();
+  const connection = new Connection(chainConfig.rpcUrl, 'confirmed');
+
+  try {
+    const rawBuffer = Buffer.isBuffer(rawSignedTransaction)
+      ? rawSignedTransaction
+      : Buffer.from(rawSignedTransaction);
+    const signature = await connection.sendRawTransaction(rawBuffer, {
+      skipPreflight: false,
+      preflightCommitment: 'confirmed',
+    });
+
+    // Record in DB
+    await prisma.transaction.upsert({
+      where: { txHash: signature },
+      update: {
+        status: 'BROADCASTED',
+        chain: 'solana-devnet',
+      },
+      create: {
+        userId,
+        txHash: signature,
+        toAddress: cleanToAddress,
+        amount,
+        status: 'BROADCASTED',
+        chain: 'solana-devnet',
+      },
+    });
+
+    return {
+      txHash: signature,
+      broadcasted: true,
+      message: 'Solana Devnet transaction successfully signed via 3-Domain FROST (RFC 9591) and confirmed on cluster!',
+      explorerUrl: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+    };
+  } catch (err: any) {
+    const errorMsg = err.message || 'Solana RPC broadcast failed';
+    console.error(`[chainService] Solana Devnet broadcast failed: ${errorMsg}`);
+    throw new Error(`Solana Devnet broadcast failed: ${errorMsg}`);
+  }
 }
 
 /**

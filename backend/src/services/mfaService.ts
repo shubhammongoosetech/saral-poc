@@ -15,7 +15,6 @@ import { prisma } from '../config/db';
 import { env } from '../config/env';
 import { signToken } from '../utils/jwt';
 import { secureCompare } from '../utils/crypto';
-import { encryptShareGcm, decryptShareGcm } from '../crypto/secureEncryption';
 import { logSecurityEvent } from './auditLogService';
 
 export interface MfaVerificationResult {

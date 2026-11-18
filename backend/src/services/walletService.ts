@@ -26,9 +26,6 @@ import {
   encryptShareGcm,
 } from '../crypto/secureEncryption';
 import {
-  AuthenticatedParticipantClient,
-} from '../participant/participantClient';
-import {
   nodeCluster,
   getDomainLegacyAliases,
 } from './nodeClusterService';
@@ -39,19 +36,25 @@ import {
   getAccountNonce,
   getGasFeeData,
   broadcastRawTransaction,
-  broadcastSolanaTransaction,
+  broadcastRawSolanaTransaction,
 } from './chainService';
-import { BadRequestError } from '../utils/errors';
+import { BadRequestError, ConflictError } from '../utils/errors';
 import { evaluateAccessPolicy } from './locationService';
 import { getBackendChainConfig } from '../config/chains';
 import { computeWalletPlacement, pinWalletPlacement, getPinnedWalletPlacement } from '../topology/placement';
 import { buildClusterTopology } from '../topology/allocation';
 import { getTopologyConfig } from '../config/topologyConfig';
 import {
+  threeDomainCoordinator,
+  prepareSolanaTransferTransaction,
+  applyFrostSignatureToSolanaTransaction,
+} from '../tss';
+import { PublicKey } from '@solana/web3.js';
+import {
   getOrDeriveSessionWallet,
   setSessionWallet,
   deriveSolanaAddress,
-  deriveSolanaKeypair,
+  deriveBitcoinTaprootAddress,
 } from './sessionWalletRegistry';
 
 export interface DomainCommitments {
@@ -68,6 +71,7 @@ export interface WalletInfo {
   balance: string;
   solanaAddress?: string;
   solanaBalance?: string;
+  bitcoinAddress?: string;
   createdAt: string;
   n: number;
   threshold: number;
@@ -80,11 +84,8 @@ export interface WalletInfo {
 }
 
 export async function hasExistingWallet(userId: string): Promise<boolean> {
-  const [placementCount, shareCount] = await Promise.all([
-    prisma.walletPlacement.count({ where: { userId } }).catch(() => 0),
-    prisma.keyShare.count({ where: { userId } }).catch(() => 0),
-  ]);
-  return placementCount > 0 || shareCount > 0;
+  const shareCount = await prisma.keyShare.count({ where: { userId } }).catch(() => 0);
+  return shareCount > 0;
 }
 
 /**
@@ -118,6 +119,7 @@ export async function getExistingWallet(userId: string, sessionId?: string): Pro
     balance,
     solanaAddress: sessionWallet.solanaAddress,
     solanaBalance,
+    bitcoinAddress: sessionWallet.bitcoinAddress,
     createdAt: new Date(sessionWallet.derivedAt).toISOString(),
     n: publicNodes,
     threshold: publicThreshold,
@@ -197,13 +199,17 @@ export async function generateWallet(userId: string): Promise<{
   balance: string;
   solanaAddress?: string;
   solanaBalance?: string;
+  bitcoinAddress?: string;
   n: number;
   threshold: number;
   protocolVersion: string;
 }> {
   if (await hasExistingWallet(userId)) {
-    throw new Error('Wallet already exists for this user. Only one wallet generation is permitted.');
+    throw new ConflictError('Wallet already exists for this user. Only one wallet generation is permitted.');
   }
+
+  // Clean up any orphaned placements from prior interrupted generation attempts
+  await prisma.walletPlacement.deleteMany({ where: { userId } }).catch(() => {});
 
   const config = getTopologyConfig();
   const pubN = config.public.nodes;
@@ -240,6 +246,7 @@ export async function generateWallet(userId: string): Promise<{
   await deployDomainShares(userId, 'PRIVATE', mpcWallet.privateDomain.shares, privN, mpcWallet.privateDomain.threshold);
 
   const solanaAddress = deriveSolanaAddress(publicKey);
+  const bitcoinAddress = deriveBitcoinTaprootAddress(publicKey);
 
   // Register into ephemeral in-memory session registry (never persisted to disk/DB)
   setSessionWallet({
@@ -248,6 +255,7 @@ export async function generateWallet(userId: string): Promise<{
     address,
     publicKey,
     solanaAddress,
+    bitcoinAddress,
     derivedAt: Date.now(),
     expiresAt: Date.now() + (env.ACCESS_TOKEN_TTL_SECONDS || 900) * 1000,
     n: pubN,
@@ -271,6 +279,7 @@ export async function generateWallet(userId: string): Promise<{
     balance,
     solanaAddress,
     solanaBalance,
+    bitcoinAddress,
     n: pubN,
     threshold: mpcWallet.publicDomain.threshold,
     protocolVersion: 'MPC-secp256k1-v1',
@@ -441,9 +450,18 @@ export async function executeSigningTransaction(
     privateThreshold = privateThreshold ?? privShare?.threshold ?? activeTopology.private.threshold;
   }
 
-  // 3. Prepare Unsigned Transaction (EVM or Solana)
+  // 3. Retrieve Shares from Nodes for All 3 Domains strictly adhering to pinned quorums
+  const fThreshold = foundationThreshold ?? activeTopology.foundation.threshold;
+  const pThreshold = publicThreshold ?? activeTopology.public.threshold;
+  const uThreshold = privateThreshold ?? activeTopology.private.threshold;
+
+  // A. Foundation, Public, Private Quorums
+  const foundationRows = await getDomainKeyShareRows(userId, 'FOUNDATION', fThreshold);
+  const publicRows = await getDomainKeyShareRows(userId, 'PUBLIC', pThreshold);
+  const privateRows = await getDomainKeyShareRows(userId, 'PRIVATE', uThreshold);
+
+  // 4. Prepare and execute multi-chain signing (Solana FROST or EVM CGGMP21)
   const isSolana = chainConfig.type === 'solana';
-  let unsignedSerialized: string;
   const chainId = BigInt(chainConfig.chainId || 91562037);
 
   if (isSolana) {
@@ -451,10 +469,8 @@ export async function executeSigningTransaction(
       throw new BadRequestError(`Invalid Solana recipient address (must be Base58): ${toAddress}`);
     }
 
-    const solanaKeypair = sessionWallet.solanaKeypair || deriveSolanaKeypair(publicKeyHex);
-
-    // Pre-check live balance on Solana before executing broadcast
-    const solanaBalanceStr = await getSolanaBalance(sessionWallet.solanaAddress);
+    const solanaAddress = sessionWallet.solanaAddress;
+    const solanaBalanceStr = await getSolanaBalance(solanaAddress);
     const solanaBalance = parseFloat(solanaBalanceStr);
     const sendAmount = parseFloat(amount.trim());
     if (isNaN(sendAmount) || sendAmount <= 0) {
@@ -466,10 +482,92 @@ export async function executeSigningTransaction(
       );
     }
 
-    console.log(`[SARAL MPC] Broadcasting Ed25519 signed transaction for ${userId.slice(0, 8)} to Solana Devnet...`);
-    const broadcastResult = await broadcastSolanaTransaction(
+    // Retrieve recent blockhash from Solana RPC
+    let recentBlockhash = '4vJ9JU1bJJE96FWSXTagasUgmqJqKwU9ApuN45DEAy9P';
+    try {
+      const res = await fetch(chainConfig.rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getLatestBlockhash',
+          params: [{ commitment: 'confirmed' }],
+        }),
+      });
+      const data = (await res.json()) as any;
+      if (data?.result?.value?.blockhash) {
+        recentBlockhash = data.result.value.blockhash;
+      }
+    } catch {}
+
+    const preparedSolana = prepareSolanaTransferTransaction({
+      fromPubkey: solanaAddress,
+      toPubkey: toAddress.trim(),
+      lamports: BigInt(Math.round(sendAmount * 1e9)),
+      recentBlockhash,
+    });
+
+    console.log(`[SARAL MPC] Executing 3-Domain FROST (RFC 9591) Ed25519 signing across Foundation, Public, and Private nodes...`);
+
+    const activeParticipants = [
+      ...foundationRows.map((r: any) => ({
+        participantId: r.containerName || `saral-foundation-${r.shareIndex}`,
+        shareIndex: r.shareIndex,
+        domain: 'FOUNDATION' as const,
+        identityPublicKeyHex: '',
+      })),
+      ...publicRows.map((r: any) => ({
+        participantId: r.containerName || `saral-public-${r.shareIndex}`,
+        shareIndex: r.shareIndex,
+        domain: 'PUBLIC' as const,
+        identityPublicKeyHex: '',
+      })),
+      ...privateRows.map((r: any) => ({
+        participantId: r.containerName || `saral-private-${r.shareIndex}`,
+        shareIndex: r.shareIndex,
+        domain: 'PRIVATE' as const,
+        identityPublicKeyHex: '',
+      })),
+    ];
+
+    const solanaPubKeyBytes = new PublicKey(solanaAddress).toBytes();
+    const solanaPubKeyHex = Buffer.from(solanaPubKeyBytes).toString('hex');
+
+    const frostSigningResult = await threeDomainCoordinator.coordinateSigning({
+      sessionId: `solana-tss-${Date.now()}`,
+      chain: 'solana',
+      messageOrTx: preparedSolana.messageBytes,
+      domainTopology: {
+        foundation: { count: foundationRows.length, threshold: fThreshold },
+        public: { count: publicRows.length, threshold: pThreshold },
+        private: { count: privateRows.length, threshold: uThreshold },
+      },
+      domainKeys: {
+        foundationPublicKeyHex: '',
+        publicPublicKeyHex: '',
+        privatePublicKeyHex: '',
+        aggregatedPublicKeyHex: solanaPubKeyHex,
+      },
+      activeParticipants,
+    });
+
+    const { rawSignedTransaction } = applyFrostSignatureToSolanaTransaction(
+      preparedSolana.transaction,
+      preparedSolana.fromPubkey,
+      {
+        rawSignatureHex: frostSigningResult.rawSignatureHex,
+        R_hex: frostSigningResult.rawSignatureHex.slice(0, 64),
+        z_hex: frostSigningResult.rawSignatureHex.slice(64),
+        groupPublicKeyHex: solanaPubKeyHex,
+        solanaAddress,
+      }
+    );
+
+    console.log(`[SARAL MPC] Broadcasting Ed25519 FROST signed raw transaction to Solana Devnet...`);
+    const broadcastResult = await broadcastRawSolanaTransaction(
       userId,
-      solanaKeypair,
+      rawSignedTransaction,
       toAddress.trim(),
       amount.trim()
     );
@@ -478,45 +576,36 @@ export async function executeSigningTransaction(
       ...broadcastResult,
       domainsSigned: ['foundation', 'public', 'private'],
     };
-  } else {
-    const nonce = await getAccountNonce(walletAddress, chainConfig.id);
-    const { gasPrice, gasLimit } = await getGasFeeData(chainConfig.id);
-    const value = ethers.parseEther(amount.trim());
-
-    // Pre-check live balance before running MPC signing or logging a failed tx row
-    const liveBalanceWei = await getBalanceWeiOrNull(walletAddress, chainConfig.id);
-    const gasFeeWei = gasPrice * gasLimit;
-    const totalRequiredWei = value + gasFeeWei;
-    if (liveBalanceWei !== null && liveBalanceWei < totalRequiredWei) {
-      const shortfallWei = totalRequiredWei - liveBalanceWei;
-      const maxSendableWei = liveBalanceWei > gasFeeWei ? liveBalanceWei - gasFeeWei : 0n;
-      throw new BadRequestError(
-        `Insufficient funds: balance is ${ethers.formatEther(liveBalanceWei)} ${chainConfig.symbol}, but ${ethers.formatEther(totalRequiredWei)} ${chainConfig.symbol} is needed (${ethers.formatEther(value)} + ${ethers.formatEther(gasFeeWei)} gas; short by ${ethers.formatEther(shortfallWei)} ${chainConfig.symbol}). Max sendable: ${ethers.formatEther(maxSendableWei)} ${chainConfig.symbol}.`
-      );
-    }
-
-    const unsignedTx = ethers.Transaction.from({
-      to: ethers.getAddress(toAddress.trim()),
-      value,
-      nonce,
-      gasPrice,
-      gasLimit,
-      chainId,
-      type: chainConfig.defaultTxType || 0,
-    });
-
-    unsignedSerialized = unsignedTx.unsignedSerialized;
   }
 
-  // 4. Retrieve Shares from Nodes for All 3 Domains strictly adhering to pinned quorums
-  const fThreshold = foundationThreshold ?? activeTopology.foundation.threshold;
-  const pThreshold = publicThreshold ?? activeTopology.public.threshold;
-  const uThreshold = privateThreshold ?? activeTopology.private.threshold;
+  // EVM Path
+  const nonce = await getAccountNonce(walletAddress, chainConfig.id);
+  const { gasPrice, gasLimit } = await getGasFeeData(chainConfig.id);
+  const value = ethers.parseEther(amount.trim());
 
-  // A. Foundation Quorum
-  const foundationRows = await getDomainKeyShareRows(userId, 'FOUNDATION', fThreshold);
-  const publicRows = await getDomainKeyShareRows(userId, 'PUBLIC', pThreshold);
-  const privateRows = await getDomainKeyShareRows(userId, 'PRIVATE', uThreshold);
+  // Pre-check live balance before running MPC signing or logging a failed tx row
+  const liveBalanceWei = await getBalanceWeiOrNull(walletAddress, chainConfig.id);
+  const gasFeeWei = gasPrice * gasLimit;
+  const totalRequiredWei = value + gasFeeWei;
+  if (liveBalanceWei !== null && liveBalanceWei < totalRequiredWei) {
+    const shortfallWei = totalRequiredWei - liveBalanceWei;
+    const maxSendableWei = liveBalanceWei > gasFeeWei ? liveBalanceWei - gasFeeWei : 0n;
+    throw new BadRequestError(
+      `Insufficient funds: balance is ${ethers.formatEther(liveBalanceWei)} ${chainConfig.symbol}, but ${ethers.formatEther(totalRequiredWei)} ${chainConfig.symbol} is needed (${ethers.formatEther(value)} + ${ethers.formatEther(gasFeeWei)} gas; short by ${ethers.formatEther(shortfallWei)} ${chainConfig.symbol}). Max sendable: ${ethers.formatEther(maxSendableWei)} ${chainConfig.symbol}.`
+    );
+  }
+
+  const unsignedTx = ethers.Transaction.from({
+    to: ethers.getAddress(toAddress.trim()),
+    value,
+    nonce,
+    gasPrice,
+    gasLimit,
+    chainId,
+    type: chainConfig.defaultTxType || 0,
+  });
+
+  const unsignedSerialized = unsignedTx.unsignedSerialized;
 
   // 4. Retrieve Independent MPC Participant Clients for All 3 Domains
   // CRITICAL SECURITY GUARANTEE:

@@ -20,7 +20,7 @@ import { IconSend, IconReceive, IconRefresh, IconExternal } from '@/shared/ui/ic
 
 export const Wallet: React.FC = () => {
   const { isDesktop } = useBreakpoint();
-  const { data: walletData, isLoading, refetch, isRefetching } = useWalletQuery();
+  const { data: walletData, isLoading, isError, error: queryError, refetch, isRefetching } = useWalletQuery();
   const { data: txData, refetch: refetchTxs } = useTransactionsQuery();
   const { triggerPostSendPolling } = usePostSendPolling();
 
@@ -46,8 +46,12 @@ export const Wallet: React.FC = () => {
       setError(null);
       await walletApi.generateWallet();
       await handleRefreshAll();
-    } catch {
-      setError('Failed to create wallet');
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Failed to create wallet';
+      setError(msg);
+      if (err?.response?.status === 409 || msg.toLowerCase().includes('already exists')) {
+        await handleRefreshAll();
+      }
     } finally {
       setCreating(false);
     }
@@ -61,6 +65,21 @@ export const Wallet: React.FC = () => {
           <Skeleton className="h-64 rounded-xl" />
           <Skeleton className="h-64 rounded-xl" />
         </div>
+      </div>
+    );
+  }
+
+  if (isError && !walletData) {
+    const errorMsg =
+      (queryError as any)?.response?.data?.error ||
+      (queryError as any)?.message ||
+      'Failed to load wallet';
+    return (
+      <div className="w-full max-w-sm mx-auto py-16 flex flex-col items-center gap-4">
+        <Alert variant="error">{errorMsg}</Alert>
+        <Button onClick={handleRefreshAll} loading={isRefetching}>
+          Retry
+        </Button>
       </div>
     );
   }
@@ -80,6 +99,7 @@ export const Wallet: React.FC = () => {
   const solBalance = wallet?.solanaBalance || '0.0000';
   const evmAddress = wallet?.address || '';
   const solAddress = wallet?.solanaAddress || '';
+  const btcAddress = wallet?.bitcoinAddress || '';
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-5xl mx-auto">
@@ -107,7 +127,7 @@ export const Wallet: React.FC = () => {
         </div>
 
         {/* Primary and Secondary Balances */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           <div className="flex flex-col gap-1 p-4 rounded-xl bg-surface-2 border border-border">
             <span className="text-xs text-muted font-medium">MST Testnet</span>
             <Amount value={mstcBalance} symbol="MSTC" className="text-2xl" />
@@ -119,6 +139,14 @@ export const Wallet: React.FC = () => {
             <Amount value={solBalance} symbol="SOL" className="text-2xl" />
             <AddressText address={solAddress} copyable className="mt-1 text-muted" />
           </div>
+
+          {btcAddress && (
+            <div className="flex flex-col gap-1 p-4 rounded-xl bg-surface-2 border border-border">
+              <span className="text-xs text-muted font-medium">Bitcoin Taproot</span>
+              <Amount value="0.0000" symbol="tBTC" className="text-2xl" />
+              <AddressText address={btcAddress} copyable className="mt-1 text-muted" />
+            </div>
+          )}
         </div>
 
         {/* Quick Actions (Send & Receive) */}
@@ -242,6 +270,7 @@ export const Wallet: React.FC = () => {
             <ReceivePanel
               address={evmAddress}
               solanaAddress={solAddress}
+              bitcoinAddress={btcAddress}
               onClose={() => setShowReceiveModal(false)}
             />
           </DialogContent>
@@ -252,6 +281,7 @@ export const Wallet: React.FC = () => {
             <ReceivePanel
               address={evmAddress}
               solanaAddress={solAddress}
+              bitcoinAddress={btcAddress}
               onClose={() => setShowReceiveModal(false)}
             />
           </SheetContent>

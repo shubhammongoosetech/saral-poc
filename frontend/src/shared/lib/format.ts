@@ -66,7 +66,7 @@ export function mapApiError(err: unknown, fallback = 'Request failed'): string {
     return 'Network connection error';
   }
 
-  if (typeof rawMsg === 'string' && rawMsg.length > 0 && rawMsg.length <= 80 && !rawMsg.includes('at ')) {
+  if (typeof rawMsg === 'string' && rawMsg.length > 0 && rawMsg.length <= 160 && !rawMsg.includes('at ')) {
     return rawMsg;
   }
 

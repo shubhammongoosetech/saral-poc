@@ -98,6 +98,18 @@ async function clearDockerContainers() {
   }
 }
 
+async function clearLocalVaults() {
+  const vaultsDir = process.env.VAULT_DIR || path.resolve(process.cwd(), '.saral_vaults');
+  if (fs.existsSync(vaultsDir)) {
+    try {
+      fs.rmSync(vaultsDir, { recursive: true, force: true });
+      console.log('✅ Cleared local sandboxed vaults directory (.saral_vaults).');
+    } catch (err: any) {
+      console.warn(`Could not clear local vaults directory: ${err.message}`);
+    }
+  }
+}
+
 async function main() {
   console.log('═══════════════════════════════════════════════════════');
   console.log('          SARAL — DATABASE & SHARE CLEAR UTILITY       ');
@@ -106,6 +118,7 @@ async function main() {
   await clearPostgres();
   await clearDockerVolumes();
   await clearDockerContainers();
+  await clearLocalVaults();
 
   console.log('═══════════════════════════════════════════════════════');
   console.log('🎉 Reset complete! All user data and shares have been cleared.');

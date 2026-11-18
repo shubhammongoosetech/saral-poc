@@ -20,15 +20,12 @@
  *   - Parameter derivation & validator enforcing n >= 3t + 2f + 1 fail-closed
  */
 
-import crypto from 'crypto';
-import { secp256k1 } from '@noble/curves/secp256k1';
 import {
   modN,
   CURVE_ORDER,
 } from '../secp256k1Math';
 import {
   addCommitmentMatrices,
-  parseCurvePoint,
 } from './commitments';
 import { HybridVssNode } from './hybridVss';
 import type {

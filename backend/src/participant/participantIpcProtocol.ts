@@ -15,15 +15,7 @@
  */
 
 import crypto from 'crypto';
-import { DomainType } from '../crypto/thresholdEcdsa';
-import {
-  MpcSessionConfig,
-  Round1CommitmentMessage,
-  Round1DecommitmentMessage,
-  Round2PairwiseMtaPacket,
-  Round2DeltaShareMessage,
-  Round3PartialSignatureMessage,
-} from '../crypto/mpcProtocolTypes';
+import { DomainType } from '../types/domain';
 
 export const MAX_IPC_FRAME_SIZE = 2 * 1024 * 1024; // 2 Megabytes maximum frame limit
 

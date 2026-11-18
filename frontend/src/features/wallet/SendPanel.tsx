@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { walletApi } from '@/shared/api/endpoints';
 import { getCurrentCoords } from '@/shared/hooks/useLocation';
 import { mapApiError } from '@/shared/lib/format';
+import { isValidEvmAddress, isValidSolanaAddress, validateAmount } from '@/shared/lib/validators';
 import { Card } from '@/shared/ui/Card';
 import { Button } from '@/shared/ui/Button';
 import { Input } from '@/shared/ui/Input';
@@ -80,24 +81,20 @@ export const SendPanel: React.FC<SendPanelProps> = ({
       setToError('Recipient required');
       valid = false;
     } else if (isSolana) {
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(cleanTo)) {
+      if (!isValidSolanaAddress(cleanTo)) {
         setToError('Invalid Solana address (Base58, 32-44 characters)');
         valid = false;
       }
     } else {
-      if (!/^0x[a-fA-F0-9]{40}$/.test(cleanTo)) {
+      if (!isValidEvmAddress(cleanTo)) {
         setToError('Invalid EVM address (0x format, 42 characters)');
         valid = false;
       }
     }
 
-    const numAmount = parseFloat(amount.trim());
-    const numBal = parseFloat(currentBalance);
-    if (!amount.trim() || isNaN(numAmount) || numAmount <= 0) {
-      setAmountError('Enter a valid amount');
-      valid = false;
-    } else if (numAmount > numBal) {
-      setAmountError(`Exceeds balance (${currentBalance} ${currencySymbol})`);
+    const amountValidation = validateAmount(amount, currentBalance);
+    if (!amountValidation.valid) {
+      setAmountError(amountValidation.error === 'Exceeds balance' ? `Exceeds balance (${currentBalance} ${currencySymbol})` : (amountValidation.error || 'Enter a valid amount'));
       valid = false;
     }
 

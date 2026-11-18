@@ -9,7 +9,7 @@
  *   Sections 3 & 4, Figures 1, 2, 3.
  */
 
-import type { DomainType } from '../thresholdEcdsa';
+import type { DomainType } from '../../types/domain';
 
 export interface Clock {
   now(): number;

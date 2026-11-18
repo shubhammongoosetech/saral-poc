@@ -22,14 +22,10 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
-import { DomainType } from '../crypto/thresholdEcdsa';
+import { DomainType } from '../types/domain';
 import { IndependentParticipantService } from './participantService';
-import {
-  HybridDkgNode,
-  NodeConfig,
-  OutgoingMessage,
-  AnyProtocolMessage,
-} from '../crypto/hybriddkg';
+import { HybridDkgNode } from '../crypto/hybriddkg/hybridDkg';
+import type { NodeConfig, OutgoingMessage } from '../crypto/hybriddkg/types';
 import { scalarToHex } from '../crypto/secp256k1Math';
 import { encryptShareGcm } from '../crypto/secureEncryption';
 import {

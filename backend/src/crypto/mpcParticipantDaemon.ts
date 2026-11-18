@@ -52,7 +52,7 @@ import {
   decodeSignedPlaintext,
 } from './paillierCrypto';
 import { loadOrCreateNodeIdentity } from '../participant/nodeIdentityManager';
-import { DomainType } from './thresholdEcdsa';
+import { DomainType } from '../types/domain';
 
 export type DaemonSessionState =
   | 'INITIALIZED'

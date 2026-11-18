@@ -16,8 +16,7 @@
  *   - Adapter: runHybridDomainDkg producing DkgResult compatible with SARAL wallet flow
  */
 
-import { secp256k1 } from '@noble/curves/secp256k1';
-import type { DomainType } from '../thresholdEcdsa';
+import type { DomainType } from '../../types/domain';
 import type { DkgResult } from './types';
 import {
   deriveHybridParams,
@@ -29,12 +28,9 @@ import {
 } from './bivariatePolynomial';
 import {
   computeCommitmentMatrix,
-  scalarMultiplyGSafe,
 } from './commitments';
 import {
-  CURVE_ORDER,
   modN,
-  randomScalar,
   scalarToHex,
 } from '../secp256k1Math';
 import type {
