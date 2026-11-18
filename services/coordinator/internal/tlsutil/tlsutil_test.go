@@ -89,3 +89,4 @@ func TestTLSAndMutualAuthentication(t *testing.T) {
 		t.Fatal("expected unauthenticated client without certificate to be rejected, but succeeded!")
 	}
 }
+

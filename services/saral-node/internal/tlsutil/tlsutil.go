@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -219,3 +220,97 @@ func LoadCertificatesFromDisk(certPath, keyPath, caPath string) ([]byte, []byte,
 	}
 	return certPEM, keyPEM, caPEM, nil
 }
+
+// EnsureCertificates loads or provisions Root CA and service certificates on disk or in-memory
+func EnsureCertificates(tlsDir, serviceID string, hosts []string) ([]byte, []byte, []byte, error) {
+	candidateDirs := []string{
+		tlsDir,
+		os.Getenv("TLS_DIR"),
+		"/etc/saral/tls",
+		"/vault/tls",
+		"../../infra/tls",
+		"../infra/tls",
+		"infra/tls",
+	}
+
+	var foundDir string
+	for _, d := range candidateDirs {
+		if d == "" {
+			continue
+		}
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			foundDir = d
+			break
+		}
+	}
+
+	if foundDir == "" {
+		foundDir = "infra/tls"
+		_ = os.MkdirAll(foundDir, 0755)
+	}
+
+	caCertPath := filepath.Join(foundDir, "ca.crt")
+	caKeyPath := filepath.Join(foundDir, "ca.key")
+	certPath := filepath.Join(foundDir, serviceID+".crt")
+	keyPath := filepath.Join(foundDir, serviceID+".key")
+
+	var caCertPEM, caKeyPEM []byte
+	var err error
+
+	if _, err = os.Stat(caCertPath); err == nil {
+		caCertPEM, _ = os.ReadFile(caCertPath)
+		caKeyPEM, _ = os.ReadFile(caKeyPath)
+	}
+
+	if len(caCertPEM) == 0 || len(caKeyPEM) == 0 {
+		caCertPEM, caKeyPEM, err = GenerateCA("SARAL Protocol Cluster Root CA")
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to generate CA: %w", err)
+		}
+		_ = os.WriteFile(caCertPath, caCertPEM, 0644)
+		_ = os.WriteFile(caKeyPath, caKeyPEM, 0600)
+	}
+
+	var certPEM, keyPEM []byte
+	if _, err = os.Stat(certPath); err == nil {
+		certPEM, _ = os.ReadFile(certPath)
+		keyPEM, _ = os.ReadFile(keyPath)
+	}
+
+	if len(certPEM) == 0 || len(keyPEM) == 0 {
+		certPEM, keyPEM, err = GenerateCert(caCertPEM, caKeyPEM, serviceID, hosts)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to generate cert for %s: %w", serviceID, err)
+		}
+		_ = os.WriteFile(certPath, certPEM, 0644)
+		_ = os.WriteFile(keyPath, keyPEM, 0600)
+	}
+
+	return certPEM, keyPEM, caCertPEM, nil
+}
+
+// SetupMTLSServer configures and starts a TLS 1.3 mTLS server on the given address
+func SetupMTLSServer(addr string, handler http.Handler, certPEM, keyPEM, caCertPEM []byte) (*http.Server, net.Listener, error) {
+	tlsConfig, err := BuildServerTLSConfig(certPEM, keyPEM, caCertPEM, true)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build mTLS server config: %w", err)
+	}
+
+	listener, err := tls.Listen("tcp", addr, tlsConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
+	server := &http.Server{
+		Handler:   handler,
+		TLSConfig: tlsConfig,
+	}
+
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	return server, listener, nil
+}
+
+

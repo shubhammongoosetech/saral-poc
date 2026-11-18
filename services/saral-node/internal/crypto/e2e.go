@@ -198,3 +198,4 @@ func DecryptForDestination(destPriv *ecdh.PrivateKey, cipherHex string) (map[str
 
 	return payload, nil
 }
+

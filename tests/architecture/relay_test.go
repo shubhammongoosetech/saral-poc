@@ -3,14 +3,19 @@ package architecture_test
 import (
 	"bytes"
 	"crypto/ecdh"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
@@ -782,17 +787,38 @@ func TestLiveDockerRelay(t *testing.T) {
 
 	t.Log("🐳 Testing Live Running Docker Cluster (POC15 - 23 Containers)...")
 
-	// 1. Verify 23 Docker containers running and healthy
-	cmd := exec.Command("docker", "ps", "--filter", "name=saral-", "--filter", "health=healthy", "--format", "{{.Names}}")
-	outBytes, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("failed to query docker ps for healthy containers: %v", err)
+	// 1. Verify exactly 23 Docker containers running and healthy in poc15 mesh
+	expectedContainers := []string{
+		"saral-auth-server",
+		"saral-coord-foundation",
+		"saral-coord-public",
+		"saral-coord-private",
+		"saral-verifier-foundation",
+		"saral-verifier-public",
+		"saral-verifier-private",
+		"saral-node-f1", "saral-node-f2", "saral-node-f3", "saral-node-f4", "saral-node-f5",
+		"saral-node-p1", "saral-node-p2", "saral-node-p3", "saral-node-p4", "saral-node-p5",
+		"saral-node-r1", "saral-node-r2", "saral-node-r3", "saral-node-r4", "saral-node-r5",
+		"saral-web",
 	}
-	healthyContainers := strings.Fields(strings.TrimSpace(string(outBytes)))
-	if len(healthyContainers) < 23 {
-		t.Fatalf("expected at least 23 healthy saral containers, got %d: %v", len(healthyContainers), healthyContainers)
+
+	healthyCount := 0
+	for _, cName := range expectedContainers {
+		inspectCmd := exec.Command("docker", "inspect", "--format", "{{.State.Health.Status}}", cName)
+		out, err := inspectCmd.Output()
+		if err != nil {
+			t.Fatalf("failed to inspect container %s: %v", cName, err)
+		}
+		status := strings.TrimSpace(string(out))
+		if status != "healthy" {
+			t.Fatalf("expected container %s to be healthy, got: %s", cName, status)
+		}
+		healthyCount++
 	}
-	t.Logf("  -> [TEST 1: HEALTH] Verified %d containers healthy in Docker network.", len(healthyContainers))
+	if healthyCount != 23 {
+		t.Fatalf("expected exactly 23 healthy containers in poc15 mesh, got %d", healthyCount)
+	}
+	t.Logf("  -> [TEST 1: HEALTH] Verified exactly %d expected containers are running and healthy in Docker network.", healthyCount)
 
 	// 2. Fetch Auth Token from live Auth Server
 	authReqBody := map[string]interface{}{
@@ -1173,66 +1199,299 @@ func TestLiveDockerRelay(t *testing.T) {
 	origToken := strings.TrimSpace(string(origTokenData))
 
 	if adminKey != "" {
+		// 13. Test Credential rotation across ALL 3 domains (Foundation 9001, Public 9002, Private 9003)
 		rotToken := "c9e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0123456789abcdef012345678"
-		rotBody := map[string]string{"newToken": rotToken}
-		rtData, _ := json.Marshal(rotBody)
-		rtReq, _ := http.NewRequest("POST", "http://localhost:9001/auth/rotate", bytes.NewReader(rtData))
-		rtReq.Header.Set("Content-Type", "application/json")
-		rtReq.Header.Set("X-Admin-Key", adminKey)
-		rtResp, err := http.DefaultClient.Do(rtReq)
-		if err == nil && rtResp.StatusCode == http.StatusOK {
+		for _, port := range []int{9001, 9002, 9003} {
+			rotBody := map[string]string{"newToken": rotToken}
+			rtData, _ := json.Marshal(rotBody)
+			rtReq, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/auth/rotate", port), bytes.NewReader(rtData))
+			rtReq.Header.Set("Content-Type", "application/json")
+			rtReq.Header.Set("X-Admin-Key", adminKey)
+			rtResp, err := http.DefaultClient.Do(rtReq)
+			if err != nil || rtResp.StatusCode != http.StatusOK {
+				t.Fatalf("failed to rotate credentials on coordinator port %d: %v", port, err)
+			}
 			var rotRes struct {
 				Success bool   `json:"success"`
 				Status  string `json:"status"`
 			}
 			_ = json.NewDecoder(rtResp.Body).Decode(&rotRes)
 			rtResp.Body.Close()
-			if rotRes.Success && rotRes.Status == "ROTATED" {
-				t.Log("  -> [TEST 13: CREDENTIAL ROTATION] Successfully executed supported credential rotation on coordinator.")
+			if !rotRes.Success || rotRes.Status != "ROTATED" {
+				t.Fatalf("unexpected rotation response on port %d: %+v", port, rotRes)
 			}
 		}
+		t.Log("  -> [TEST 13: CREDENTIAL ROTATION] Successfully executed supported credential rotation on all 3 domain coordinators (Foundation, Public, Private).")
 
-		// Verify relay still works after rotation
-		rotRouteBody := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      890,
-			"method":  "saral_sendRelayMessage",
-			"params": map[string]interface{}{
-				"sourceNode": "saral-foundation-2",
-				"targetNode": "saral-foundation-4",
-				"type":       "POST_ROTATION_RELAY_TEST",
-				"payload":    map[string]interface{}{"test": "post_rotation_ping"},
-				"timeoutMs":  8000,
-			},
+		// Verify relay works across Foundation, Public, Private, and Cross-Domain after rotation
+		postRotRoutes := []struct {
+			name   string
+			src    string
+			dst    string
+			port   int
+			domain string
+		}{
+			{"Foundation Intra-Domain", "saral-foundation-2", "saral-foundation-4", 9001, "FOUNDATION"},
+			{"Public Intra-Domain", "saral-public-1", "saral-public-5", 9002, "PUBLIC"},
+			{"Private Intra-Domain", "saral-private-1", "saral-private-3", 9003, "PRIVATE"},
+			{"Cross-Domain F->P", "saral-foundation-1", "saral-public-2", 9001, "PUBLIC"},
 		}
-		rrData, _ := json.Marshal(rotRouteBody)
-		rrReq, _ := http.NewRequest("POST", "http://localhost:9001/rpc", bytes.NewReader(rrData))
-		rrReq.Header.Set("Content-Type", "application/json")
-		rrReq.Header.Set("Authorization", "Bearer "+aOut.Token)
-		rrResp, err := http.DefaultClient.Do(rrReq)
-		if err == nil {
+
+		for rIdx, prRoute := range postRotRoutes {
+			rotRouteBody := map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      890 + rIdx,
+				"method":  "saral_sendRelayMessage",
+				"params": map[string]interface{}{
+					"sourceNode": prRoute.src,
+					"targetNode": prRoute.dst,
+					"type":       "POST_ROTATION_RELAY_TEST",
+					"payload":    map[string]interface{}{"test": "post_rotation_verification", "route": prRoute.name},
+					"timeoutMs":  8000,
+				},
+			}
+			rrData, _ := json.Marshal(rotRouteBody)
+			rrReq, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/rpc", prRoute.port), bytes.NewReader(rrData))
+			rrReq.Header.Set("Content-Type", "application/json")
+			rrReq.Header.Set("Authorization", "Bearer "+aOut.Token)
+			rrResp, err := http.DefaultClient.Do(rrReq)
+			if err != nil {
+				t.Fatalf("post-rotation relay failed for %s (%s -> %s): %v", prRoute.name, prRoute.src, prRoute.dst, err)
+			}
 			var rrOut struct {
 				Result *relayTestRecord `json:"result"`
+				Error  *struct {
+					Message string `json:"message"`
+				} `json:"error"`
 			}
 			_ = json.NewDecoder(rrResp.Body).Decode(&rrOut)
 			rrResp.Body.Close()
-			if rrOut.Result != nil && rrOut.Result.State == "ACKNOWLEDGED" {
-				t.Log("  -> [TEST 13b: POST-ROTATION ROUTE] Live relay successfully delivered and acknowledged after credential rotation.")
+			if rrOut.Error != nil {
+				t.Fatalf("post-rotation relay error for %s (%s -> %s): %s", prRoute.name, prRoute.src, prRoute.dst, rrOut.Error.Message)
 			}
+			if rrOut.Result == nil || rrOut.Result.State != "ACKNOWLEDGED" {
+				t.Fatalf("post-rotation relay %s expected state ACKNOWLEDGED, got %+v", prRoute.name, rrOut.Result)
+			}
+			t.Logf("  -> [TEST 13b: POST-ROTATION %s] Live relay successfully delivered and acknowledged across domain %s.", prRoute.name, prRoute.domain)
 		}
 
-		// Restore original token so future runs remain cleanly idempotent
+		// Restore original token on all 3 coordinators so future runs remain cleanly idempotent
 		if origToken != "" {
-			resetBody := map[string]string{"newToken": origToken}
-			rstData, _ := json.Marshal(resetBody)
-			rstReq, _ := http.NewRequest("POST", "http://localhost:9001/auth/rotate", bytes.NewReader(rstData))
-			rstReq.Header.Set("Content-Type", "application/json")
-			rstReq.Header.Set("X-Admin-Key", adminKey)
-			if rstResp, err := http.DefaultClient.Do(rstReq); err == nil {
-				rstResp.Body.Close()
+			for _, port := range []int{9001, 9002, 9003} {
+				resetBody := map[string]string{"newToken": origToken}
+				rstData, _ := json.Marshal(resetBody)
+				rstReq, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/auth/rotate", port), bytes.NewReader(rstData))
+				rstReq.Header.Set("Content-Type", "application/json")
+				rstReq.Header.Set("X-Admin-Key", adminKey)
+				if rstResp, err := http.DefaultClient.Do(rstReq); err == nil {
+					rstResp.Body.Close()
+				}
 			}
 		}
 	}
 
-	t.Log("✅ ALL LIVE DOCKER RELAY INTEGRATION TESTS PASSED (23 healthy containers, live JWT auth, 6 routes with authentic recipient ACKs, unknown peer rejection, forged enrollment rejection, default credentials rejection, unauthorized RPC rejection, stub compliance, destination privacy proof, replay safety, restart recovery, credential rotation)!")
+	// 14. Live TLS 1.3 / mTLS Inter-Service Wire Traffic Verification
+	caCertPath := "infra/tls/ca.crt"
+	if _, err := os.Stat(caCertPath); err != nil {
+		caCertPath = "../../infra/tls/ca.crt"
+	}
+	clientCertPath := "infra/tls/saral-test-client.crt"
+	if _, err := os.Stat(clientCertPath); err != nil {
+		clientCertPath = "../../infra/tls/saral-test-client.crt"
+	}
+	clientKeyPath := "infra/tls/saral-test-client.key"
+	if _, err := os.Stat(clientKeyPath); err != nil {
+		clientKeyPath = "../../infra/tls/saral-test-client.key"
+	}
+
+	caCertPEM, err := os.ReadFile(caCertPath)
+	if err != nil {
+		t.Fatalf("failed to read CA certificate from %s: %v", caCertPath, err)
+	}
+	clientCertPEM, err := os.ReadFile(clientCertPath)
+	if err != nil {
+		t.Fatalf("failed to read client certificate from %s: %v", clientCertPath, err)
+	}
+	clientKeyPEM, err := os.ReadFile(clientKeyPath)
+	if err != nil {
+		t.Fatalf("failed to read client key from %s: %v", clientKeyPath, err)
+	}
+
+	rootCAs := x509.NewCertPool()
+	if !rootCAs.AppendCertsFromPEM(caCertPEM) {
+		t.Fatalf("failed to append root CA cert to pool")
+	}
+
+	cliCert, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
+	if err != nil {
+		t.Fatalf("failed to load client keypair: %v", err)
+	}
+
+	validMTLSClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:      rootCAs,
+				Certificates: []tls.Certificate{cliCert},
+				MinVersion:   tls.VersionTLS13,
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	// 14a. Test Coordinator mTLS endpoint (:9443) with valid TLS 1.3 client cert
+	coordMTLSResp, err := validMTLSClient.Get("https://localhost:9443/tls/status")
+	if err != nil {
+		t.Fatalf("live coordinator mTLS request failed: %v", err)
+	}
+	if coordMTLSResp.StatusCode != http.StatusOK {
+		t.Fatalf("coordinator mTLS returned status %d", coordMTLSResp.StatusCode)
+	}
+	if coordMTLSResp.TLS == nil || coordMTLSResp.TLS.Version != tls.VersionTLS13 {
+		t.Fatalf("expected TLS 1.3 wire protocol negotiation, got: %v", coordMTLSResp.TLS)
+	}
+	var coordTLSStatus struct {
+		MTLSEnabled bool   `json:"mtlsEnabled"`
+		TLSVersion  string `json:"tlsVersion"`
+		Domain      string `json:"domain"`
+	}
+	_ = json.NewDecoder(coordMTLSResp.Body).Decode(&coordTLSStatus)
+	coordMTLSResp.Body.Close()
+	if !coordTLSStatus.MTLSEnabled || coordTLSStatus.TLSVersion != "TLS 1.3" {
+		t.Fatalf("unexpected coordinator TLS status: %+v", coordTLSStatus)
+	}
+	t.Log("  -> [TEST 14a: COORD mTLS] Verified live coordinator TLS 1.3 wire traffic with mutual client auth.")
+
+	// 14b. Test Node mTLS endpoint (:8443) with valid TLS 1.3 client cert
+	nodeMTLSResp, err := validMTLSClient.Get("https://localhost:8443/tls/status")
+	if err != nil {
+		t.Fatalf("live node mTLS request failed: %v", err)
+	}
+	if nodeMTLSResp.StatusCode != http.StatusOK {
+		t.Fatalf("node mTLS returned status %d", nodeMTLSResp.StatusCode)
+	}
+	if nodeMTLSResp.TLS == nil || nodeMTLSResp.TLS.Version != tls.VersionTLS13 {
+		t.Fatalf("expected TLS 1.3 wire protocol on node, got: %v", nodeMTLSResp.TLS)
+	}
+	var nodeTLSStatus struct {
+		MTLSEnabled bool   `json:"mtlsEnabled"`
+		TLSVersion  string `json:"tlsVersion"`
+		NodeID      string `json:"nodeId"`
+	}
+	_ = json.NewDecoder(nodeMTLSResp.Body).Decode(&nodeTLSStatus)
+	nodeMTLSResp.Body.Close()
+	if !nodeTLSStatus.MTLSEnabled || nodeTLSStatus.NodeID != "saral-foundation-1" {
+		t.Fatalf("unexpected node TLS status: %+v", nodeTLSStatus)
+	}
+	t.Log("  -> [TEST 14b: NODE mTLS] Verified live node TLS 1.3 wire traffic with mutual client auth.")
+
+	// 14c. Test Unauthenticated client (no certificate) rejected by mTLS handshake
+	unauthTLSClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    rootCAs,
+				MinVersion: tls.VersionTLS13,
+			},
+		},
+		Timeout: 3 * time.Second,
+	}
+	_, err = unauthTLSClient.Get("https://localhost:9443/tls/status")
+	if err == nil {
+		t.Fatal("expected unauthenticated client without certificate to be rejected by mTLS, but request succeeded!")
+	}
+	t.Logf("  -> [TEST 14c: UNAUTH REJECTED] Unauthenticated connection correctly rejected by TLS layer: %v", err)
+
+	// 14d. Test Rogue Certificate (CN not starting with saral-) rejected
+	caKeyPath := "infra/tls/ca.key"
+	if _, err := os.Stat(caKeyPath); err != nil {
+		caKeyPath = "../../infra/tls/ca.key"
+	}
+	caKeyPEM, _ := os.ReadFile(caKeyPath)
+	if len(caKeyPEM) > 0 {
+		caBlock, _ := pem.Decode(caCertPEM)
+		caKeyBlock, _ := pem.Decode(caKeyPEM)
+		if caBlock != nil && caKeyBlock != nil {
+			parsedCA, _ := x509.ParseCertificate(caBlock.Bytes)
+			parsedCAKey, _ := x509.ParseECPrivateKey(caKeyBlock.Bytes)
+			rogueKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			rogueTmpl := x509.Certificate{
+				SerialNumber: big.NewInt(9999),
+				Subject:      pkix.Name{CommonName: "rogue-attacker"},
+				NotBefore:    time.Now().Add(-1 * time.Hour),
+				NotAfter:     time.Now().Add(1 * time.Hour),
+				ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			}
+			rogueDer, errCert := x509.CreateCertificate(rand.Reader, &rogueTmpl, parsedCA, &rogueKey.PublicKey, parsedCAKey)
+			if errCert == nil {
+				rogueCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rogueDer})
+				rogueKeyBytes, _ := x509.MarshalECPrivateKey(rogueKey)
+				rogueKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: rogueKeyBytes})
+				rogueTLSCert, _ := tls.X509KeyPair(rogueCertPEM, rogueKeyPEM)
+				rogueClient := &http.Client{
+					Transport: &http.Transport{
+						TLSClientConfig: &tls.Config{
+							RootCAs:      rootCAs,
+							Certificates: []tls.Certificate{rogueTLSCert},
+							MinVersion:   tls.VersionTLS13,
+						},
+					},
+					Timeout: 3 * time.Second,
+				}
+				_, err = rogueClient.Get("https://localhost:9443/tls/status")
+				if err == nil {
+					t.Fatal("expected rogue client with invalid CN to be rejected by mTLS VerifyPeerCertificate, but succeeded!")
+				}
+				t.Logf("  -> [TEST 14d: ROGUE REJECTED] Rogue identity correctly rejected by mTLS peer verification: %v", err)
+			}
+		}
+	}
+
+	// 14e. Test Live End-to-End Relay over mTLS RPC endpoint (:9443 /rpc)
+	mtlsRelayBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      999,
+		"method":  "saral_sendRelayMessage",
+		"params": map[string]interface{}{
+			"sourceNode": "saral-foundation-1",
+			"targetNode": "saral-public-2",
+			"type":       "MTLS_LIVE_WIRE_RELAY",
+			"payload": map[string]interface{}{
+				"encryptedOverMTLS": true,
+				"timestamp":         time.Now().UTC().Format(time.RFC3339),
+			},
+			"timeoutMs": 8000,
+		},
+	}
+	mrbData, _ := json.Marshal(mtlsRelayBody)
+	mrbReq, err := http.NewRequest("POST", "https://localhost:9443/rpc", bytes.NewReader(mrbData))
+	if err != nil {
+		t.Fatalf("failed to create mTLS RPC request: %v", err)
+	}
+	mrbReq.Header.Set("Content-Type", "application/json")
+	mrbReq.Header.Set("Authorization", "Bearer "+aOut.Token)
+
+	mrbResp, err := validMTLSClient.Do(mrbReq)
+	if err != nil {
+		t.Fatalf("failed to execute relay message over mTLS port 9443: %v", err)
+	}
+	var mrbOut struct {
+		Result *relayTestRecord `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.NewDecoder(mrbResp.Body).Decode(&mrbOut)
+	mrbResp.Body.Close()
+
+	if mrbOut.Error != nil {
+		t.Fatalf("mTLS relay error: %s", mrbOut.Error.Message)
+	}
+	if mrbOut.Result == nil || mrbOut.Result.State != "ACKNOWLEDGED" {
+		t.Fatalf("mTLS relay expected ACKNOWLEDGED, got %+v", mrbOut.Result)
+	}
+	if mrbOut.Result.Ack == nil || mrbOut.Result.Ack.RecipientSigHex == "" {
+		t.Fatalf("mTLS relay expected recipient signature in ACK")
+	}
+	t.Logf("  -> [TEST 14e: WIRE mTLS RELAY] Live relay successfully delivered over TLS 1.3 mTLS mesh! RecipientSig: %s...", mrbOut.Result.Ack.RecipientSigHex[:16])
+
+	t.Log("✅ ALL LIVE DOCKER RELAY INTEGRATION TESTS PASSED (23 healthy containers, live JWT auth, 6 routes with authentic recipient ACKs, unknown peer rejection, forged enrollment rejection, default credentials rejection, unauthorized RPC rejection, stub compliance, destination privacy proof, replay safety, restart recovery, credential rotation, live TLS 1.3/mTLS wire traffic)!")
 }

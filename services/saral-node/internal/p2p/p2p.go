@@ -57,7 +57,14 @@ type P2PManager struct {
 	seenNonces          map[string]int64                       // Nonce -> Expire UnixMilli
 	mu                  sync.RWMutex
 	httpClient          *http.Client
+	mtlsClient          *http.Client
 	stopChan            chan struct{}
+}
+
+func (m *P2PManager) SetMTLSClient(client *http.Client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mtlsClient = client
 }
 
 func NewP2PManager(idMgr *identity.IdentityManager, domain string, peerEndpoints []string) *P2PManager {
@@ -192,14 +199,34 @@ func (m *P2PManager) pingPeer(endpoint string) {
 	}
 
 	start := time.Now()
-	req, err := http.NewRequest("POST", endpoint+"/p2p/ping", bytes.NewReader(data))
-	if err != nil {
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+	var resp *http.Response
 
-	resp, err := m.httpClient.Do(req)
+	// Attempt mTLS ping first if mTLS client configured
+	if m.mtlsClient != nil {
+		mtlsEndpoint := endpoint
+		if strings.Contains(endpoint, "8001") {
+			mtlsEndpoint = strings.Replace(endpoint, "8001", "8443", 1)
+			mtlsEndpoint = strings.Replace(mtlsEndpoint, "http://", "https://", 1)
+		}
+		if mReq, mErr := http.NewRequest("POST", mtlsEndpoint+"/p2p/ping", bytes.NewReader(data)); mErr == nil {
+			mReq.Header.Set("Content-Type", "application/json")
+			mReq.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+			if mResp, errDo := m.mtlsClient.Do(mReq); errDo == nil && mResp.StatusCode == http.StatusOK {
+				resp = mResp
+			}
+		}
+	}
+
+	if resp == nil {
+		req, err := http.NewRequest("POST", endpoint+"/p2p/ping", bytes.NewReader(data))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+
+		resp, err = m.httpClient.Do(req)
+	}
 	latency := time.Since(start).Milliseconds()
 
 	m.mu.Lock()
@@ -211,7 +238,7 @@ func (m *P2PManager) pingPeer(endpoint string) {
 		m.peers[endpoint] = info
 	}
 
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
 		info.Connected = false
 		info.Status = "UNREACHABLE"
 		return

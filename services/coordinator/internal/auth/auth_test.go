@@ -69,3 +69,4 @@ func TestAuthSecurityAndRotation(t *testing.T) {
 		t.Fatal("expected previous token to validate during rotation grace period")
 	}
 }
+

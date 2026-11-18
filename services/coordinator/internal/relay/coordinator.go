@@ -27,6 +27,13 @@ type RelayCoordinator struct {
 	auditLog   []*DeliveryRecord
 	mu         sync.RWMutex
 	httpClient *http.Client
+	mtlsClient *http.Client
+}
+
+func (rc *RelayCoordinator) SetMTLSClient(client *http.Client) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.mtlsClient = client
 }
 
 func NewRelayCoordinator(
@@ -215,6 +222,28 @@ func (rc *RelayCoordinator) deliverToLocalNode(normTarget string, msg *RelayMess
 	var lastErr error
 	backoff := 100 * time.Millisecond
 
+	// Attempt mTLS delivery first if mTLS client configured
+	if rc.mtlsClient != nil {
+		mtlsEndpoint := targetNodeInfo.Endpoint
+		if strings.Contains(mtlsEndpoint, "8001") {
+			mtlsEndpoint = strings.Replace(mtlsEndpoint, "8001", "8443", 1)
+			mtlsEndpoint = strings.Replace(mtlsEndpoint, "http://", "https://", 1)
+		}
+		mReq, err := http.NewRequest("POST", mtlsEndpoint+"/node/relay", bytes.NewReader(data))
+		if err == nil {
+			mReq.Header.Set("Content-Type", "application/json")
+			mReq.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+			mResp, errDo := rc.mtlsClient.Do(mReq)
+			if errDo == nil {
+				defer mResp.Body.Close()
+				if decodeErr := json.NewDecoder(mResp.Body).Decode(&ack); decodeErr == nil {
+					rc.recordAudit(msg, &ack)
+					return &ack, nil
+				}
+			}
+		}
+	}
+
 	for attempt := 1; attempt <= 3; attempt++ {
 		req, err := http.NewRequest("POST", targetNodeInfo.Endpoint+"/node/relay", bytes.NewReader(data))
 		if err != nil {
@@ -325,6 +354,30 @@ func (rc *RelayCoordinator) forwardToPeerCoordinator(targetDomain string, msg *R
 	var lastErr error
 	backoff := 100 * time.Millisecond
 
+	// Attempt mTLS forward first if mTLS client configured
+	if rc.mtlsClient != nil {
+		mtlsTarget := destURL
+		if strings.Contains(mtlsTarget, "9001") || strings.Contains(mtlsTarget, "9002") || strings.Contains(mtlsTarget, "9003") {
+			mtlsTarget = strings.Replace(mtlsTarget, "9001", "9443", 1)
+			mtlsTarget = strings.Replace(mtlsTarget, "9002", "9443", 1)
+			mtlsTarget = strings.Replace(mtlsTarget, "9003", "9443", 1)
+			mtlsTarget = strings.Replace(mtlsTarget, "http://", "https://", 1)
+		}
+		mReq, err := http.NewRequest("POST", mtlsTarget, bytes.NewReader(data))
+		if err == nil {
+			mReq.Header.Set("Content-Type", "application/json")
+			mReq.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+			mResp, errDo := rc.mtlsClient.Do(mReq)
+			if errDo == nil {
+				defer mResp.Body.Close()
+				if decodeErr := json.NewDecoder(mResp.Body).Decode(&ack); decodeErr == nil {
+					rc.recordAudit(msg, &ack)
+					return &ack, nil
+				}
+			}
+		}
+	}
+
 	for attempt := 1; attempt <= 3; attempt++ {
 		req, err := http.NewRequest("POST", destURL, bytes.NewReader(data))
 		if err != nil {
@@ -418,6 +471,34 @@ func (rc *RelayCoordinator) SendRelay(req RelaySendRequest) (*DeliveryRecord, er
 		sendData, err := json.Marshal(req)
 		if err != nil {
 			return nil, err
+		}
+
+		// Attempt mTLS dispatch to source node if mTLS client configured
+		if rc.mtlsClient != nil {
+			mtlsEndpoint := sourceNodeInfo.Endpoint
+			if strings.Contains(mtlsEndpoint, "8001") {
+				mtlsEndpoint = strings.Replace(mtlsEndpoint, "8001", "8443", 1)
+				mtlsEndpoint = strings.Replace(mtlsEndpoint, "http://", "https://", 1)
+			}
+			mReq, err := http.NewRequest("POST", mtlsEndpoint+"/node/relay/send", bytes.NewReader(sendData))
+			if err == nil {
+				mReq.Header.Set("Content-Type", "application/json")
+				mReq.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+				mResp, errDo := rc.mtlsClient.Do(mReq)
+				if errDo == nil {
+					defer mResp.Body.Close()
+					var rec DeliveryRecord
+					if json.NewDecoder(mResp.Body).Decode(&rec) == nil {
+						rc.mu.Lock()
+						if len(rc.auditLog) >= MaxCoordinatorHistory {
+							rc.auditLog = rc.auditLog[1:]
+						}
+						rc.auditLog = append(rc.auditLog, &rec)
+						rc.mu.Unlock()
+						return &rec, nil
+					}
+				}
+			}
 		}
 
 		httpReq, err := http.NewRequest("POST", sourceNodeInfo.Endpoint+"/node/relay/send", bytes.NewReader(sendData))

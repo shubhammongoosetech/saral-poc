@@ -1,18 +1,21 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/discovery"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/health"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/membership"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/relay"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/rpc"
+	"github.com/saral-protocol/saral-poc/services/coordinator/internal/tlsutil"
 )
 
 func main() {
@@ -24,6 +27,8 @@ func main() {
 	nodeHostFlag := flag.String("node-host", getEnv("NODE_HOST", "localhost"), "Host for domain nodes")
 	nodeAddrsFlag := flag.String("node-addrs", getEnv("NODE_ADDRS", ""), "Comma-separated list of explicit node endpoints")
 	peersFlag := flag.String("peers", getEnv("PEER_COORDINATORS", ""), "Comma-separated peer coordinator endpoints")
+	mtlsPortFlag := flag.Int("mtls-port", getEnvInt("MTLS_PORT", 9443), "Port for TLS 1.3 mTLS server (0 to disable)")
+	tlsDirFlag := flag.String("tls-dir", getEnv("TLS_DIR", "/etc/saral/tls"), "Directory for TLS certs")
 	flag.Parse()
 
 	domain := membership.DomainType(strings.ToUpper(*domainFlag))
@@ -70,6 +75,48 @@ func main() {
 	}, func() int {
 		return len(peers)
 	}))
+
+	coordID := fmt.Sprintf("saral-coord-%s", strings.ToLower(string(domain)))
+	http.HandleFunc("/tls/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"mtlsEnabled":   *mtlsPortFlag > 0,
+			"tlsVersion":    "TLS 1.3",
+			"coordinatorId": coordID,
+			"domain":        string(domain),
+			"mtlsPort":      *mtlsPortFlag,
+			"mutualAuth":    "RequireAndVerifyClientCert",
+			"timestamp":     time.Now().UTC().Format(time.RFC3339),
+		})
+	})
+
+	// 7. Setup TLS 1.3 / mTLS Server & Client
+	mtlsPort := *mtlsPortFlag
+	if mtlsPort > 0 {
+		hosts := []string{
+			"localhost",
+			"127.0.0.1",
+			coordID,
+			fmt.Sprintf("coordinator-%s", strings.ToLower(string(domain))),
+			fmt.Sprintf("saral-coord-%s", strings.ToLower(string(domain))),
+		}
+		certPEM, keyPEM, caCertPEM, err := tlsutil.EnsureCertificates(*tlsDirFlag, coordID, hosts)
+		if err != nil {
+			log.Printf("[SARAL Coordinator - %s] Warning: Failed to provision mTLS certificates: %v", domain, err)
+		} else {
+			mtlsAddr := fmt.Sprintf(":%d", mtlsPort)
+			_, _, err := tlsutil.SetupMTLSServer(mtlsAddr, nil, certPEM, keyPEM, caCertPEM)
+			if err != nil {
+				log.Printf("[SARAL Coordinator - %s] Warning: Failed to start mTLS server on %s: %v", domain, mtlsAddr, err)
+			} else {
+				log.Printf("[SARAL Coordinator - %s] mTLS (TLS 1.3 mutual auth) actively listening on %s (Identity: %s)", domain, mtlsAddr, coordID)
+				if client, err := tlsutil.NewClient(caCertPEM, certPEM, keyPEM, 12*time.Second); err == nil {
+					relayCoord.SetMTLSClient(client)
+					monitor.SetMTLSClient(client)
+				}
+			}
+		}
+	}
 
 	addr := fmt.Sprintf(":%d", *portFlag)
 	log.Printf("[SARAL Coordinator - %s] JSON-RPC listening at http://localhost%s (Managing %d nodes, %d peer coordinators)",

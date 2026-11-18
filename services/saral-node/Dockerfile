@@ -11,6 +11,6 @@ COPY --from=builder /bin/saral-node /usr/local/bin/saral-node
 ENV PORT=8001
 ENV VAULT_DIR=/vault
 VOLUME ["/vault"]
-EXPOSE 8001
+EXPOSE 8001 8443
 ENTRYPOINT ["/usr/local/bin/saral-node"]
 

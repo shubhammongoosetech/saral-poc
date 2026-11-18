@@ -9,6 +9,6 @@ FROM alpine:3.20
 WORKDIR /app
 COPY --from=builder /bin/coordinator /usr/local/bin/coordinator
 ENV PORT=9001
-EXPOSE 9001
+EXPOSE 9001 9443
 ENTRYPOINT ["/usr/local/bin/coordinator"]
 

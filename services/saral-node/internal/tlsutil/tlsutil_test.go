@@ -92,3 +92,4 @@ func TestTLSAndMutualAuthentication(t *testing.T) {
 	}
 	t.Logf("  -> Unauthenticated client without certificate correctly rejected: %v", err)
 }
+

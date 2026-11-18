@@ -55,3 +55,4 @@ func TestDestinationEncryptionAndDecryption(t *testing.T) {
 		t.Fatal("expected decryption of corrupted ciphertext to fail, but it succeeded!")
 	}
 }
+

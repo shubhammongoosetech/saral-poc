@@ -96,9 +96,12 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 1
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f2:8001,http://node-p1:8001,http://node-r1:8001
-    volumes: ['node_f1_vault:/vault']
+    volumes: ['node_f1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
+    ports:
+      - '8443:8443'
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -116,9 +119,10 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 2
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f1:8001,http://node-f3:8001
-    volumes: ['node_f2_vault:/vault']
+    volumes: ['node_f2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -136,9 +140,10 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 3
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f2:8001,http://node-f4:8001
-    volumes: ['node_f3_vault:/vault']
+    volumes: ['node_f3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -156,9 +161,10 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 4
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f3:8001,http://node-f5:8001
-    volumes: ['node_f4_vault:/vault']
+    volumes: ['node_f4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -176,9 +182,10 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 5
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f4:8001,http://node-f1:8001
-    volumes: ['node_f5_vault:/vault']
+    volumes: ['node_f5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -197,9 +204,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 1
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-f1:8001,http://node-p2:8001,http://node-r1:8001
-    volumes: ['node_p1_vault:/vault']
+    volumes: ['node_p1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -217,9 +225,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 2
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p1:8001,http://node-p3:8001
-    volumes: ['node_p2_vault:/vault']
+    volumes: ['node_p2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -237,9 +246,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 3
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p2:8001,http://node-p4:8001
-    volumes: ['node_p3_vault:/vault']
+    volumes: ['node_p3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -257,9 +267,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 4
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p3:8001,http://node-p5:8001
-    volumes: ['node_p4_vault:/vault']
+    volumes: ['node_p4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -277,9 +288,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 5
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p4:8001,http://node-p1:8001
-    volumes: ['node_p5_vault:/vault']
+    volumes: ['node_p5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -298,9 +310,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 1
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-f1:8001,http://node-p1:8001,http://node-r2:8001
-    volumes: ['node_r1_vault:/vault']
+    volumes: ['node_r1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -318,9 +331,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 2
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r1:8001,http://node-r3:8001
-    volumes: ['node_r2_vault:/vault']
+    volumes: ['node_r2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -338,9 +352,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 3
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r2:8001,http://node-r4:8001
-    volumes: ['node_r3_vault:/vault']
+    volumes: ['node_r3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -358,9 +373,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 4
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r3:8001,http://node-r5:8001
-    volumes: ['node_r4_vault:/vault']
+    volumes: ['node_r4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -378,9 +394,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 5
       PORT: 8001
+      MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r4:8001,http://node-r1:8001
-    volumes: ['node_r5_vault:/vault']
+    volumes: ['node_r5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
@@ -397,15 +414,18 @@ services:
     image: saral-coordinator:v3
     container_name: saral-coord-foundation
     restart: unless-stopped
+    volumes: ['../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     environment:
       PORT: 9001
+      MTLS_PORT: 9443
       DOMAIN: FOUNDATION
       VERIFIER_URL: http://verifier-foundation:9101
       PEER_COORDINATORS: http://coordinator-public:9002,http://coordinator-private:9003
       NODE_ADDRS: http://node-f1:8001,http://node-f2:8001,http://node-f3:8001,http://node-f4:8001,http://node-f5:8001
     ports:
       - '9001:9001'
+      - '9443:9443'
     depends_on:
       verifier-foundation:
         condition: service_healthy
@@ -423,15 +443,18 @@ services:
     image: saral-coordinator:v3
     container_name: saral-coord-public
     restart: unless-stopped
+    volumes: ['../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     environment:
       PORT: 9002
+      MTLS_PORT: 9443
       DOMAIN: PUBLIC
       VERIFIER_URL: http://verifier-public:9102
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-private:9003
       NODE_ADDRS: http://node-p1:8001,http://node-p2:8001,http://node-p3:8001,http://node-p4:8001,http://node-p5:8001
     ports:
       - '9002:9002'
+      - '9444:9443'
     depends_on:
       verifier-public:
         condition: service_healthy
@@ -449,15 +472,18 @@ services:
     image: saral-coordinator:v3
     container_name: saral-coord-private
     restart: unless-stopped
+    volumes: ['../../infra/tls:/etc/saral/tls:ro']
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     environment:
       PORT: 9003
+      MTLS_PORT: 9443
       DOMAIN: PRIVATE
       VERIFIER_URL: http://verifier-private:9103
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-public:9002
       NODE_ADDRS: http://node-r1:8001,http://node-r2:8001,http://node-r3:8001,http://node-r4:8001,http://node-r5:8001
     ports:
       - '9003:9003'
+      - '9445:9443'
     depends_on:
       verifier-private:
         condition: service_healthy

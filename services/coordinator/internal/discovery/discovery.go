@@ -45,7 +45,14 @@ type Monitor struct {
 	approvedRegistry map[string]membership.ParticipantEntry // Canonical ID -> approved participant
 	mu               sync.RWMutex
 	httpClient       *http.Client
+	mtlsClient       *http.Client
 	stopChan         chan struct{}
+}
+
+func (m *Monitor) SetMTLSClient(client *http.Client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mtlsClient = client
 }
 
 func NewMonitor(registry *membership.NodeRegistry, peerCoordinatorURLs []string) *Monitor {
@@ -281,7 +288,22 @@ func (m *Monitor) pollAll() {
 
 func (m *Monitor) pollNode(n membership.NodeInfo) {
 	start := time.Now()
-	resp, err := m.httpClient.Get(n.Endpoint + "/node/status")
+	var resp *http.Response
+	var err error
+
+	if m.mtlsClient != nil {
+		mtlsEndpoint := n.Endpoint
+		if strings.Contains(mtlsEndpoint, "8001") {
+			mtlsEndpoint = strings.Replace(mtlsEndpoint, "8001", "8443", 1)
+			mtlsEndpoint = strings.Replace(mtlsEndpoint, "http://", "https://", 1)
+		}
+		if mResp, mErr := m.mtlsClient.Get(mtlsEndpoint + "/node/status"); mErr == nil && mResp.StatusCode == http.StatusOK {
+			resp = mResp
+		}
+	}
+	if resp == nil {
+		resp, err = m.httpClient.Get(n.Endpoint + "/node/status")
+	}
 	latency := time.Since(start).Milliseconds()
 
 	m.mu.Lock()
@@ -296,7 +318,7 @@ func (m *Monitor) pollNode(n membership.NodeInfo) {
 	state.LastChecked = time.Now()
 	state.LatencyMs = latency
 
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
 		state.Status = "UNREACHABLE"
 		return
 	}

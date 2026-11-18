@@ -38,7 +38,14 @@ type RelayRouter struct {
 	history             []*DeliveryRecord
 	mu                  sync.RWMutex
 	httpClient          *http.Client
+	mtlsClient          *http.Client
 	stopChan            chan struct{}
+}
+
+func (r *RelayRouter) SetMTLSClient(client *http.Client) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mtlsClient = client
 }
 
 func NewRelayRouter(
@@ -430,6 +437,35 @@ func (r *RelayRouter) dispatchWithRetry(url string, msg *RelayMessage, maxRetrie
 
 	var lastErr error
 	backoff := 100 * time.Millisecond
+
+	// If mTLS client configured, attempt mTLS URL first
+	if r.mtlsClient != nil {
+		mtlsURL := url
+		if strings.Contains(url, "8001") {
+			mtlsURL = strings.Replace(url, "8001", "8443", 1)
+			mtlsURL = strings.Replace(mtlsURL, "http://", "https://", 1)
+		} else if strings.Contains(url, "9001") || strings.Contains(url, "9002") || strings.Contains(url, "9003") {
+			mtlsURL = strings.Replace(url, "9001", "9443", 1)
+			mtlsURL = strings.Replace(mtlsURL, "9002", "9443", 1)
+			mtlsURL = strings.Replace(mtlsURL, "9003", "9443", 1)
+			mtlsURL = strings.Replace(mtlsURL, "http://", "https://", 1)
+		}
+		if mtlsURL != url {
+			mReq, err := http.NewRequest("POST", mtlsURL, bytes.NewReader(data))
+			if err == nil {
+				mReq.Header.Set("Content-Type", "application/json")
+				mReq.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+				mResp, errDo := r.mtlsClient.Do(mReq)
+				if errDo == nil {
+					defer mResp.Body.Close()
+					var ack RelayAck
+					if decodeErr := json.NewDecoder(mResp.Body).Decode(&ack); decodeErr == nil {
+						return &ack, nil
+					}
+				}
+			}
+		}
+	}
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		req, err := http.NewRequest("POST", url, bytes.NewReader(data))
