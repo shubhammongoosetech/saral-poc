@@ -81,13 +81,14 @@ type DKGInitMessage struct {
 
 // DKGContributionMessage announces a node's AVSS contribution commitment matrix
 type DKGContributionMessage struct {
-	SessionID        string     `json:"sessionId"`
-	CommitteeID      string     `json:"committeeId"`
-	DealerID         string     `json:"dealerId"`
-	DealerIndex      int        `json:"dealerIndex"`
-	SecretCommitment string     `json:"secretCommitment"` // C_{0,0} hex
-	CommitmentMatrix [][]string `json:"commitmentMatrix"` // hex matrix
-	Timestamp        int64      `json:"timestamp"`
+	SessionID           string     `json:"sessionId"`
+	CommitteeID         string     `json:"committeeId"`
+	DealerID            string     `json:"dealerId"`
+	DealerIndex         int        `json:"dealerIndex"`
+	SecretCommitment    string     `json:"secretCommitment"`    // C_{0,0} hex (Pedersen: z_i*G + z'_i*H)
+	PublicKeyCommitment string     `json:"publicKeyCommitment"` // V_i hex (Feldman/signing: z_i*G)
+	CommitmentMatrix    [][]string `json:"commitmentMatrix"`    // hex matrix
+	Timestamp           int64      `json:"timestamp"`
 }
 
 // DKGAVSSCompleteMessage signals that a node has completed verification of a peer's AVSS sharing
@@ -144,19 +145,21 @@ type DKGParticipantStatus struct {
 
 // DKGSessionPublicView represents public session metadata exposed over RPC / SDK
 type DKGSessionPublicView struct {
-	SessionID        string                           `json:"sessionId"`
-	CommitteeID      string                           `json:"committeeId"`
-	Epoch            uint64                           `json:"epoch"`
-	N                int                              `json:"n"`
-	K                int                              `json:"k"`
-	T                int                              `json:"t"`
-	State            DKGState                         `json:"state"`
-	Committee        []string                         `json:"committee"`
-	QualifiedSet     []string                         `json:"qualifiedSet,omitempty"`
-	MasterPublicKey  string                           `json:"masterPublicKey,omitempty"`
-	Curve            string                           `json:"curve"`
-	Participants     map[string]*DKGParticipantStatus `json:"participants"`
-	CreatedAt        int64                            `json:"createdAt"`
-	UpdatedAt        int64                            `json:"updatedAt"`
-	Error            string                           `json:"error,omitempty"`
+	SessionID              string                           `json:"sessionId"`
+	CommitteeID            string                           `json:"committeeId"`
+	Epoch                  uint64                           `json:"epoch"`
+	N                      int                              `json:"n"`
+	K                      int                              `json:"k"`
+	T                      int                              `json:"t"`
+	State                  DKGState                         `json:"state"`
+	Committee              []string                         `json:"committee"`
+	QualifiedSet           []string                         `json:"qualifiedSet,omitempty"`
+	MasterSigningPublicKey string                           `json:"masterSigningPublicKey,omitempty"` // Y = x * G (real signing key)
+	MasterSecretCommitment string                           `json:"masterSecretCommitment,omitempty"` // C = x * G + x' * H (Pedersen commitment)
+	MasterPublicKey        string                           `json:"masterPublicKey,omitempty"`        // signing key
+	Curve                  string                           `json:"curve"`
+	Participants           map[string]*DKGParticipantStatus `json:"participants"`
+	CreatedAt              int64                            `json:"createdAt"`
+	UpdatedAt              int64                            `json:"updatedAt"`
+	Error                  string                           `json:"error,omitempty"`
 }

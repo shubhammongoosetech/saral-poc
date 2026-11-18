@@ -521,3 +521,126 @@ func TestDKGThenProactiveRefreshIntegration(t *testing.T) {
 		}
 	}
 }
+
+// TestDKGPedersenCommitmentVsSigningPublicKey audits and verifies that:
+// 1. Pedersen commitment has the form C_00 = x*G + r*H
+// 2. Blockchain signing public key must be Y = x*G
+// 3. A blinded Pedersen commitment C_00 is mathematically distinct from the unblinded signing key Y
+// 4. Any k reconstructed shares yield secret x whose scalar base mult strictly equals Y = x*G
+func TestDKGPedersenCommitmentVsSigningPublicKey(t *testing.T) {
+	n := 5
+	k := 2
+	f := 1
+
+	committee := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
+	sessions := make(map[string]*dkg.Session)
+
+	for idx, id := range committee {
+		sess, err := dkg.NewSession("dkg-audit-pedersen", "comm-5", id, idx+1, committee, n, k, f, nil)
+		if err != nil {
+			t.Fatalf("failed init session for %s: %v", id, err)
+		}
+		sessions[id] = sess
+	}
+
+	// Each node starts contribution and registers both C^{(i)}_{0,0} and V_i = z_i * G
+	for _, id := range committee {
+		pkg, err := sessions[id].StartContribution()
+		if err != nil {
+			t.Fatalf("failed start contribution for %s: %v", id, err)
+		}
+		for _, peer := range committee {
+			sessions[peer].RecordPeerCommitment(id, pkg.CommitmentMatrix)
+			// Compute and record unblinded signing public key share V_i = z_i * G
+			zi := sessions[id].LocalSecret
+			vI := cryptography.GeneratorG.ScalarMult(zi)
+			sessions[peer].RecordPeerPublicKey(id, vI)
+		}
+	}
+
+	// Deliver all AVSS contribution shares and commitment matrices across nodes
+	for dealerID, fromSess := range sessions {
+		pkg := fromSess.LocalDealerPkg
+		for _, recipientID := range committee {
+			sessions[recipientID].RecordPeerCommitment(dealerID, pkg.CommitmentMatrix)
+
+			rIdx := avss.NodeIndexInCommittee(committee, recipientID)
+			sendMsg := pkg.SendMessages[recipientID]
+
+			subSess, err := avss.NewSession(
+				sendMsg.SessionID, "comm-5", dealerID, recipientID, rIdx, 1, n, k, f, committee,
+			)
+			if err != nil {
+				t.Fatalf("failed creating sub AVSS session: %v", err)
+			}
+
+			_, err = subSess.ProcessSendMessage(sendMsg)
+			if err != nil {
+				t.Fatalf("recipient %s failed processing SEND from %s: %v", recipientID, dealerID, err)
+			}
+			err = subSess.FinalizeShare()
+			if err != nil {
+				t.Fatalf("recipient %s failed to finalize share from %s: %v", recipientID, dealerID, err)
+			}
+
+			sessions[recipientID].RecordCompletedSharing(dealerID, subSess)
+		}
+	}
+
+	// Aggregate on all nodes
+	qual := []string{"node-1", "node-2", "node-3", "node-4"}
+	for _, id := range committee {
+		if err := sessions[id].AggregateShares(qual); err != nil {
+			t.Fatalf("node %s failed to aggregate shares: %v", id, err)
+		}
+	}
+
+	sess1 := sessions["node-1"]
+
+	// Cryptographic distinction check:
+	// MasterSigningPublicKey Y = x*G vs MasterSecretCommitment C = x*G + x'*H
+	if sess1.MasterSigningPublicKey == nil || sess1.MasterSecretCommitment == nil {
+		t.Fatalf("session missing MasterSigningPublicKey or MasterSecretCommitment")
+	}
+
+	// When blinding factor x' != 0, C != Y
+	if sess1.MasterSigningPublicKey.Equal(sess1.MasterSecretCommitment) {
+		t.Fatalf("CRYPTOGRAPHIC FLAW: Signing public key equals blinded Pedersen commitment! (Must differ by r*H)")
+	}
+
+	// Reconstruct secret x from k=2 shares
+	x1 := cryptography.NewFieldElement(1)
+	x2 := cryptography.NewFieldElement(2)
+	xTarget := cryptography.NewFieldElement(0)
+	xs := []*cryptography.FieldElement{x1, x2}
+
+	l1, _ := cryptography.LagrangeCoefficient(xTarget, x1, xs)
+	l2, _ := cryptography.LagrangeCoefficient(xTarget, x2, xs)
+
+	s1 := sessions["node-1"].FinalShare
+	s2 := sessions["node-2"].FinalShare
+	b1 := sessions["node-1"].FinalBlindShare
+	b2 := sessions["node-2"].FinalBlindShare
+
+	reconstructedX := l1.Mul(s1).Add(l2.Mul(s2))
+	reconstructedBlind := l1.Mul(b1).Add(l2.Mul(b2))
+
+	// Proof 1: Reconstructed secret x * G strictly equals MasterSigningPublicKey!
+	computedSigningKey := cryptography.GeneratorG.ScalarMult(reconstructedX)
+	if !computedSigningKey.Equal(sess1.MasterSigningPublicKey) {
+		t.Fatalf("SIGNING KEY MISMATCH: x*G != MasterSigningPublicKey (got %s, expected %s)",
+			computedSigningKey.Hex(), sess1.MasterSigningPublicKey.Hex())
+	}
+
+	// Proof 2: Reconstructed x*G + x'*H strictly equals MasterSecretCommitment!
+	computedPedersenCommit := cryptography.PedersenCommitment(reconstructedX, reconstructedBlind)
+	if !computedPedersenCommit.Equal(sess1.MasterSecretCommitment) {
+		t.Fatalf("PEDERSEN COMMITMENT MISMATCH: x*G + r*H != MasterSecretCommitment")
+	}
+
+	t.Logf("✅ Cryptographic validation PASSED:")
+	t.Logf("   -> Master Signing Key Y = x*G: %s", sess1.MasterSigningPublicKey.Hex())
+	t.Logf("   -> Master Pedersen Commitment C = x*G + r*H: %s", sess1.MasterSecretCommitment.Hex())
+	t.Logf("   -> Verified: Y != C (blinded commitment strictly decoupled from signing key)")
+	t.Logf("   -> Verified: x*G == Y (blockchain signing key derivation is exact and unblinded)")
+}

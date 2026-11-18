@@ -50,7 +50,9 @@ type Server struct {
 	relayCoord     *relay.RelayCoordinator
 	avssSessions   map[string]*AVSSSessionInfo
 	dkgSessions    map[string]*DKGSessionMeta
+	wallets        map[string]*WalletRecord
 	avssMu         sync.RWMutex
+	walletMu       sync.RWMutex
 }
 
 func NewServer(
@@ -72,6 +74,7 @@ func NewServer(
 		relayCoord:     relayCoord,
 		avssSessions:   make(map[string]*AVSSSessionInfo),
 		dkgSessions:    make(map[string]*DKGSessionMeta),
+		wallets:        make(map[string]*WalletRecord),
 	}
 }
 
@@ -226,11 +229,19 @@ func (s *Server) dispatch(method string, params json.RawMessage, token string) (
 		return s.handleGetDKGPublicKey(params)
 	case "saral_getDkgVerificationStatus":
 		return s.handleGetDKGVerificationStatus(params)
+	case "saral_createWallet":
+		return s.handleCreateWallet(params, token)
+	case "saral_getWallets":
+		return s.handleGetWallets(params)
+	case "saral_getWalletById":
+		return s.handleGetWalletById(params)
+	case "saral_getWalletAddress":
+		return s.handleGetWalletAddress(params)
 	// Cryptographic Stubs - Explicitly NOT_IMPLEMENTED as per Section 8
-	case "saral_signTransaction", "saral_createWallet":
+	case "saral_signTransaction":
 		return nil, &JsonRpcErr{
 			Code:    -32000,
-			Message: "NOT_IMPLEMENTED: Cryptographic signing and wallet transactions are scheduled for future phases.",
+			Message: "NOT_IMPLEMENTED: Cryptographic signing and threshold transaction signing are scheduled for future phases.",
 		}
 	default:
 		return nil, &JsonRpcErr{Code: -32601, Message: fmt.Sprintf("Method not found: %s", method)}

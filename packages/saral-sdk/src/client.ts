@@ -26,6 +26,9 @@ import {
   DKGParticipantsResponse,
   DKGPublicKeyResponse,
   DKGVerificationStatusResponse,
+  WalletRecord,
+  CreateWalletRequest,
+  WalletAddressResponse,
 } from './types';
 
 export interface SaralClientConfig {
@@ -312,6 +315,43 @@ export class SaralClient {
    */
   public async getDkgVerificationStatus(sessionId?: string, coordUrl?: string): Promise<DKGVerificationStatusResponse> {
     return this.rpcCall<DKGVerificationStatusResponse>('saral_getDkgVerificationStatus', { sessionId }, coordUrl);
+  }
+
+  // ==========================================
+  // Web3 Wallet Management
+  // ==========================================
+
+  /**
+   * Creates a persistent public wallet metadata record on the target coordinator.
+   * Enforces strict curve compatibility validation:
+   * - Ethereum / EVM: requires secp256k1
+   * - Bitcoin Taproot: requires secp256k1 (BIP-340)
+   * - Solana: requires Ed25519
+   * - Passkey / WebAuthn Account: supports NIST P-256
+   */
+  public async createWallet(req: CreateWalletRequest, coordUrl?: string): Promise<WalletRecord> {
+    return this.rpcCall<WalletRecord>('saral_createWallet', req, coordUrl);
+  }
+
+  /**
+   * Returns all public wallet records stored across the coordinator.
+   */
+  public async getWallets(coordUrl?: string): Promise<WalletRecord[]> {
+    return this.rpcCall<WalletRecord[]>('saral_getWallets', {}, coordUrl);
+  }
+
+  /**
+   * Returns a specific wallet record by its wallet ID.
+   */
+  public async getWalletById(walletId: string, coordUrl?: string): Promise<WalletRecord> {
+    return this.rpcCall<WalletRecord>('saral_getWalletById', { walletId }, coordUrl);
+  }
+
+  /**
+   * Returns verified address and cryptographic metadata for a wallet.
+   */
+  public async getWalletAddress(walletId: string, coordUrl?: string): Promise<WalletAddressResponse> {
+    return this.rpcCall<WalletAddressResponse>('saral_getWalletAddress', { walletId }, coordUrl);
   }
 }
 

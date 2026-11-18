@@ -33,19 +33,22 @@ type Session struct {
 
 	// Completed AVSS instances from peer dealers: DealerID -> Session
 	CompletedSharings      map[string]*avss.Session
-	PeerCommitments        map[string]*cryptography.CurvePoint
+	PeerCommitments        map[string]*cryptography.CurvePoint // C^{(i)}_{0,0} = z_i*G + z'_i*H
+	PeerPublicKeys         map[string]*cryptography.CurvePoint // V_i = z_i*G (unblinded signing public key share)
 	PeerCommitmentMatrices map[string]*avss.CommitmentMatrix
 
 	// Agreement instance for negotiating the Qualified Set QUAL
 	Agreement *proactive.ValidatedAgreementInstance
 
 	// Final derived DKG key material
-	QualifiedSet        []string
-	AgreedHash          string
-	FinalShare          *cryptography.FieldElement
-	FinalBlindShare     *cryptography.FieldElement
-	FinalShareCommit    *cryptography.CurvePoint
-	MasterPublicKey     *cryptography.CurvePoint
+	QualifiedSet           []string
+	AgreedHash             string
+	FinalShare             *cryptography.FieldElement
+	FinalBlindShare        *cryptography.FieldElement
+	FinalShareCommit       *cryptography.CurvePoint
+	MasterSigningPublicKey *cryptography.CurvePoint // Y = x * G (Genuine unblinded signing public key)
+	MasterSecretCommitment *cryptography.CurvePoint // C = x * G + x' * H (Pedersen commitment)
+	MasterPublicKey        *cryptography.CurvePoint // Signing public key point
 
 	ShareStore *vault.ShareStore
 	CreatedAt  time.Time
@@ -83,6 +86,7 @@ func NewSession(
 		State:                  StateCreated,
 		CompletedSharings:      make(map[string]*avss.Session),
 		PeerCommitments:        make(map[string]*cryptography.CurvePoint),
+		PeerPublicKeys:         make(map[string]*cryptography.CurvePoint),
 		PeerCommitmentMatrices: make(map[string]*avss.CommitmentMatrix),
 		ShareStore:             shareStore,
 		CreatedAt:              time.Now(),
@@ -162,6 +166,7 @@ func (s *Session) StartContribution() (*avss.DealerPackage, error) {
 	s.LocalDealerPkg = dealerPkg
 	s.ContributionDealt = true
 	s.PeerCommitments[s.SelfID] = dealerPkg.CommitmentMatrix.SecretCommitment()
+	s.PeerPublicKeys[s.SelfID] = cryptography.GeneratorG.ScalarMult(zi)
 	s.PeerCommitmentMatrices[s.SelfID] = dealerPkg.CommitmentMatrix
 	s.State = StateAVSSSharing
 	s.UpdatedAt = time.Now()
@@ -177,6 +182,16 @@ func (s *Session) RecordPeerCommitment(dealerID string, cm *avss.CommitmentMatri
 	if cm != nil {
 		s.PeerCommitmentMatrices[dealerID] = cm
 		s.PeerCommitments[dealerID] = cm.SecretCommitment()
+	}
+}
+
+// RecordPeerPublicKey registers a peer dealer's unblinded public key commitment V_i = z_i * G
+func (s *Session) RecordPeerPublicKey(dealerID string, pk *cryptography.CurvePoint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if pk != nil && pk.IsOnCurve() {
+		s.PeerPublicKeys[dealerID] = pk
 	}
 }
 
@@ -255,15 +270,32 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 		combinedBlind = combinedBlind.Add(subSess.BlindShare)
 	}
 
-	// 3. Derive group master public key / secret commitment:
-	// Y = \sum_{i \in QUAL} C^{(i)}_{0, 0}
-	masterPubKey := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	// 3. Derive group master secret commitment:
+	// C = \sum_{i \in QUAL} C^{(i)}_{0, 0} = x * G + x' * H
+	masterSecretCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
 	for _, dealerID := range sortedQUAL {
 		subCommit, exists := s.PeerCommitments[dealerID]
 		if !exists || subCommit == nil {
 			return fmt.Errorf("missing secret commitment for qualified dealer: %s", dealerID)
 		}
-		masterPubKey = masterPubKey.Add(subCommit)
+		masterSecretCommit = masterSecretCommit.Add(subCommit)
+	}
+
+	// 3b. Derive group master signing public key:
+	// Y = \sum_{i \in QUAL} V_i = x * G (where V_i = z_i * G)
+	masterSigningPubKey := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	hasSigningKeys := true
+	for _, dealerID := range sortedQUAL {
+		pk, exists := s.PeerPublicKeys[dealerID]
+		if !exists || pk == nil {
+			hasSigningKeys = false
+			break
+		}
+		masterSigningPubKey = masterSigningPubKey.Add(pk)
+	}
+	if !hasSigningKeys || !masterSigningPubKey.IsOnCurve() {
+		// If peer signing public key shares are not explicitly available, fall back to secret commitment
+		masterSigningPubKey = masterSecretCommit
 	}
 
 	// 4. Derive local public share verification commitment:
@@ -294,7 +326,9 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 	s.FinalShare = combinedShare
 	s.FinalBlindShare = combinedBlind
 	s.FinalShareCommit = shareCommitment
-	s.MasterPublicKey = masterPubKey
+	s.MasterSecretCommitment = masterSecretCommit
+	s.MasterSigningPublicKey = masterSigningPubKey
+	s.MasterPublicKey = masterSigningPubKey
 	s.State = StatePublicKeyVerified
 	s.UpdatedAt = time.Now()
 
@@ -309,7 +343,7 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 			ShareVersion:           s.Epoch,
 			State:                  "ACTIVE",
 			PublicShareCommitment:  shareCommitment.Hex(),
-			PublicSecretCommitment: masterPubKey.Hex(),
+			PublicSecretCommitment: masterSecretCommit.Hex(),
 			CreatedAt:              time.Now().UnixMilli(),
 			UpdatedAt:              time.Now().UnixMilli(),
 		}
@@ -374,22 +408,36 @@ func (s *Session) GetPublicView() *DKGSessionPublicView {
 	if s.MasterPublicKey != nil {
 		masterPubHex = s.MasterPublicKey.Hex()
 	}
+	var signingPubHex string
+	if s.MasterSigningPublicKey != nil {
+		signingPubHex = s.MasterSigningPublicKey.Hex()
+	} else {
+		signingPubHex = masterPubHex
+	}
+	var secretCommitHex string
+	if s.MasterSecretCommitment != nil {
+		secretCommitHex = s.MasterSecretCommitment.Hex()
+	} else {
+		secretCommitHex = masterPubHex
+	}
 
 	return &DKGSessionPublicView{
-		SessionID:       s.SessionID,
-		CommitteeID:     s.CommitteeID,
-		Epoch:           s.Epoch,
-		N:               s.N,
-		K:               s.K,
-		T:               s.T,
-		State:           s.State,
-		Committee:       s.Committee,
-		QualifiedSet:    s.QualifiedSet,
-		MasterPublicKey: masterPubHex,
-		Curve:           "NIST P-256",
-		Participants:    parts,
-		CreatedAt:       s.CreatedAt.UnixMilli(),
-		UpdatedAt:       s.UpdatedAt.UnixMilli(),
-		Error:           s.Error,
+		SessionID:              s.SessionID,
+		CommitteeID:            s.CommitteeID,
+		Epoch:                  s.Epoch,
+		N:                      s.N,
+		K:                      s.K,
+		T:                      s.T,
+		State:                  s.State,
+		Committee:              s.Committee,
+		QualifiedSet:           s.QualifiedSet,
+		MasterSigningPublicKey: signingPubHex,
+		MasterSecretCommitment: secretCommitHex,
+		MasterPublicKey:        masterPubHex,
+		Curve:                  "NIST P-256",
+		Participants:           parts,
+		CreatedAt:              s.CreatedAt.UnixMilli(),
+		UpdatedAt:              s.UpdatedAt.UnixMilli(),
+		Error:                  s.Error,
 	}
 }

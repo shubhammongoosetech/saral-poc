@@ -320,6 +320,8 @@ export interface DKGStatusResponse {
   state: string;
   committee: string[];
   qualifiedSet?: string[];
+  masterSigningPublicKey?: string;
+  masterSecretCommitment?: string;
   masterPublicKey?: string;
   curve: string;
   completedNodes: number;
@@ -338,6 +340,8 @@ export interface DKGParticipantsResponse {
 export interface DKGPublicKeyResponse {
   sessionId: string;
   committeeId: string;
+  masterSigningPublicKey?: string;
+  masterSecretCommitment?: string;
   masterPublicKey: string;
   curve: string;
   threshold: number;
@@ -349,11 +353,78 @@ export interface DKGVerificationStatusResponse {
   committeeId: string;
   verified: boolean;
   state: string;
+  masterSigningPublicKey?: string;
+  masterSecretCommitment?: string;
   masterPublicKey?: string;
   qualifiedSet?: string[];
   completedNodes: number;
   totalNodes: number;
 }
+
+// ==========================================
+// Web3 Wallet Management Types
+// ==========================================
+
+export type SupportedBlockchain =
+  | 'ethereum'
+  | 'polygon'
+  | 'arbitrum'
+  | 'optimism'
+  | 'base'
+  | 'bitcoin'
+  | 'solana'
+  | 'passkey-p256';
+
+export type SupportedNetwork = 'mainnet' | 'sepolia' | 'testnet' | 'devnet';
+
+export type SupportedCurve = 'secp256k1' | 'ed25519' | 'nist-p256';
+
+export interface WalletRecord {
+  walletId: string;
+  name: string;
+  blockchain: string;
+  network: string;
+  keyId: string;
+  committeeId: string;
+  dkgSessionId: string;
+  curve: string;
+  publicKeyHex: string;
+  address: string;
+  status: 'ADDRESS_CREATED' | 'ACTIVE' | 'DEGRADED';
+  signingEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateWalletRequest {
+  name: string;
+  blockchain: string;
+  network: string;
+  dkgSessionId: string;
+  keyId?: string;
+}
+
+export interface WalletAddressResponse {
+  walletId: string;
+  address: string;
+  blockchain: string;
+  network: string;
+  curve: string;
+  publicKeyHex: string;
+  dkgSessionId: string;
+  committeeId: string;
+  status: string;
+  signingEnabled: boolean;
+}
+
+export interface ChainCurveRequirement {
+  blockchain: string;
+  requiredCurve: SupportedCurve;
+  name: string;
+  description: string;
+  addressFormat: string;
+}
+
 
 
 

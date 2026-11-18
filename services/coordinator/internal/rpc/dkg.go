@@ -14,21 +14,23 @@ import (
 // DKGSessionMeta stores coordinator-level public tracking for a DKG session.
 // STRICT PRIVACY GUARANTEE: Coordinators NEVER receive, handle, or store private secret shares.
 type DKGSessionMeta struct {
-	SessionID       string                            `json:"sessionId"`
-	CommitteeID     string                            `json:"committeeId"`
-	Epoch           uint64                            `json:"epoch"`
-	N               int                               `json:"n"`
-	K               int                               `json:"k"`
-	T               int                               `json:"t"`
-	State           string                            `json:"state"`
-	Committee       []string                          `json:"committee"`
-	QualifiedSet    []string                          `json:"qualifiedSet,omitempty"`
-	MasterPublicKey string                            `json:"masterPublicKey,omitempty"`
-	Curve           string                            `json:"curve"`
-	Participants    map[string]*DKGParticipantSummary `json:"participants"`
-	CreatedAt       string                            `json:"createdAt"`
-	UpdatedAt       string                            `json:"updatedAt"`
-	Error           string                            `json:"error,omitempty"`
+	SessionID              string                            `json:"sessionId"`
+	CommitteeID            string                            `json:"committeeId"`
+	Epoch                  uint64                            `json:"epoch"`
+	N                      int                               `json:"n"`
+	K                      int                               `json:"k"`
+	T                      int                               `json:"t"`
+	State                  string                            `json:"state"`
+	Committee              []string                          `json:"committee"`
+	QualifiedSet           []string                          `json:"qualifiedSet,omitempty"`
+	MasterSigningPublicKey string                            `json:"masterSigningPublicKey,omitempty"` // Y = x*G
+	MasterSecretCommitment string                            `json:"masterSecretCommitment,omitempty"` // C = x*G + x'*H
+	MasterPublicKey        string                            `json:"masterPublicKey,omitempty"`        // signing key
+	Curve                  string                            `json:"curve"`
+	Participants           map[string]*DKGParticipantSummary `json:"participants"`
+	CreatedAt              string                            `json:"createdAt"`
+	UpdatedAt              string                            `json:"updatedAt"`
+	Error                  string                            `json:"error,omitempty"`
 }
 
 // DKGParticipantSummary stores public participant progress on coordinator
@@ -260,14 +262,18 @@ func (s *Server) handleGetDKGStatus(params json.RawMessage) (interface{}, *JsonR
 
 	// Query each node's local public DKG view
 	type nodeView struct {
-		State           string                            `json:"state"`
-		MasterPublicKey string                            `json:"masterPublicKey"`
-		QualifiedSet    []string                          `json:"qualifiedSet"`
-		Participants    map[string]*DKGParticipantSummary `json:"participants"`
+		State                  string                            `json:"state"`
+		MasterSigningPublicKey string                            `json:"masterSigningPublicKey"`
+		MasterSecretCommitment string                            `json:"masterSecretCommitment"`
+		MasterPublicKey        string                            `json:"masterPublicKey"`
+		QualifiedSet           []string                          `json:"qualifiedSet"`
+		Participants           map[string]*DKGParticipantSummary `json:"participants"`
 	}
 
 	completedCount := 0
 	var agreedPubkey string
+	var agreedSigningKey string
+	var agreedSecretCommit string
 	var agreedQUAL []string
 
 	for _, memberID := range meta.Committee {
@@ -281,6 +287,8 @@ func (s *Server) handleGetDKGStatus(params json.RawMessage) (interface{}, *JsonR
 				completedCount++
 				if agreedPubkey == "" && nv.MasterPublicKey != "" {
 					agreedPubkey = nv.MasterPublicKey
+					agreedSigningKey = nv.MasterSigningPublicKey
+					agreedSecretCommit = nv.MasterSecretCommitment
 					agreedQUAL = nv.QualifiedSet
 				}
 			}
@@ -296,24 +304,28 @@ func (s *Server) handleGetDKGStatus(params json.RawMessage) (interface{}, *JsonR
 	if completedCount >= meta.N-meta.T {
 		meta.State = "COMPLETED"
 		meta.MasterPublicKey = agreedPubkey
+		meta.MasterSigningPublicKey = agreedSigningKey
+		meta.MasterSecretCommitment = agreedSecretCommit
 		meta.QualifiedSet = agreedQUAL
 	}
 
 	return map[string]interface{}{
-		"sessionId":       meta.SessionID,
-		"committeeId":     meta.CommitteeID,
-		"epoch":           meta.Epoch,
-		"n":               meta.N,
-		"k":               meta.K,
-		"t":               meta.T,
-		"state":           meta.State,
-		"committee":       meta.Committee,
-		"qualifiedSet":    meta.QualifiedSet,
-		"masterPublicKey": meta.MasterPublicKey,
-		"curve":           meta.Curve,
-		"completedNodes":  completedCount,
-		"totalNodes":      meta.N,
-		"participants":    meta.Participants,
+		"sessionId":              meta.SessionID,
+		"committeeId":            meta.CommitteeID,
+		"epoch":                  meta.Epoch,
+		"n":                      meta.N,
+		"k":                      meta.K,
+		"t":                      meta.T,
+		"state":                  meta.State,
+		"committee":              meta.Committee,
+		"qualifiedSet":           meta.QualifiedSet,
+		"masterSigningPublicKey": meta.MasterSigningPublicKey,
+		"masterSecretCommitment": meta.MasterSecretCommitment,
+		"masterPublicKey":        meta.MasterPublicKey,
+		"curve":                  meta.Curve,
+		"completedNodes":         completedCount,
+		"totalNodes":             meta.N,
+		"participants":           meta.Participants,
 	}, nil
 }
 
