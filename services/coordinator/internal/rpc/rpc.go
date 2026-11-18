@@ -48,6 +48,8 @@ type Server struct {
 	peerClient     *relay.PeerCoordinatorClient
 	peerCoords     []string
 	relayCoord     *relay.RelayCoordinator
+	avssSessions   map[string]*AVSSSessionInfo
+	avssMu         sync.RWMutex
 }
 
 func NewServer(
@@ -67,6 +69,7 @@ func NewServer(
 		peerClient:     relay.NewPeerCoordinatorClient(),
 		peerCoords:     peerCoordinatorURLs,
 		relayCoord:     relayCoord,
+		avssSessions:   make(map[string]*AVSSSessionInfo),
 	}
 }
 
@@ -193,6 +196,23 @@ func (s *Server) dispatch(method string, params json.RawMessage, token string) (
 		return s.handleGetRelayDeliveryStatus(params, token)
 	case "saral_getParticipants":
 		return s.monitor.GetAuthorizedParticipants(), nil
+	// AVSS & Proactive Cryptosystems Methods (Cachin et al. CCS 2002)
+	case "saral_createAVSSSession":
+		return s.handleCreateAVSSSession(params, token)
+	case "saral_getAVSSSessionStatus":
+		return s.handleGetAVSSSessionStatus(params)
+	case "saral_getAVSSParticipants":
+		return s.handleGetAVSSParticipants(params)
+	case "saral_getAVSSCommitments":
+		return s.handleGetAVSSCommitments(params)
+	case "saral_getAVSSVerificationStatus":
+		return s.handleGetAVSSVerificationStatus(params)
+	case "saral_getProactiveEpochStatus":
+		return s.handleGetProactiveEpochStatus(params)
+	case "saral_requestProactiveRefresh":
+		return s.handleRequestProactiveRefresh(params, token)
+	case "saral_getRefreshStatus":
+		return s.handleGetRefreshStatus(params)
 	// Cryptographic Stubs - Explicitly NOT_IMPLEMENTED as per Section 8
 	case "saral_signTransaction", "saral_createWallet", "saral_startDkg", "saral_getPublicKey":
 		return nil, &JsonRpcErr{

@@ -158,3 +158,121 @@ export interface DeliveryRecord {
   retryCount?: number;
 }
 
+// AVSS & Proactive Cryptosystems Types (Cachin et al. CCS 2002)
+
+export interface AVSSCreateSessionRequest {
+  sessionId?: string;
+  committeeId?: string;
+  dealerId: string;
+  n?: number;
+  k: number;
+  t: number;
+  committee?: string[];
+}
+
+export interface AVSSCreateSessionResponse {
+  success: boolean;
+  sessionId: string;
+  committeeId: string;
+  dealerId: string;
+  n: number;
+  k: number;
+  t: number;
+  committee: string[];
+  secretCommitment?: string;
+  status: string;
+  timestamp: string;
+}
+
+export interface AVSSNodeProgress {
+  nodeId: string;
+  state: string;
+  echoCount: number;
+  readyCount: number;
+  completed: boolean;
+  publicShareCommitment?: string;
+  publicSecretCommitment?: string;
+  error?: string;
+}
+
+export interface AVSSSessionStatusResponse {
+  sessionId: string;
+  status: string;
+  completedNodes: number;
+  totalNodes: number;
+  nodes: Record<string, AVSSNodeProgress>;
+  timestamp: string;
+}
+
+export interface AVSSParticipantsResponse {
+  sessionId?: string;
+  committeeId?: string;
+  dealerId?: string;
+  n?: number;
+  k?: number;
+  t?: number;
+  committee?: string[];
+  participants?: Record<string, unknown>;
+}
+
+export interface AVSSCommitmentsResponse {
+  sessionId: string;
+  commitments: string[][];
+  secretCommitment: string;
+}
+
+export interface AVSSNodeVerificationReport {
+  nodeId: string;
+  hasRowPoly: boolean;
+  hasColPoly: boolean;
+  echoCount: number;
+  readyCount: number;
+  requiredEchos: number;
+  requiredReadys: number;
+  state: string;
+  error?: string;
+}
+
+export interface AVSSVerificationStatusResponse {
+  sessionId: string;
+  nodes: Record<string, AVSSNodeVerificationReport>;
+  timestamp: string;
+}
+
+export interface ProactiveEpochNodeStatus {
+  nodeId: string;
+  currentEpoch: number;
+  epochState: string;
+  shareVersion: number;
+  commitmentVersion: number;
+  isRefreshing: boolean;
+  error?: string;
+}
+
+export interface ProactiveEpochStatusResponse {
+  domain: string;
+  nodes: Record<string, ProactiveEpochNodeStatus>;
+  timestamp: string;
+}
+
+export interface ProactiveRefreshRequest {
+  committeeId: string;
+  committee?: string[];
+  k: number;
+  t: number;
+  peerCommitments?: Record<string, string>;
+  masterCommitment?: string;
+}
+
+export interface ProactiveRefreshResponse {
+  success: boolean;
+  committeeId: string;
+  dispatchedNodes: number;
+  totalNodes: number;
+  k: number;
+  t: number;
+  status: string;
+  timestamp: string;
+}
+
+

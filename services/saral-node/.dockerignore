@@ -1,5 +1,5 @@
 bin
-vault
+vault_data
 *.key
 *.pem
 *.log

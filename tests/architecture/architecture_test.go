@@ -10,10 +10,12 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -43,9 +45,13 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 	}
 	projectRoot := filepath.Clean(filepath.Join(cwd, "../.."))
 
-	verifierBin := filepath.Join(projectRoot, "services/verifier/bin/verifier")
-	coordBin := filepath.Join(projectRoot, "services/coordinator/bin/coordinator")
-	nodeBin := filepath.Join(projectRoot, "services/saral-node/bin/saral-node")
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
+	verifierBin := filepath.Join(projectRoot, "services/verifier/bin/verifier"+ext)
+	coordBin := filepath.Join(projectRoot, "services/coordinator/bin/coordinator"+ext)
+	nodeBin := filepath.Join(projectRoot, "services/saral-node/bin/saral-node"+ext)
 
 	// 1. Build Go Binaries
 	t.Log("[STEP 1] Compiling clean Go microservices binaries...")
@@ -74,6 +80,8 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
+
+	testInternalToken := "saral-test-internal-token-2026-xyz"
 
 	// 2. Generate RSA Keypair & JWT for Auth
 	t.Log("[STEP 2] Setting up Auth Server RSA keypair and issuing RS256 JWT...")
@@ -215,6 +223,7 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 				"-p2p-port", fmt.Sprintf("%d", p2pPort),
 				"-vault-dir", nodeVault,
 			)
+			cmd.Env = append(os.Environ(), "ENABLE_DEV_AUTH=true", "SARAL_INTERNAL_TOKEN="+testInternalToken)
 			if err := cmd.Start(); err != nil {
 				t.Fatalf("failed to start %s node %d: %v", d.name, i, err)
 			}
@@ -260,6 +269,19 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 	sender2ID := "saral-foundation-2"
 	receiver1ID := "saral-foundation-1"
 
+	// Pre-enroll sender2's public key in node1's trusted participant registry
+	enrollBody, _ := json.Marshal(map[string]string{
+		"nodeId":       sender2ID,
+		"publicKeyHex": hex.EncodeToString(pub2),
+		"domain":       "FOUNDATION",
+	})
+	eReq, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/node/participants", node1Port), bytes.NewReader(enrollBody))
+	eReq.Header.Set("Content-Type", "application/json")
+	eReq.Header.Set("X-Saral-Internal-Token", testInternalToken)
+	if eResp, err := http.DefaultClient.Do(eReq); err == nil {
+		eResp.Body.Close()
+	}
+
 	msgToSign := fmt.Sprintf("%s:%s:%s:%d:%s", sender2ID, receiver1ID, "FOUNDATION", now, nonce1)
 	sig2 := hex.EncodeToString(ed25519.Sign(priv2, []byte(msgToSign)))
 
@@ -282,10 +304,11 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 		ReceiverID   string `json:"receiverId"`
 		SignatureHex string `json:"signatureHex"`
 	}
-	_ = json.NewDecoder(pResp.Body).Decode(&ack)
+	respBodyBytes, _ := io.ReadAll(pResp.Body)
+	_ = json.Unmarshal(respBodyBytes, &ack)
 	pResp.Body.Close()
 	if !ack.Acknowledged || ack.ReceiverID != receiver1ID || ack.SignatureHex == "" {
-		t.Fatalf("expected valid signed ack, got: %v", ack)
+		t.Fatalf("expected valid signed ack, status %d, body: %s", pResp.StatusCode, string(respBodyBytes))
 	}
 	t.Log("  -> Valid P2P ping successfully verified and signed ACK received.")
 
@@ -337,6 +360,7 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 		"-p2p-port", "29101",
 		"-vault-dir", node1Vault,
 	)
+	cmdRestart.Env = append(os.Environ(), "ENABLE_DEV_AUTH=true", "SARAL_INTERNAL_TOKEN="+testInternalToken)
 	if err := cmdRestart.Start(); err != nil {
 		t.Fatalf("failed to restart node-f1: %v", err)
 	}
@@ -363,6 +387,27 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 	coordPPort := 8012
 	coordRPort := 8013
 
+	// Write dynamic genesis registry for coordinators with the actual ephemeral node identities
+	genesisEntries := make(map[string]interface{})
+	for nodeID, pubKey := range nodeIDToPubKey {
+		d := "FOUNDATION"
+		if strings.Contains(nodeID, "public") {
+			d = "PUBLIC"
+		} else if strings.Contains(nodeID, "private") {
+			d = "PRIVATE"
+		}
+		genesisEntries[nodeID] = map[string]interface{}{
+			"nodeId":       nodeID,
+			"domain":       d,
+			"publicKeyHex": pubKey,
+			"approvedBy":   "genesis-bootstrap",
+			"enrolledAt":   time.Now().UTC().Format(time.RFC3339),
+		}
+	}
+	genesisFilePath := filepath.Join(tmpDir, "genesis_participants.json")
+	genBytes, _ := json.MarshalIndent(genesisEntries, "", "  ")
+	_ = os.WriteFile(genesisFilePath, genBytes, 0644)
+
 	coordFCmd := exec.Command(coordBin,
 		"-domain", "FOUNDATION",
 		"-port", fmt.Sprintf("%d", coordFPort),
@@ -371,6 +416,7 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 		"-base-node-port", "19100",
 		"-peers", fmt.Sprintf("http://localhost:%d,http://localhost:%d", coordPPort, coordRPort),
 	)
+	coordFCmd.Env = append(os.Environ(), "ENABLE_DEV_AUTH=true", "SARAL_INTERNAL_TOKEN="+testInternalToken, "SARAL_GENESIS_REGISTRY_FILE="+genesisFilePath)
 	if err := coordFCmd.Start(); err != nil {
 		t.Fatalf("failed to start foundation coordinator: %v", err)
 	}
@@ -384,6 +430,7 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 		"-base-node-port", "19110",
 		"-peers", fmt.Sprintf("http://localhost:%d,http://localhost:%d", coordFPort, coordRPort),
 	)
+	coordPCmd.Env = append(os.Environ(), "ENABLE_DEV_AUTH=true", "SARAL_INTERNAL_TOKEN="+testInternalToken, "SARAL_GENESIS_REGISTRY_FILE="+genesisFilePath)
 	if err := coordPCmd.Start(); err != nil {
 		t.Fatalf("failed to start public coordinator: %v", err)
 	}
@@ -397,6 +444,7 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 		"-base-node-port", "19120",
 		"-peers", fmt.Sprintf("http://localhost:%d,http://localhost:%d", coordFPort, coordPPort),
 	)
+	coordRCmd.Env = append(os.Environ(), "ENABLE_DEV_AUTH=true", "SARAL_INTERNAL_TOKEN="+testInternalToken, "SARAL_GENESIS_REGISTRY_FILE="+genesisFilePath)
 	if err := coordRCmd.Start(); err != nil {
 		t.Fatalf("failed to start private coordinator: %v", err)
 	}

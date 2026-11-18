@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -89,9 +90,13 @@ func TestRelayNetworkEndToEnd(t *testing.T) {
 
 	// 1. Build Binaries
 	t.Log("[STEP 1] Compiling Go microservices binaries for Relay...")
-	coordBin := filepath.Join(tempDir, "coordinator")
-	verifierBin := filepath.Join(tempDir, "verifier")
-	nodeBin := filepath.Join(tempDir, "saral-node")
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
+	coordBin := filepath.Join(tempDir, "coordinator"+ext)
+	verifierBin := filepath.Join(tempDir, "verifier"+ext)
+	nodeBin := filepath.Join(tempDir, "saral-node"+ext)
 
 	buildCmd := exec.Command("go", "build", "-o", coordBin, "./cmd/main.go")
 	buildCmd.Dir = filepath.Join(repoRoot, "services", "coordinator")

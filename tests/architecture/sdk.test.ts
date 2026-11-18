@@ -40,6 +40,15 @@ describe('SARAL Protocol V3 — Architecture SDK Client', () => {
     expect(typeof client.getRelayAuditLog).toBe('function');
     expect(typeof client.getRelayDeliveryStatus).toBe('function');
     expect(typeof client.authenticate).toBe('function');
+    // AVSS & Proactive Cryptosystems methods
+    expect(typeof client.createAVSSSession).toBe('function');
+    expect(typeof client.getAVSSSessionStatus).toBe('function');
+    expect(typeof client.getAVSSParticipants).toBe('function');
+    expect(typeof client.getAVSSCommitments).toBe('function');
+    expect(typeof client.getAVSSVerificationStatus).toBe('function');
+    expect(typeof client.getProactiveEpochStatus).toBe('function');
+    expect(typeof client.requestProactiveRefresh).toBe('function');
+    expect(typeof client.getRefreshStatus).toBe('function');
   });
 });
 

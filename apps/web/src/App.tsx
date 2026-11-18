@@ -103,6 +103,32 @@ export const App: React.FC = () => {
   const [lastRelayRecord, setLastRelayRecord] = useState<DeliveryRecordItem | null>(null);
   const [relayAuditLog, setRelayAuditLog] = useState<DeliveryRecordItem[]>([]);
 
+  // AVSS & Proactive Cryptosystems State (Cachin et al. CCS 2002)
+  const [avssConfig, setAvssConfig] = useState<'A' | 'B' | 'C'>('A');
+  const [avssDealer, setAvssDealer] = useState<string>('saral-foundation-1');
+  const [activeSessionId, setActiveSessionId] = useState<string>('');
+  const [avssSessionData, setAvssSessionData] = useState<{
+    sessionId: string;
+    status: string;
+    completedNodes: number;
+    totalNodes: number;
+    secretCommitment?: string;
+    nodes: Record<string, {
+      nodeId: string;
+      state: string;
+      echoCount: number;
+      readyCount: number;
+      completed: boolean;
+      publicShareCommitment?: string;
+    }>;
+  } | null>(null);
+  const [avssStarting, setAvssStarting] = useState<boolean>(false);
+  const [avssStatusLoading, setAvssStatusLoading] = useState<boolean>(false);
+  const [proactiveEpoch, setProactiveEpoch] = useState<number>(1);
+  const [proactiveState, setProactiveState] = useState<string>('ACTIVE');
+  const [proactiveRefreshing, setProactiveRefreshing] = useState<boolean>(false);
+  const [cryptoNotice, setCryptoNotice] = useState<string>('');
+
   const addEvent = useCallback((type: ProtocolEvent['type'], message: string) => {
     setEvents((prev) => [
       {
@@ -287,6 +313,181 @@ export const App: React.FC = () => {
       addEvent('ERROR', `Relay failed: ${msg}`);
     } finally {
       setRelaySending(false);
+    }
+  };
+
+  // Start AVSS Session
+  const handleStartAVSSSession = async () => {
+    setAvssStarting(true);
+    setCryptoNotice('');
+    try {
+      let n = 15;
+      let k = 5;
+      let t = 4;
+      if (avssConfig === 'B') {
+        n = 5;
+        k = 2;
+        t = 1;
+      } else if (avssConfig === 'C') {
+        n = 5;
+        k = 3;
+        t = 1;
+      }
+
+      addEvent('INFO', `Starting AVSS session (Config ${avssConfig}: n=${n}, k=${k}, t=${t}, dealer=${avssDealer})...`);
+
+      let token = '';
+      try {
+        const tokenRes = await fetch(`${authUrl}/auth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subject: 'dashboard-crypto-admin', role: 'admin' }),
+        });
+        if (tokenRes.ok) {
+          const tData = await tokenRes.json();
+          token = tData.token;
+        }
+      } catch {}
+
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const sessId = `avss-${Date.now()}`;
+      const rpcRes = await fetch(`${coordUrl}/rpc`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'saral_createAVSSSession',
+          params: {
+            sessionId: sessId,
+            committeeId: `saral-committee-${n}`,
+            dealerId: avssDealer,
+            n,
+            k,
+            t,
+          },
+        }),
+      });
+
+      const json = await rpcRes.json();
+      if (json.error) {
+        throw new Error(json.error.message);
+      }
+
+      setActiveSessionId(json.result.sessionId);
+      addEvent('INFO', `AVSS session ${json.result.sessionId} initialized. Dealer broadcasting bivariate polynomials & Pedersen commitments.`);
+      setCryptoNotice(`Session ${json.result.sessionId} initiated successfully. Dealer commitment: ${json.result.secretCommitment ? json.result.secretCommitment.substring(0, 16) + '...' : 'pending'}`);
+      // Initial poll after short delay
+      setTimeout(() => handlePollAVSSSession(json.result.sessionId), 1000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addEvent('ERROR', `AVSS session creation failed: ${msg}`);
+      setCryptoNotice(`Error: ${msg}`);
+    } finally {
+      setAvssStarting(false);
+    }
+  };
+
+  // Poll AVSS Session Status
+  const handlePollAVSSSession = async (sessId?: string) => {
+    const sId = sessId || activeSessionId;
+    if (!sId) return;
+    setAvssStatusLoading(true);
+    try {
+      const rpcRes = await fetch(`${coordUrl}/rpc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'saral_getAVSSSessionStatus',
+          params: { sessionId: sId },
+        }),
+      });
+      const json = await rpcRes.json();
+      if (json.error) throw new Error(json.error.message);
+      setAvssSessionData(json.result);
+      if (json.result.status === 'SHARING_COMPLETED') {
+        addEvent('INFO', `AVSS session ${sId} completed across committee! Valid shares persistently vaulted.`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addEvent('ERROR', `Failed to poll AVSS status: ${msg}`);
+    } finally {
+      setAvssStatusLoading(false);
+    }
+  };
+
+  // Trigger Proactive Refresh
+  const handleTriggerRefresh = async () => {
+    if (avssConfig === 'C') {
+      setCryptoNotice('Proactive Refresh Rejected: Configuration C (k=3, t=1) does not satisfy Cachin et al. requirement k=t+1.');
+      addEvent('ERROR', 'Proactive refresh rejected: Cachin et al. requires ordinary sharing k = t + 1.');
+      return;
+    }
+
+    setProactiveRefreshing(true);
+    setCryptoNotice('');
+    try {
+      let n = 15;
+      let k = 5;
+      let t = 4;
+      if (avssConfig === 'B') {
+        n = 5;
+        k = 2;
+        t = 1;
+      }
+
+      addEvent('INFO', `Triggering Asynchronous Proactive Share Refresh (Config ${avssConfig}: n=${n}, k=${k}, t=${t})...`);
+
+      let token = '';
+      try {
+        const tokenRes = await fetch(`${authUrl}/auth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subject: 'dashboard-crypto-admin', role: 'admin' }),
+        });
+        if (tokenRes.ok) {
+          const tData = await tokenRes.json();
+          token = tData.token;
+        }
+      } catch {}
+
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const rpcRes = await fetch(`${coordUrl}/rpc`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'saral_requestProactiveRefresh',
+          params: {
+            committeeId: `saral-committee-${n}`,
+            k,
+            t,
+          },
+        }),
+      });
+
+      const json = await rpcRes.json();
+      if (json.error) {
+        throw new Error(json.error.message);
+      }
+
+      setProactiveEpoch((prev) => prev + 1);
+      setProactiveState('TRANSITIONING');
+      addEvent('INFO', `Proactive refresh dispatched to ${json.result.dispatchedNodes} nodes. Subprotocol AVSS & Validated Byzantine Agreement underway.`);
+      setCryptoNotice(`Proactive refresh initiated across committee. Previous epoch shares will be cryptographically erased upon completion.`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addEvent('ERROR', `Proactive refresh failed: ${msg}`);
+      setCryptoNotice(`Error: ${msg}`);
+    } finally {
+      setProactiveRefreshing(false);
     }
   };
 
@@ -853,6 +1054,314 @@ export const App: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+
+        {/* ─── AVSS & PROACTIVE CRYPTOSYSTEMS INTERFACE (Cachin et al. CCS 2002) ─────────── */}
+        <div style={{ marginTop: '24px', backgroundColor: '#111827', border: '1px solid #1f2937', borderRadius: '8px', padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #1f2937', paddingBottom: '14px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '18px' }}>🛡️</span>
+                <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0, color: '#f3f4f6' }}>
+                  Asynchronous Verifiable Secret Sharing (AVSS) & Proactive Refresh
+                </h2>
+              </div>
+              <p style={{ color: '#94a3b8', fontSize: '12px', margin: '4px 0 0 26px' }}>
+                Cachin, Kursawe, Lysyanskaya, Strobl (ACM CCS 2002) — Dual-Threshold Bivariate Polynomials & Multi-Valued Agreement
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  borderRadius: '9999px',
+                  backgroundColor: avssSessionData?.status === 'SHARING_COMPLETED' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(56, 189, 248, 0.2)',
+                  color: avssSessionData?.status === 'SHARING_COMPLETED' ? '#34d399' : '#38bdf8',
+                  border: `1px solid ${avssSessionData?.status === 'SHARING_COMPLETED' ? '#10b981' : '#0284c7'}`,
+                }}
+              >
+                ● {avssSessionData?.status || 'READY'}
+              </span>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  borderRadius: '9999px',
+                  backgroundColor: 'rgba(167, 139, 250, 0.2)',
+                  color: '#c084fc',
+                  border: '1px solid #a855f7',
+                }}
+              >
+                Epoch τ={proactiveEpoch} ({proactiveState})
+              </span>
+            </div>
+          </div>
+
+          {/* Configuration Selector */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '18px' }}>
+            <div
+              onClick={() => setAvssConfig('A')}
+              style={{
+                backgroundColor: avssConfig === 'A' ? '#1e293b' : '#0f172a',
+                border: `2px solid ${avssConfig === 'A' ? '#38bdf8' : '#1e293b'}`,
+                borderRadius: '6px',
+                padding: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, color: '#f8fafc', fontSize: '13px' }}>Configuration A</span>
+                <span style={{ fontSize: '10px', backgroundColor: '#0369a1', color: '#e0f2fe', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                  15-Node POC
+                </span>
+              </div>
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '6px' }}>
+                n = 15, k = 5, t = 4
+              </div>
+              <div style={{ fontSize: '10px', color: '#34d399', marginTop: '4px' }}>
+                ✓ AVSS Dual-Threshold (15 - 8 ≥ 5)<br />
+                ✓ Proactive Refresh (k = t + 1 = 5)
+              </div>
+            </div>
+
+            <div
+              onClick={() => setAvssConfig('B')}
+              style={{
+                backgroundColor: avssConfig === 'B' ? '#1e293b' : '#0f172a',
+                border: `2px solid ${avssConfig === 'B' ? '#38bdf8' : '#1e293b'}`,
+                borderRadius: '6px',
+                padding: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, color: '#f8fafc', fontSize: '13px' }}>Configuration B</span>
+                <span style={{ fontSize: '10px', backgroundColor: '#047857', color: '#d1fae5', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                  5-Node Domain
+                </span>
+              </div>
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '6px' }}>
+                n = 5, k = 2, t = 1
+              </div>
+              <div style={{ fontSize: '10px', color: '#34d399', marginTop: '4px' }}>
+                ✓ AVSS Dual-Threshold (5 - 2 ≥ 2)<br />
+                ✓ Proactive Refresh (k = t + 1 = 2)
+              </div>
+            </div>
+
+            <div
+              onClick={() => setAvssConfig('C')}
+              style={{
+                backgroundColor: avssConfig === 'C' ? '#1e293b' : '#0f172a',
+                border: `2px solid ${avssConfig === 'C' ? '#f59e0b' : '#1e293b'}`,
+                borderRadius: '6px',
+                padding: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, color: '#f8fafc', fontSize: '13px' }}>Configuration C</span>
+                <span style={{ fontSize: '10px', backgroundColor: '#b45309', color: '#fef3c7', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                  Dual-Threshold Only
+                </span>
+              </div>
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '6px' }}>
+                n = 5, k = 3, t = 1
+              </div>
+              <div style={{ fontSize: '10px', color: '#f87171', marginTop: '4px' }}>
+                ✓ AVSS Dual-Threshold (5 - 2 ≥ 3)<br />
+                ✗ Proactive Refresh Blocked (k ≠ t + 1)
+              </div>
+            </div>
+          </div>
+
+          {/* Controls Bar */}
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+            <div style={{ minWidth: '180px' }}>
+              <label style={{ display: 'block', fontSize: '11px', color: '#94a3b8', marginBottom: '4px', fontWeight: 500 }}>
+                Sharing Dealer Node
+              </label>
+              <select
+                value={avssDealer}
+                onChange={(e) => setAvssDealer(e.target.value)}
+                style={{
+                  width: '100%',
+                  backgroundColor: '#182234',
+                  border: '1px solid #334155',
+                  color: '#f8fafc',
+                  padding: '7px 10px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                }}
+              >
+                <optgroup label="Foundation Domain">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <option key={`f-d-${i}`} value={`saral-foundation-${i}`}>saral-foundation-{i}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Public Domain">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <option key={`p-d-${i}`} value={`saral-public-${i}`}>saral-public-{i}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Private Domain">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <option key={`r-d-${i}`} value={`saral-private-${i}`}>saral-private-{i}</option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginTop: '16px' }}>
+              <button
+                onClick={handleStartAVSSSession}
+                disabled={avssStarting}
+                style={{
+                  backgroundColor: '#0284c7',
+                  color: '#ffffff',
+                  border: 'none',
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: avssStarting ? 'not-allowed' : 'pointer',
+                  opacity: avssStarting ? 0.6 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                {avssStarting ? 'Distributing Shares...' : '🚀 Start AVSS Sharing Session'}
+              </button>
+
+              <button
+                onClick={() => handlePollAVSSSession()}
+                disabled={avssStatusLoading || !activeSessionId}
+                style={{
+                  backgroundColor: '#334155',
+                  color: '#cbd5e1',
+                  border: '1px solid #475569',
+                  padding: '8px 14px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  cursor: avssStatusLoading || !activeSessionId ? 'not-allowed' : 'pointer',
+                  opacity: !activeSessionId ? 0.5 : 1,
+                }}
+              >
+                {avssStatusLoading ? 'Checking...' : '🔄 Poll Session Progress'}
+              </button>
+
+              <button
+                onClick={handleTriggerRefresh}
+                disabled={proactiveRefreshing || avssConfig === 'C'}
+                style={{
+                  backgroundColor: avssConfig === 'C' ? '#475569' : '#7c3aed',
+                  color: '#ffffff',
+                  border: 'none',
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: proactiveRefreshing || avssConfig === 'C' ? 'not-allowed' : 'pointer',
+                  opacity: avssConfig === 'C' ? 0.5 : proactiveRefreshing ? 0.6 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+                title={avssConfig === 'C' ? 'Proactive Refresh unsupported in Configuration C (k ≠ t + 1)' : 'Trigger proactive share refresh'}
+              >
+                {proactiveRefreshing ? 'Refreshing Epoch...' : '⚡ Trigger Proactive Share Refresh'}
+              </button>
+            </div>
+          </div>
+
+          {/* Feedback Notice */}
+          {cryptoNotice && (
+            <div style={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#e2e8f0', fontFamily: 'monospace' }}>
+              {cryptoNotice}
+            </div>
+          )}
+
+          {/* Active Sharing Status & Progress */}
+          {avssSessionData && (
+            <div style={{ backgroundColor: '#182234', borderRadius: '6px', padding: '14px', marginBottom: '16px', border: '1px solid #2d3748' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div>
+                  <span style={{ fontSize: '12px', color: '#94a3b8' }}>Session: </span>
+                  <strong style={{ color: '#38bdf8', fontFamily: 'monospace', fontSize: '12px' }}>{avssSessionData.sessionId}</strong>
+                </div>
+                <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                  Progress: <strong style={{ color: '#34d399' }}>{avssSessionData.completedNodes} / {avssSessionData.totalNodes} Nodes Completed</strong>
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              <div style={{ height: '8px', backgroundColor: '#0f172a', borderRadius: '4px', overflow: 'hidden', marginBottom: '12px' }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${(avssSessionData.completedNodes / Math.max(avssSessionData.totalNodes, 1)) * 100}%`,
+                    backgroundColor: avssSessionData.status === 'SHARING_COMPLETED' ? '#10b981' : '#38bdf8',
+                    transition: 'width 0.3s ease',
+                  }}
+                />
+              </div>
+
+              {/* Public Pedersen Secret Commitment */}
+              {avssSessionData.secretCommitment && (
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '12px', fontFamily: 'monospace' }}>
+                  Pedersen Public Secret Commitment C₀,₀ = s·G + s'·H:
+                  <div style={{ color: '#a78bfa', wordBreak: 'break-all', backgroundColor: '#0f172a', padding: '6px 8px', borderRadius: '4px', marginTop: '4px' }}>
+                    {avssSessionData.secretCommitment}
+                  </div>
+                </div>
+              )}
+
+              {/* Participant Node Verification Table */}
+              <h4 style={{ fontSize: '12px', fontWeight: 600, margin: '12px 0 6px 0', color: '#cbd5e1' }}>
+                Committee Participant Verification Status
+              </h4>
+              <div style={{ maxHeight: '180px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', fontSize: '11px', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ color: '#9ca3af', borderBottom: '1px solid #1f2937' }}>
+                      <th style={{ padding: '4px 8px' }}>Node ID</th>
+                      <th style={{ padding: '4px 8px' }}>State</th>
+                      <th style={{ padding: '4px 8px' }}>ECHOs</th>
+                      <th style={{ padding: '4px 8px' }}>READYs</th>
+                      <th style={{ padding: '4px 8px' }}>Share Commitment C(i,0)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.values(avssSessionData.nodes || {}).map((nd) => (
+                      <tr key={nd.nodeId} style={{ borderBottom: '1px solid #1e293b' }}>
+                        <td style={{ padding: '4px 8px', fontFamily: 'monospace', color: '#f8fafc' }}>{nd.nodeId}</td>
+                        <td style={{ padding: '4px 8px' }}>
+                          <span style={{ color: nd.completed ? '#34d399' : '#38bdf8', fontWeight: 600 }}>
+                            {nd.state}
+                          </span>
+                        </td>
+                        <td style={{ padding: '4px 8px', color: '#fbbf24' }}>{nd.echoCount}</td>
+                        <td style={{ padding: '4px 8px', color: '#a78bfa' }}>{nd.readyCount}</td>
+                        <td style={{ padding: '4px 8px', fontFamily: 'monospace', color: '#64748b' }}>
+                          {nd.publicShareCommitment ? nd.publicShareCommitment.substring(0, 24) + '...' : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Secure Vault & Isolation Notice */}
+          <div style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '6px', padding: '12px', fontSize: '11px', color: '#94a3b8' }}>
+            🔒 <strong style={{ color: '#e2e8f0' }}>Cryptographic Vault Isolation:</strong> Private polynomial shares and master secrets are stored strictly within local node AES-256-GCM encrypted vaults (0600 file permissions). Raw private shares are NEVER exposed over RPC, coordinator logs, or the frontend dashboard.
+          </div>
         </div>
       </main>
     </div>

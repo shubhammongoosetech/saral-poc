@@ -28,8 +28,10 @@ services/**/main
 
 # Runtime vault & sensitive secrets (Never commit!)
 .saral*
-vault/
+/vault/
+vault_data/
 *.vault/
+!services/saral-node/vault/
 *.key
 *.pem
 *.sock

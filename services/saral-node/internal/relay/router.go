@@ -36,6 +36,7 @@ type RelayRouter struct {
 	trustedParticipants map[string]membership.ParticipantEntry // Canonical NodeID -> ParticipantEntry
 	seenMessages        map[string]*RelayAck
 	history             []*DeliveryRecord
+	messageHandlers     map[string]func(msg *RelayMessage) error
 	mu                  sync.RWMutex
 	httpClient          *http.Client
 	mtlsClient          *http.Client
@@ -46,6 +47,12 @@ func (r *RelayRouter) SetMTLSClient(client *http.Client) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.mtlsClient = client
+}
+
+func (r *RelayRouter) RegisterMessageHandler(msgType string, handler func(msg *RelayMessage) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.messageHandlers[msgType] = handler
 }
 
 func NewRelayRouter(
@@ -64,6 +71,7 @@ func NewRelayRouter(
 		trustedParticipants: make(map[string]membership.ParticipantEntry),
 		seenMessages:        make(map[string]*RelayAck),
 		history:             make([]*DeliveryRecord, 0, MaxHistoryItems),
+		messageHandlers:     make(map[string]func(msg *RelayMessage) error),
 		httpClient: &http.Client{
 			Timeout: 12 * time.Second,
 		},
@@ -747,6 +755,17 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 
 	log.Printf("[SARAL Node - %s] Delivered relay %s from %s (Latency: %d ms, Hops: %v)",
 		r.domain, msg.MessageID, msg.SourceNode, latency, hops)
+
+	r.mu.RLock()
+	handler, hasHandler := r.messageHandlers[msg.Type]
+	r.mu.RUnlock()
+	if hasHandler && handler != nil {
+		go func(m RelayMessage) {
+			if err := handler(&m); err != nil {
+				log.Printf("[SARAL Node - %s] Error in registered handler for message type %s: %v", r.domain, m.Type, err)
+			}
+		}(msg)
+	}
 
 	return ack, nil
 }

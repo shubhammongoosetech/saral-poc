@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/saral-protocol/saral-poc/services/saral-node/avss"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/health"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/identity"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/membership"
@@ -17,6 +19,8 @@ import (
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/relay"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/rpc"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/tlsutil"
+	"github.com/saral-protocol/saral-poc/services/saral-node/proactive"
+	"github.com/saral-protocol/saral-poc/services/saral-node/vault"
 )
 
 func main() {
@@ -78,6 +82,104 @@ func main() {
 	relayRouter := relay.NewRelayRouter(idMgr, domain, p2pMgr, coordURL, *vaultDirFlag)
 	defer relayRouter.Stop()
 
+	// 4b. Initialize AVSS & Proactive Cryptosystems Engines
+	privBytes, _ := hex.DecodeString(idMgr.Identity.PrivateKey)
+	if len(privBytes) == 0 {
+		privBytes = []byte(idMgr.Identity.PrivateKey)
+	}
+	shareStore, err := vault.NewShareStore(*vaultDirFlag, privBytes)
+	if err != nil {
+		log.Printf("[SARAL Node - %s] Warning: Failed to initialize share vault: %v", domain, err)
+	}
+	relayAdapter := relay.NewNodeRelayAdapter(relayRouter)
+	avssEngine := avss.NewEngine(idMgr.Identity.NodeID, domain, *vaultDirFlag, shareStore, relayAdapter)
+	proactiveMgr := proactive.NewManager(idMgr.Identity.NodeID, domain, shareStore, avssEngine, relayAdapter)
+
+	// Register AVSS and Proactive relay message handlers
+	relayRouter.RegisterMessageHandler(avss.MessageTypeSend, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var sendMsg avss.SendMessage
+		if err := json.Unmarshal(rawBytes, &sendMsg); err != nil {
+			return err
+		}
+		return avssEngine.HandleSendMessage(&sendMsg)
+	})
+
+	relayRouter.RegisterMessageHandler(avss.MessageTypeEcho, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var echoMsg avss.EchoMessage
+		if err := json.Unmarshal(rawBytes, &echoMsg); err != nil {
+			return err
+		}
+		return avssEngine.HandleEchoMessage(&echoMsg)
+	})
+
+	relayRouter.RegisterMessageHandler(avss.MessageTypeReady, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var readyMsg avss.ReadyMessage
+		if err := json.Unmarshal(rawBytes, &readyMsg); err != nil {
+			return err
+		}
+		return avssEngine.HandleReadyMessage(&readyMsg)
+	})
+
+	relayRouter.RegisterMessageHandler(proactive.MessageTypeEpochStart, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var startMsg proactive.EpochStartMessage
+		if err := json.Unmarshal(rawBytes, &startMsg); err != nil {
+			return err
+		}
+		return proactiveMgr.HandleEpochStart(&startMsg)
+	})
+
+	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementPropose, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var propMsg proactive.AgreementProposeMessage
+		if err := json.Unmarshal(rawBytes, &propMsg); err != nil {
+			return err
+		}
+		return proactiveMgr.HandleAgreementPropose(&propMsg)
+	})
+
+	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementEcho, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var echoMsg proactive.AgreementEchoMessage
+		if err := json.Unmarshal(rawBytes, &echoMsg); err != nil {
+			return err
+		}
+		return proactiveMgr.HandleAgreementEcho(&echoMsg)
+	})
+
+	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementReady, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var readyMsg proactive.AgreementReadyMessage
+		if err := json.Unmarshal(rawBytes, &readyMsg); err != nil {
+			return err
+		}
+		return proactiveMgr.HandleAgreementReady(&readyMsg)
+	})
+
 	// 5. Setup HTTP Routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/node/health", health.NewHandler(idMgr.Identity.NodeID, domain, startTime))
@@ -108,6 +210,7 @@ func main() {
 	})
 
 	rpc.RegisterRoutes(mux, idMgr, domain, *nodeIndexFlag, p2pMgr, relayRouter, startTime)
+	rpc.RegisterAVSSRoutes(mux, avssEngine, proactiveMgr)
 
 	// 6. Setup TLS 1.3 / mTLS Server & Client
 	mtlsPort := *mtlsPortFlag
