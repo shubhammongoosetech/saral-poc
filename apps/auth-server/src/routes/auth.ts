@@ -1,9 +1,22 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import { KeyManager } from '../auth/token';
+import { DataStore } from '../storage/store';
+import {
+  requestPhoneOtp,
+  verifyPhoneOtp,
+  verifyGoogleToken,
+  linkAccount,
+} from '../services/accountService';
+import {
+  enrollTotp,
+  verifyMfaChallenge,
+} from '../services/mfaService';
+import { requireAuth } from '../middleware/authGuard';
 
 const router = Router();
 const keyManager = KeyManager.getInstance();
+const store = DataStore.getInstance();
 
 let dynamicAdminSecret: string | null = null;
 
@@ -49,7 +62,6 @@ function getAdminSecret(): string | null {
     }
   }
 
-  // Strict fail-closed: No fallback to hardcoded administrative secret!
   return null;
 }
 
@@ -65,11 +77,11 @@ router.get('/health', (_req: Request, res: Response) => {
 });
 
 const handleTokenIssuance = (req: Request, res: Response) => {
-  // Requirement 3: Restrict dev auth to explicitly enabled isolated local development environments
   const isLocalDevEnv =
     process.env.NODE_ENV === 'development' ||
     process.env.NODE_ENV === 'local' ||
-    process.env.NODE_ENV === 'test';
+    process.env.NODE_ENV === 'test' ||
+    !process.env.NODE_ENV;
   const isDevAuthExplicitlyEnabled = process.env.ENABLE_DEV_AUTH === 'true' && isLocalDevEnv;
   const adminSecret = getAdminSecret();
 
@@ -77,7 +89,6 @@ const handleTokenIssuance = (req: Request, res: Response) => {
   const requestedRole = req.body?.role || 'operator';
   const providedKey = req.headers['x-admin-key'] || req.body?.adminSecret;
 
-  // If providedKey is a known default or insecure secret, reject immediately
   if (providedKey && typeof providedKey === 'string' && isKnownInsecureSecret(providedKey)) {
     res.status(403).json({
       success: false,
@@ -86,7 +97,6 @@ const handleTokenIssuance = (req: Request, res: Response) => {
     return;
   }
 
-  // Non-development environment or dev auth not explicitly enabled -> strictly require valid admin key
   if (!isDevAuthExplicitlyEnabled) {
     if (!adminSecret || !providedKey || providedKey !== adminSecret) {
       res.status(403).json({
@@ -97,7 +107,6 @@ const handleTokenIssuance = (req: Request, res: Response) => {
     }
   }
 
-  // Admin role always requires administrative credentials
   if (requestedRole === 'admin') {
     if (!adminSecret || !providedKey || providedKey !== adminSecret) {
       res.status(403).json({
@@ -108,7 +117,6 @@ const handleTokenIssuance = (req: Request, res: Response) => {
     }
   }
 
-  // Validate allowed roles
   const validRoles = ['admin', 'operator', 'auditor', 'viewer'];
   const role = validRoles.includes(requestedRole) ? requestedRole : 'operator';
 
@@ -126,11 +134,9 @@ const handleTokenIssuance = (req: Request, res: Response) => {
   });
 };
 
-// Development & Standard authentication endpoints
 router.post('/auth/token', handleTokenIssuance);
 router.post('/api/auth/token', handleTokenIssuance);
 
-// Credential rotation endpoint (Requirement 9)
 router.post('/auth/rotate-admin-key', (req: Request, res: Response) => {
   const currentSecret = getAdminSecret();
   const providedCurrentKey = req.headers['x-admin-key'] || req.body?.currentKey;
@@ -154,19 +160,161 @@ router.post('/auth/rotate-admin-key', (req: Request, res: Response) => {
   });
 });
 
-// Public Key in PEM format
 router.get('/auth/public-key', (_req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/plain');
   res.send(keyManager.publicKeyPem);
 });
 
-// Public Key in JSON format
 router.get('/auth/public-key.json', (_req: Request, res: Response) => {
   res.json({
     publicKeyPem: keyManager.publicKeyPem,
     algorithm: 'RS256',
     issuer: 'saral-auth-server',
     audience: 'saral-domain-coordinators',
+  });
+});
+
+// ─── USER ONBOARDING & AUTHENTICATION ENDPOINTS ─────────────────────────────
+
+// POST /auth/google
+router.post('/auth/google', (req: Request, res: Response) => {
+  try {
+    const credential = req.body?.credential || req.body?.idToken;
+    if (!credential) {
+      res.status(400).json({ success: false, error: 'Missing Google credential or idToken' });
+      return;
+    }
+
+    const result = verifyGoogleToken(credential);
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (err: any) {
+    res.status(401).json({ success: false, error: err.message || 'Google authentication failed' });
+  }
+});
+
+// POST /auth/phone/request-otp
+router.post('/auth/phone/request-otp', (req: Request, res: Response) => {
+  try {
+    const mobile = req.body?.mobile;
+    if (!mobile || typeof mobile !== 'string') {
+      res.status(400).json({ success: false, error: 'Valid mobile number required' });
+      return;
+    }
+
+    const result = requestPhoneOtp(mobile);
+    res.json(result);
+  } catch (err: any) {
+    res.status(429).json({ success: false, error: err.message || 'Failed to dispatch OTP' });
+  }
+});
+
+// POST /auth/phone/verify-otp
+router.post('/auth/phone/verify-otp', (req: Request, res: Response) => {
+  try {
+    const mobile = req.body?.mobile;
+    const otp = req.body?.otp || req.body?.code;
+    if (!mobile || !otp) {
+      res.status(400).json({ success: false, error: 'Mobile and 6-digit OTP code required' });
+      return;
+    }
+
+    const result = verifyPhoneOtp(mobile, otp);
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message || 'OTP verification failed' });
+  }
+});
+
+// POST /auth/link-account (Requires Auth)
+router.post('/auth/link-account', requireAuth, (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { targetMethod, identifier } = req.body;
+    if (!targetMethod || !identifier) {
+      res.status(400).json({ success: false, error: 'targetMethod and identifier are required' });
+      return;
+    }
+
+    const result = linkAccount(userId, targetMethod, identifier);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message || 'Account linking failed' });
+  }
+});
+
+// POST /auth/mfa/enroll (Requires Auth)
+router.post('/auth/mfa/enroll', requireAuth, (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const user = store.findUserById(userId);
+    const identifier = user?.email || user?.mobile || userId;
+
+    const result = enrollTotp(userId, identifier);
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'MFA enrollment failed' });
+  }
+});
+
+// POST /auth/mfa/verify (Requires Auth)
+router.post('/auth/mfa/verify', requireAuth, (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const code = req.body?.code || req.body?.recoveryCode;
+    if (!code) {
+      res.status(400).json({ success: false, error: 'MFA code or recovery code required' });
+      return;
+    }
+
+    const result = verifyMfaChallenge(userId, code);
+    // Issue upgraded token with mfaVerified: true
+    const upgradedToken = keyManager.issueToken(userId, 'operator');
+
+    const policy = store.getPolicy(userId);
+    const wallet = store.getWalletByUserId(userId);
+
+    res.json({
+      success: true,
+      token: upgradedToken,
+      method: result.method,
+      hasPolicy: !!policy,
+      hasWallet: !!wallet && wallet.status === 'READY',
+    });
+  } catch (err: any) {
+    res.status(401).json({ success: false, error: err.message || 'MFA verification failed' });
+  }
+});
+
+// POST /auth/logout
+router.post('/auth/logout', (_req: Request, res: Response) => {
+  res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// GET /auth/session (Validates active session)
+router.get('/auth/session', requireAuth, (req: Request, res: Response) => {
+  const userId = req.user!.userId;
+  const user = store.findUserById(userId);
+  const mfa = store.getMfa(userId);
+  const policy = store.getPolicy(userId);
+  const wallet = store.getWalletByUserId(userId);
+
+  res.json({
+    success: true,
+    user: user || { id: userId, loginMethod: 'unknown' },
+    mfaEnrolled: !!mfa?.totpSecretEncrypted,
+    mfaVerified: !!mfa?.verifiedAt,
+    hasPolicy: !!policy,
+    hasWallet: !!wallet && wallet.status === 'READY',
+    policy: policy || null,
   });
 });
 

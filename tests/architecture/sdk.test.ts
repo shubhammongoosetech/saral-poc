@@ -111,5 +111,32 @@ describe('SARAL Protocol V3 — Architecture SDK Client', () => {
     // Solana Base58 Address
     expect(isValidSolanaAddress('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')).toBe(true);
   });
+
+  it('exposes user onboarding, MFA, policy engine and multi-chain address methods', () => {
+    const client = new SaralClient();
+    expect(typeof client.loginWithGoogle).toBe('function');
+    expect(typeof client.requestPhoneOtp).toBe('function');
+    expect(typeof client.verifyPhoneOtp).toBe('function');
+    expect(typeof client.linkAccount).toBe('function');
+    expect(typeof client.enrollMfa).toBe('function');
+    expect(typeof client.verifyMfa).toBe('function');
+    expect(typeof client.getSession).toBe('function');
+    expect(typeof client.getWorkingPolicy).toBe('function');
+    expect(typeof client.updateWorkingPolicy).toBe('function');
+    expect(typeof client.evaluateWorkingPolicy).toBe('function');
+    expect(typeof client.getWalletStatus).toBe('function');
+    expect(typeof client.createWalletOnboarding).toBe('function');
+    expect(typeof client.getMultiChainAddresses).toBe('function');
+  });
+
+  it('verifies MST blockchain curve compatibility requirements', () => {
+    const mstCheck = validateChainCurveCompatibility('mst', 'secp256k1');
+    expect(mstCheck.compatible).toBe(true);
+    expect(mstCheck.requiredCurve).toBe('secp256k1');
+
+    const mstMismatch = validateChainCurveCompatibility('mst', 'NIST P-256');
+    expect(mstMismatch.compatible).toBe(false);
+    expect(mstMismatch.reason).toContain('Incompatible Curve');
+  });
 });
 

@@ -29,6 +29,13 @@ import {
   WalletRecord,
   CreateWalletRequest,
   WalletAddressResponse,
+  UserProfile,
+  WorkingPolicy,
+  PolicyEvaluation,
+  MfaEnrollResponse,
+  MfaVerifyResponse,
+  UserSession,
+  MultiChainAddresses,
 } from './types';
 
 export interface SaralClientConfig {
@@ -352,6 +359,142 @@ export class SaralClient {
    */
   public async getWalletAddress(walletId: string, coordUrl?: string): Promise<WalletAddressResponse> {
     return this.rpcCall<WalletAddressResponse>('saral_getWalletAddress', { walletId }, coordUrl);
+  }
+
+  // ==========================================
+  // User Authentication, MFA & Working Policy
+  // ==========================================
+
+  private async authHttp<T>(path: string, options: RequestInit = {}): Promise<T> {
+    const url = `${this.authServerUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...((options.headers as Record<string, string>) || {}),
+    };
+    if (this.token && !headers['Authorization']) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
+    const res = await fetch(url, { ...options, headers });
+    const json = await res.json();
+    if (!res.ok || json.success === false) {
+      throw new SaralError(json.error || `HTTP ${res.status}: ${res.statusText}`, res.status, json);
+    }
+    return json as T;
+  }
+
+  public async loginWithGoogle(credential: string): Promise<{
+    user: UserProfile;
+    token: string;
+    mfaEnrolled: boolean;
+    mfaVerified: boolean;
+    hasPolicy: boolean;
+    hasWallet: boolean;
+  }> {
+    const data = await this.authHttp<any>('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ credential }),
+    });
+    if (data.token) this.token = data.token;
+    return data;
+  }
+
+  public async requestPhoneOtp(mobile: string): Promise<{
+    success: boolean;
+    mobile: string;
+    cooldownSeconds: number;
+    devOtp?: string;
+  }> {
+    return this.authHttp<any>('/auth/phone/request-otp', {
+      method: 'POST',
+      body: JSON.stringify({ mobile }),
+    });
+  }
+
+  public async verifyPhoneOtp(mobile: string, otp: string): Promise<{
+    user: UserProfile;
+    token: string;
+    mfaEnrolled: boolean;
+    mfaVerified: boolean;
+    hasPolicy: boolean;
+    hasWallet: boolean;
+  }> {
+    const data = await this.authHttp<any>('/auth/phone/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ mobile, otp }),
+    });
+    if (data.token) this.token = data.token;
+    return data;
+  }
+
+  public async linkAccount(targetMethod: 'google' | 'mobile', identifier: string): Promise<{ success: boolean; user: UserProfile }> {
+    return this.authHttp<any>('/auth/link-account', {
+      method: 'POST',
+      body: JSON.stringify({ targetMethod, identifier }),
+    });
+  }
+
+  public async enrollMfa(): Promise<MfaEnrollResponse> {
+    return this.authHttp<MfaEnrollResponse>('/auth/mfa/enroll', { method: 'POST' });
+  }
+
+  public async verifyMfa(code: string): Promise<MfaVerifyResponse> {
+    const data = await this.authHttp<MfaVerifyResponse>('/auth/mfa/verify', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+    if (data.token) this.token = data.token;
+    return data;
+  }
+
+  public async getSession(): Promise<UserSession> {
+    return this.authHttp<UserSession>('/auth/session', { method: 'GET' });
+  }
+
+  public async getWorkingPolicy(): Promise<{ success: boolean; policy: WorkingPolicy | null }> {
+    return this.authHttp<{ success: boolean; policy: WorkingPolicy | null }>('/wallet/policy', { method: 'GET' });
+  }
+
+  public async updateWorkingPolicy(policy: Partial<WorkingPolicy>): Promise<{ success: boolean; policy: WorkingPolicy }> {
+    return this.authHttp<any>('/wallet/policy', {
+      method: 'PUT',
+      body: JSON.stringify(policy),
+    });
+  }
+
+  public async evaluateWorkingPolicy(lat?: number, lng?: number): Promise<PolicyEvaluation> {
+    return this.authHttp<PolicyEvaluation>('/wallet/policy/evaluate', {
+      method: 'POST',
+      body: JSON.stringify({ lat, lng }),
+    });
+  }
+
+  public async getWalletStatus(): Promise<{
+    hasWallet: boolean;
+    walletId: string | null;
+    status: string;
+    hasPolicy: boolean;
+    mfaVerified: boolean;
+  }> {
+    return this.authHttp<any>('/wallet/status', { method: 'GET' });
+  }
+
+  public async createWalletOnboarding(lat?: number, lng?: number): Promise<{
+    success: boolean;
+    isNew: boolean;
+    walletId: string;
+    status: string;
+    addresses: MultiChainAddresses['addresses'];
+  }> {
+    return this.authHttp<any>('/wallet/create', {
+      method: 'POST',
+      body: JSON.stringify({ lat, lng }),
+    });
+  }
+
+  public async getMultiChainAddresses(lat?: number, lng?: number): Promise<MultiChainAddresses> {
+    const query = lat !== undefined && lng !== undefined ? `?lat=${lat}&lng=${lng}` : '';
+    return this.authHttp<MultiChainAddresses>(`/wallet/addresses${query}`, { method: 'GET' });
   }
 }
 

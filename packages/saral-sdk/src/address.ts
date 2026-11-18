@@ -11,6 +11,13 @@
 import { SupportedBlockchain, SupportedCurve, ChainCurveRequirement } from './types';
 
 export const CHAIN_CURVE_REQUIREMENTS: Record<string, ChainCurveRequirement> = {
+  mst: {
+    blockchain: 'mst',
+    requiredCurve: 'secp256k1',
+    name: 'MST Blockchain',
+    description: 'EVM-compatible sovereign chain. Requires native secp256k1 uncompressed key, Keccak-256, and EIP-55 checksum.',
+    addressFormat: '0x[40 hex characters]',
+  },
   ethereum: {
     blockchain: 'ethereum',
     requiredCurve: 'secp256k1',

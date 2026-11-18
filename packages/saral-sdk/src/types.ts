@@ -428,3 +428,93 @@ export interface ChainCurveRequirement {
 
 
 
+
+// ─── USER ONBOARDING, WORKING POLICY & MULTI-CHAIN ADDRESS TYPES ────────────
+
+export interface UserProfile {
+  id: string;
+  name?: string;
+  email?: string;
+  googleId?: string;
+  mobile?: string;
+  loginMethod: 'google' | 'mobile';
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface WorkingPolicy {
+  userId?: string;
+  timeRestrictionEnabled: boolean;
+  startTime: string;
+  endTime: string;
+  days: string[];
+  timezone: string;
+  expiresAt?: string;
+  locationRestrictionEnabled: boolean;
+  allowedRegion?: string;
+  geofenceEnabled?: boolean;
+  lat?: number;
+  lng?: number;
+  radiusMeters?: number;
+  updatedAt?: string;
+}
+
+export interface PolicyEvaluation {
+  allowed: boolean;
+  reason?: string;
+  timeAllowed: boolean;
+  locationAllowed: boolean;
+  evaluatedAt: string;
+  serverTime: string;
+}
+
+export interface MfaEnrollResponse {
+  success: boolean;
+  secret: string;
+  qrUri: string;
+  recoveryCodes: string[];
+}
+
+export interface MfaVerifyResponse {
+  success: boolean;
+  token: string;
+  method?: string;
+  hasPolicy: boolean;
+  hasWallet: boolean;
+}
+
+export interface UserSession {
+  success: boolean;
+  user: UserProfile;
+  mfaEnrolled: boolean;
+  mfaVerified: boolean;
+  hasPolicy: boolean;
+  hasWallet: boolean;
+  policy?: WorkingPolicy | null;
+}
+
+export interface ChainAddressDetail {
+  blockchain: string;
+  network: string;
+  curve: string;
+  address: string;
+  status: 'ACTIVE_VERIFIED' | 'AWAITING_DKG_CURVE';
+  verified: boolean;
+  explorerUrl?: string;
+  notes?: string;
+}
+
+export interface MultiChainAddresses {
+  walletId: string;
+  userId: string;
+  status: 'READY';
+  addresses: {
+    mst: ChainAddressDetail;
+    solana: ChainAddressDetail;
+    bitcoin: ChainAddressDetail;
+  };
+  policyStatus?: {
+    allowed: boolean;
+    serverTime: string;
+  };
+}
