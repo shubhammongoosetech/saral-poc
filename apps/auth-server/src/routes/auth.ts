@@ -275,8 +275,8 @@ const handleGoogleCallback = async (req: Request, res: Response) => {
 router.get('/auth/google/callback', handleGoogleCallback);
 router.get('/api/auth/google/callback', handleGoogleCallback);
 
-// POST /auth/phone/request-otp
-router.post('/auth/phone/request-otp', (req: Request, res: Response) => {
+// POST /auth/phone/request-otp & /auth/otp/request & /auth/otp/send
+const handleRequestOtp = (req: Request, res: Response) => {
   try {
     const mobile = req.body?.mobile;
     if (!mobile || typeof mobile !== 'string') {
@@ -289,10 +289,14 @@ router.post('/auth/phone/request-otp', (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(429).json({ success: false, error: err.message || 'Failed to dispatch OTP' });
   }
-});
+};
 
-// POST /auth/phone/verify-otp
-router.post('/auth/phone/verify-otp', (req: Request, res: Response) => {
+router.post('/auth/phone/request-otp', handleRequestOtp);
+router.post('/auth/otp/request', handleRequestOtp);
+router.post('/auth/otp/send', handleRequestOtp);
+
+// POST /auth/phone/verify-otp & /auth/otp/verify
+const handleVerifyOtp = (req: Request, res: Response) => {
   try {
     const mobile = req.body?.mobile;
     const otp = req.body?.otp || req.body?.code;
@@ -309,7 +313,123 @@ router.post('/auth/phone/verify-otp', (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(400).json({ success: false, error: err.message || 'OTP verification failed' });
   }
-});
+};
+
+router.post('/auth/phone/verify-otp', handleVerifyOtp);
+router.post('/auth/otp/verify', handleVerifyOtp);
+
+// POST /mfa/send & /auth/mfa/send (MFA OTP dispatch for returning / phone users)
+const handleMfaSend = (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      res.status(401).json({ success: false, error: 'Authorization token required' });
+      return;
+    }
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    const decoded = keyManager.verifyToken(token);
+    const userId = decoded.sub;
+    const user = store.findUserById(userId);
+
+    const mfaOtpCode = crypto.randomInt(100000, 1000000).toString();
+    const codeHash = crypto.createHmac('sha256', 'mfa-salt').update(`${userId}:mfa:${mfaOtpCode}`).digest('hex');
+
+    store.saveOtp({
+      id: crypto.randomUUID(),
+      userId,
+      mobile: user?.mobile || 'mfa-totp',
+      codeHash,
+      purpose: 'mfa',
+      expiresAt: Date.now() + 10 * 60 * 1000,
+      used: false,
+      attempts: 0,
+      createdAt: Date.now(),
+    });
+
+    const isDev =
+      process.env.NODE_ENV === 'development' ||
+      process.env.NODE_ENV === 'test' ||
+      !process.env.NODE_ENV ||
+      process.env.AUTH_DEV_OTP_DISPLAY === 'true';
+
+    console.log(`[MFA SEND] User ${userId} OTP: ${mfaOtpCode}`);
+
+    res.json({
+      success: true,
+      message: 'MFA code sent',
+      devOtp: isDev ? mfaOtpCode : undefined,
+    });
+  } catch (err: any) {
+    res.status(401).json({ success: false, error: err.message || 'Failed to dispatch MFA code' });
+  }
+};
+
+router.post('/mfa/send', handleMfaSend);
+router.post('/auth/mfa/send', handleMfaSend);
+
+// POST /mfa/verify
+const handleMfaVerifyEndpoint = (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      res.status(401).json({ success: false, error: 'Authorization token required' });
+      return;
+    }
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    const decoded = keyManager.verifyToken(token);
+    const userId = decoded.sub;
+
+    const code = req.body?.otp || req.body?.code || req.body?.recoveryCode;
+    if (!code) {
+      res.status(400).json({ success: false, error: 'MFA code required' });
+      return;
+    }
+
+    // First check if matching mfa OTP in store
+    const activeMfaOtp = store.getActiveOtp(userId, 'mfa');
+    let verified = false;
+    if (activeMfaOtp) {
+      const computedHash = crypto.createHmac('sha256', 'mfa-salt').update(`${userId}:mfa:${code.trim()}`).digest('hex');
+      if (crypto.timingSafeEqual(Buffer.from(computedHash), Buffer.from(activeMfaOtp.codeHash))) {
+        store.markOtpUsed(activeMfaOtp.id);
+        verified = true;
+      }
+    }
+
+    if (!verified) {
+      // Check TOTP / recovery code challenge
+      verifyMfaChallenge(userId, code);
+      verified = true;
+    }
+
+    // Issue upgraded token
+    const upgradedToken = keyManager.issueToken(userId, 'operator');
+    const policy = store.getPolicy(userId);
+    const wallet = store.getWalletByUserId(userId);
+
+    // Save MFA verified
+    const existingMfa = store.getMfa(userId);
+    store.saveMfa({
+      userId,
+      type: existingMfa?.type || 'totp',
+      totpSecretEncrypted: existingMfa?.totpSecretEncrypted,
+      recoveryCodesHashed: existingMfa?.recoveryCodesHashed,
+      verifiedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    res.json({
+      success: true,
+      token: upgradedToken,
+      hasPolicy: !!policy,
+      hasWallet: !!wallet && wallet.status === 'READY',
+    });
+  } catch (err: any) {
+    res.status(401).json({ success: false, error: err.message || 'MFA verification failed' });
+  }
+};
+
+router.post('/mfa/verify', handleMfaVerifyEndpoint);
 
 // POST /auth/link-account (Requires Auth)
 router.post('/auth/link-account', requireAuth, (req: Request, res: Response) => {
@@ -379,8 +499,8 @@ router.post('/auth/logout', (_req: Request, res: Response) => {
   res.json({ success: true, message: 'Logged out successfully' });
 });
 
-// GET /auth/session (Validates active session)
-router.get('/auth/session', requireAuth, (req: Request, res: Response) => {
+// GET /auth/session & /auth/me (Validates active session)
+const handleSession = (req: Request, res: Response) => {
   const userId = req.user!.userId;
   const user = store.findUserById(userId);
   const mfa = store.getMfa(userId);
@@ -396,6 +516,93 @@ router.get('/auth/session', requireAuth, (req: Request, res: Response) => {
     hasWallet: !!wallet && wallet.status === 'READY',
     policy: policy || null,
   });
+};
+
+router.get('/auth/session', requireAuth, handleSession);
+router.get('/auth/me', requireAuth, handleSession);
+
+// GET /profile (Used by frontend profileApi)
+router.get('/profile', requireAuth, (req: Request, res: Response) => {
+  const userId = req.user!.userId;
+  const user = store.findUserById(userId);
+  const mfa = store.getMfa(userId);
+  const policy = store.getPolicy(userId);
+  const wallet = store.getWalletByUserId(userId);
+
+  res.json({
+    user: user || { id: userId, login_method: 'mobile', created_at: new Date().toISOString() },
+    hasPolicy: !!policy,
+    policy: policy
+      ? {
+          startTime: policy.startTime,
+          endTime: policy.endTime,
+          start_time: policy.startTime,
+          end_time: policy.endTime,
+          timezone: policy.timezone,
+          city: policy.allowedRegion,
+          lat: policy.lat,
+          lng: policy.lng,
+          radiusKm: policy.radiusMeters ? policy.radiusMeters / 1000 : 25,
+          radius_km: policy.radiusMeters ? policy.radiusMeters / 1000 : 25,
+          setAt: policy.updatedAt,
+          set_at: policy.updatedAt,
+        }
+      : null,
+    hasWallet: !!wallet && wallet.status === 'READY',
+    mfaVerified: !!mfa?.verifiedAt,
+    mfa: mfa ? { type: mfa.type, verifiedAt: mfa.verifiedAt, verified_at: mfa.verifiedAt } : null,
+  });
+});
+
+// POST /profile/policy (Used by frontend profileApi)
+router.post('/profile/policy', requireAuth, (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const {
+      startTime,
+      endTime,
+      timezone,
+      city,
+      lat,
+      lng,
+      radiusKm,
+      timeRestrictionEnabled,
+      locationRestrictionEnabled,
+    } = req.body;
+
+    const record = {
+      userId,
+      timeRestrictionEnabled: timeRestrictionEnabled !== undefined ? Boolean(timeRestrictionEnabled) : true,
+      startTime: startTime || '09:00',
+      endTime: endTime || '18:00',
+      days: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'],
+      timezone: timezone || 'Asia/Kolkata',
+      locationRestrictionEnabled: Boolean(locationRestrictionEnabled),
+      allowedRegion: city || 'Indore',
+      geofenceEnabled: Boolean(locationRestrictionEnabled),
+      lat: lat !== undefined ? Number(lat) : 22.7196,
+      lng: lng !== undefined ? Number(lng) : 75.8577,
+      radiusMeters: (Number(radiusKm) || 25) * 1000,
+      updatedAt: new Date().toISOString(),
+    };
+
+    store.savePolicy(record);
+
+    res.json({
+      message: 'Policy saved successfully',
+      policy: {
+        startTime: record.startTime,
+        endTime: record.endTime,
+        timezone: record.timezone,
+        city: record.allowedRegion,
+        lat: record.lat,
+        lng: record.lng,
+        radiusKm: Number(radiusKm) || 25,
+      },
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Failed to save policy' });
+  }
 });
 
 export default router;

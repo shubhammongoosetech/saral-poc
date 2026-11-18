@@ -18,6 +18,10 @@ import {
   createOrGetWallet,
   getAuthenticatedWalletAddresses,
 } from '../services/walletService';
+import {
+  getLiveBalances,
+  getLiveActivity,
+} from '../services/chainService';
 
 const router = Router();
 const store = DataStore.getInstance();
@@ -139,33 +143,172 @@ router.post('/create', requireAuth, requireMfa, async (req: Request, res: Respon
         ? 'SARAL Wallet created successfully. Keys distributed across 3 Domains.'
         : 'Existing SARAL Wallet retrieved. One-user-one-wallet invariant preserved.',
       addresses: result.addresses,
+      wallet: {
+        address: result.addresses.mst,
+        solanaAddress: result.addresses.solana,
+        bitcoinAddress: result.addresses.bitcoin,
+        balance: '0.0000',
+        solanaBalance: '0.0000',
+        bitcoinBalance: '0.00000000',
+        addresses: result.addresses,
+      },
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || 'Failed to initialize wallet' });
   }
 });
 
+// Helper to extract raw address strings for blockchain balance/activity queries
+function extractAddressStrings(addresses: {
+  mst: { address: string };
+  solana: { address: string };
+  bitcoin: { address: string };
+}) {
+  return {
+    mst: addresses.mst.address,
+    solana: addresses.solana.address,
+    bitcoin: addresses.bitcoin.address,
+  };
+}
+
+// POST /wallet/generate (Alias for frontend walletApi.generateWallet)
+router.post('/generate', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const result = await createOrGetWallet(userId);
+    const rawAddrs = extractAddressStrings(result.addresses);
+    const balances = await getLiveBalances(rawAddrs);
+
+    res.json({
+      hasWallet: true,
+      wallet: {
+        address: rawAddrs.mst,
+        balance: balances.mst,
+        solanaAddress: rawAddrs.solana,
+        solanaBalance: balances.solana,
+        bitcoinAddress: rawAddrs.bitcoin,
+        bitcoinBalance: balances.bitcoin,
+        addresses: rawAddrs,
+      },
+      addresses: result.addresses,
+      balances,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to generate wallet' });
+  }
+});
+
+// POST /wallet/check-access (Alias for frontend walletApi.checkAccess)
+router.post('/check-access', requireAuth, (req: Request, res: Response) => {
+  const userId = req.user!.userId;
+  const lat = req.body?.lat !== undefined ? Number(req.body.lat) : undefined;
+  const lng = req.body?.lng !== undefined ? Number(req.body.lng) : undefined;
+
+  const result = evaluateWorkingPolicy(userId, lat, lng);
+  res.json({
+    allowed: result.allowed,
+    reason: result.reason,
+    policyResult: result,
+  });
+});
+
+function parseCoordinates(req: Request) {
+  const latStr = (req.query?.lat as string) || (req.headers['x-client-lat'] as string);
+  const lngStr = (req.query?.lng as string) || (req.headers['x-client-lng'] as string);
+  const lat = latStr !== undefined && latStr !== '' ? Number(latStr) : undefined;
+  const lng = lngStr !== undefined && lngStr !== '' ? Number(lngStr) : undefined;
+  return { lat, lng };
+}
+
 // GET /wallet
-router.get('/', requireAuth, (req: Request, res: Response) => {
+router.get('/', requireAuth, async (req: Request, res: Response) => {
   const userId = req.user!.userId;
   const wallet = store.getWalletByUserId(userId);
-  if (!wallet) {
+  if (!wallet || wallet.status !== 'READY') {
     res.json({ success: true, hasWallet: false, wallet: null });
     return;
   }
 
-  // Returns ONLY metadata (NO addresses in database!)
-  res.json({
-    success: true,
-    hasWallet: true,
-    wallet: {
-      walletId: wallet.walletId,
-      status: wallet.status,
-      keyReferences: wallet.keyReferences,
-      createdAt: wallet.createdAt,
-    },
-  });
+  try {
+    const { lat, lng } = parseCoordinates(req);
+    // Recompute addresses dynamically in RAM
+    const derived = getAuthenticatedWalletAddresses(userId, lat, lng);
+    const rawAddrs = extractAddressStrings(derived.addresses);
+    const balances = await getLiveBalances(rawAddrs);
+
+    res.json({
+      success: true,
+      hasWallet: true,
+      wallet: {
+        walletId: wallet.walletId,
+        status: wallet.status,
+        address: rawAddrs.mst,
+        balance: balances.mst,
+        solanaAddress: rawAddrs.solana,
+        solanaBalance: balances.solana,
+        bitcoinAddress: rawAddrs.bitcoin,
+        bitcoinBalance: balances.bitcoin,
+        addresses: rawAddrs,
+        createdAt: wallet.createdAt,
+      },
+      addresses: derived.addresses,
+      balances,
+    });
+  } catch (err: any) {
+    console.error('[GET /wallet] Error deriving addresses:', err.message);
+    res.json({
+      success: true,
+      hasWallet: true,
+      wallet: {
+        walletId: wallet.walletId,
+        status: wallet.status,
+        address: '',
+        balance: '0.0000',
+        createdAt: wallet.createdAt,
+      },
+    });
+  }
 });
+
+// GET /wallet/balances (Live Read-Only Multi-Chain Balance Query)
+router.get('/balances', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { lat, lng } = parseCoordinates(req);
+    const derived = getAuthenticatedWalletAddresses(userId, lat, lng);
+    const rawAddrs = extractAddressStrings(derived.addresses);
+    const balances = await getLiveBalances(rawAddrs);
+    res.json({
+      success: true,
+      balances,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to fetch balances' });
+  }
+});
+
+// GET /wallet/transactions & /wallet/activity (Live Inbound Transactions)
+const handleActivity = async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { lat, lng } = parseCoordinates(req);
+    const derived = getAuthenticatedWalletAddresses(userId, lat, lng);
+    const rawAddrs = extractAddressStrings(derived.addresses);
+    const transactions = await getLiveActivity(rawAddrs);
+    res.json({
+      success: true,
+      transactions,
+    });
+  } catch (err: any) {
+    res.json({
+      success: true,
+      transactions: [],
+    });
+  }
+};
+
+router.get('/transactions', requireAuth, handleActivity);
+router.get('/activity', requireAuth, handleActivity);
 
 // GET /wallet/addresses (Requires Auth + Policy check; derives addresses in RAM)
 router.get('/addresses', requireAuth, (req: Request, res: Response) => {

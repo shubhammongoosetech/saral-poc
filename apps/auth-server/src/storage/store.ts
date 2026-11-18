@@ -12,6 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { pgPool, getIsPgConnected } from './db';
 
 export interface UserRecord {
   id: string;
@@ -216,9 +217,92 @@ export class DataStore {
     return null;
   }
 
+  public async syncFromPostgres(): Promise<void> {
+    if (!getIsPgConnected()) return;
+    try {
+      // Sync users
+      const uRes = await pgPool.query('SELECT * FROM users;');
+      for (const r of uRes.rows) {
+        this.data.users[r.id] = {
+          id: r.id,
+          name: r.name,
+          googleId: r.google_id,
+          email: r.email,
+          mobile: r.mobile,
+          loginMethod: r.login_method,
+          createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+          updatedAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+        };
+      }
+
+      // Sync MFA
+      const mRes = await pgPool.query('SELECT * FROM mfa;');
+      for (const r of mRes.rows) {
+        this.data.mfa[r.user_id] = {
+          userId: r.user_id,
+          type: r.type || 'totp',
+          totpSecretEncrypted: r.secret,
+          recoveryCodesHashed: r.recovery_codes || [],
+          verifiedAt: r.verified_at ? new Date(r.verified_at).toISOString() : undefined,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      // Sync Policy
+      const pRes = await pgPool.query('SELECT * FROM work_policy;');
+      for (const r of pRes.rows) {
+        this.data.policies[r.user_id] = {
+          userId: r.user_id,
+          timeRestrictionEnabled: true,
+          startTime: r.start_time || '09:00',
+          endTime: r.end_time || '18:00',
+          days: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'],
+          timezone: r.timezone || 'Asia/Kolkata',
+          locationRestrictionEnabled: true,
+          allowedRegion: r.city,
+          geofenceEnabled: true,
+          lat: r.lat,
+          lng: r.lng,
+          radiusMeters: (r.radius_km || 25) * 1000,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      // Sync Wallets
+      const wRes = await pgPool.query('SELECT * FROM wallets;');
+      for (const r of wRes.rows) {
+        this.data.wallets[r.user_id] = {
+          userId: r.user_id,
+          walletId: r.wallet_id,
+          status: r.status || 'READY',
+          keyReferences: r.key_references || {},
+          createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+          updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
+        };
+      }
+
+      console.log(`[DataStore] Successfully synced from PostgreSQL: ${uRes.rowCount} users, ${wRes.rowCount} wallets`);
+    } catch (err: any) {
+      console.warn('[DataStore] Error syncing from PostgreSQL:', err.message);
+    }
+  }
+
   public saveUser(user: UserRecord): void {
     this.data.users[user.id] = user;
     this.persist();
+    if (getIsPgConnected()) {
+      pgPool.query(
+        `INSERT INTO users (id, name, google_id, email, mobile, login_method, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name,
+           google_id = EXCLUDED.google_id,
+           email = EXCLUDED.email,
+           mobile = EXCLUDED.mobile,
+           login_method = EXCLUDED.login_method;`,
+        [user.id, user.name || null, user.googleId || null, user.email || null, user.mobile || null, user.loginMethod, user.createdAt]
+      ).catch((e) => console.warn('[PostgreSQL] saveUser warning:', e.message));
+    }
   }
 
   // --- MFA ---
@@ -229,6 +313,18 @@ export class DataStore {
   public saveMfa(record: MfaRecord): void {
     this.data.mfa[record.userId] = record;
     this.persist();
+    if (getIsPgConnected()) {
+      pgPool.query(
+        `INSERT INTO mfa (user_id, type, secret, recovery_codes, verified_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id) DO UPDATE SET
+           type = EXCLUDED.type,
+           secret = EXCLUDED.secret,
+           recovery_codes = EXCLUDED.recovery_codes,
+           verified_at = EXCLUDED.verified_at;`,
+        [record.userId, record.type, record.totpSecretEncrypted || null, record.recoveryCodesHashed || [], record.verifiedAt || null]
+      ).catch((e) => console.warn('[PostgreSQL] saveMfa warning:', e.message));
+    }
   }
 
   // --- Working Policy ---
@@ -239,6 +335,32 @@ export class DataStore {
   public savePolicy(policy: WorkingPolicyRecord): void {
     this.data.policies[policy.userId] = policy;
     this.persist();
+    if (getIsPgConnected()) {
+      const radiusKm = policy.radiusMeters ? policy.radiusMeters / 1000 : 25;
+      pgPool.query(
+        `INSERT INTO work_policy (user_id, start_time, end_time, timezone, city, lat, lng, radius_km, set_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+         ON CONFLICT (user_id) DO UPDATE SET
+           start_time = EXCLUDED.start_time,
+           end_time = EXCLUDED.end_time,
+           timezone = EXCLUDED.timezone,
+           city = EXCLUDED.city,
+           lat = EXCLUDED.lat,
+           lng = EXCLUDED.lng,
+           radius_km = EXCLUDED.radius_km,
+           set_at = NOW();`,
+        [
+          policy.userId,
+          policy.startTime || '09:00',
+          policy.endTime || '18:00',
+          policy.timezone || 'Asia/Kolkata',
+          policy.allowedRegion || 'Indore',
+          policy.lat || 22.7196,
+          policy.lng || 75.8577,
+          radiusKm
+        ]
+      ).catch((e) => console.warn('[PostgreSQL] savePolicy warning:', e.message));
+    }
   }
 
   // --- Wallet Metadata (One-User-One-Wallet) ---
@@ -249,6 +371,17 @@ export class DataStore {
   public saveWallet(record: WalletMetadataRecord): void {
     this.data.wallets[record.userId] = record;
     this.persist();
+    if (getIsPgConnected()) {
+      pgPool.query(
+        `INSERT INTO wallets (user_id, wallet_id, status, key_references, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (user_id) DO UPDATE SET
+           status = EXCLUDED.status,
+           key_references = EXCLUDED.key_references,
+           updated_at = EXCLUDED.updated_at;`,
+        [record.userId, record.walletId, record.status, JSON.stringify(record.keyReferences), record.createdAt, record.updatedAt]
+      ).catch((e) => console.warn('[PostgreSQL] saveWallet warning:', e.message));
+    }
   }
 
   // --- OTP Management ---

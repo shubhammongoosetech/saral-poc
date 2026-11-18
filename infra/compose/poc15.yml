@@ -11,6 +11,9 @@ services:
       PORT: 3001
       NODE_ENV: development
       ENABLE_DEV_AUTH: "true"
+      DATABASE_URL: "postgresql://saral:saral_secret@host.docker.internal:5432/saral"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     secrets: [saral_admin_key]
     ports:
       - '3001:3001'

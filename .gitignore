@@ -36,3 +36,4 @@ vault_data/
 *.pem
 *.sock
 data/
+scratch/

@@ -85,4 +85,10 @@ export class KeyManager {
       algorithm: 'RS256',
     });
   }
+
+  public verifyToken(token: string): TokenClaims {
+    return jwt.verify(token, this.publicKeyPem, {
+      algorithms: ['RS256'],
+    }) as TokenClaims;
+  }
 }
