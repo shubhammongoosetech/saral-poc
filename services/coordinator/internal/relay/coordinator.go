@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/saral-protocol/saral-poc/services/coordinator/internal/auth"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/discovery"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/membership"
 )
@@ -98,6 +99,12 @@ func (rc *RelayCoordinator) ForwardRelay(msg *RelayMessage) (*RelayAck, error) {
 
 	msg.HopLimit--
 	msg.Hops = append(msg.Hops, coordID)
+	msg.RoutingTrace = append(msg.RoutingTrace, HopTraceRecord{
+		HopID:     coordID,
+		Domain:    string(rc.domain),
+		Timestamp: now,
+		Action:    "COORDINATOR_FORWARD",
+	})
 
 	// 3. Destination Resolution
 	normTarget, deducedDomain := NormalizeNodeID(msg.TargetNode)
@@ -164,7 +171,7 @@ func (rc *RelayCoordinator) deliverToLocalNode(normTarget string, msg *RelayMess
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
+		req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
 
 		resp, err := rc.httpClient.Do(req)
 		if err == nil {
@@ -274,7 +281,7 @@ func (rc *RelayCoordinator) forwardToPeerCoordinator(targetDomain string, msg *R
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
+		req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
 
 		resp, err := rc.httpClient.Do(req)
 		if err == nil {
@@ -368,7 +375,7 @@ func (rc *RelayCoordinator) SendRelay(req RelaySendRequest) (*DeliveryRecord, er
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
+		httpReq.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
 
 		resp, err := rc.httpClient.Do(httpReq)
 		if err != nil {
@@ -413,7 +420,7 @@ func (rc *RelayCoordinator) SendRelay(req RelaySendRequest) (*DeliveryRecord, er
 		data, _ := json.Marshal(rpcBody)
 		reqPost, _ := http.NewRequest("POST", strings.TrimRight(pURL, "/")+"/rpc", bytes.NewReader(data))
 		reqPost.Header.Set("Content-Type", "application/json")
-		reqPost.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
+		reqPost.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
 
 		resp, err := rc.httpClient.Do(reqPost)
 		if err != nil {
@@ -450,6 +457,7 @@ func (rc *RelayCoordinator) recordAudit(msg *RelayMessage, ack *RelayAck) {
 		CreatedAt:    msg.Timestamp,
 		UpdatedAt:    now,
 		Hops:         ack.ForwardedBy,
+		RoutingTrace: msg.RoutingTrace,
 		Ack:          ack,
 		Error:        ack.Error,
 	}

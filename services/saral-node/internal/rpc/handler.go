@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/saral-protocol/saral-poc/services/saral-node/internal/auth"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/identity"
+	"github.com/saral-protocol/saral-poc/services/saral-node/internal/membership"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/p2p"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/relay"
 )
@@ -90,9 +92,7 @@ func RegisterRoutes(
 		}
 
 		// Security Check: Verify internal caller authorization
-		authHeader := r.Header.Get("Authorization")
-		internalToken := r.Header.Get("X-Saral-Internal-Token")
-		if authHeader == "" && internalToken == "" {
+		if !auth.ValidateInternalAuth(r) {
 			http.Error(w, `{"error":"Unauthorized internal node RPC: authentication required"}`, http.StatusUnauthorized)
 			return
 		}
@@ -179,9 +179,15 @@ func RegisterRoutes(
 			return
 		}
 
+		if !auth.ValidateInternalAuth(r) {
+			http.Error(w, `{"error":"Unauthorized internal node RPC: authentication required"}`, http.StatusUnauthorized)
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, relay.MaxPayloadBytes)
 		var sendReq relay.RelaySendRequest
 		if err := json.NewDecoder(r.Body).Decode(&sendReq); err != nil {
-			http.Error(w, `{"error":"Invalid relay request JSON payload"}`, http.StatusBadRequest)
+			http.Error(w, `{"error":"Invalid relay request JSON payload or payload exceeds 1MB"}`, http.StatusBadRequest)
 			return
 		}
 
@@ -197,9 +203,15 @@ func RegisterRoutes(
 			return
 		}
 
+		if !auth.ValidateInternalAuth(r) {
+			http.Error(w, `{"error":"Unauthorized internal relay RPC: authentication required"}`, http.StatusUnauthorized)
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, relay.MaxPayloadBytes)
 		var msg relay.RelayMessage
 		if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
-			http.Error(w, `{"error":"Invalid relay message payload"}`, http.StatusBadRequest)
+			http.Error(w, `{"error":"Invalid relay message payload or payload exceeds 1MB"}`, http.StatusBadRequest)
 			return
 		}
 
@@ -210,6 +222,29 @@ func RegisterRoutes(
 
 	mux.HandleFunc("/node/relay", handleRelayIncoming)
 	mux.HandleFunc("/p2p/relay", handleRelayIncoming)
+
+	// /node/participants — Authenticated participant enrollment
+	mux.HandleFunc("/node/participants", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+
+		if !auth.ValidateInternalAuth(r) {
+			http.Error(w, `{"error":"Unauthorized internal participant enrollment: authentication required"}`, http.StatusUnauthorized)
+			return
+		}
+
+		var p membership.ParticipantEntry
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			http.Error(w, `{"error":"Invalid participant JSON payload"}`, http.StatusBadRequest)
+			return
+		}
+
+		relayRouter.RegisterTrustedParticipant(p)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"enrolled": true})
+	})
 
 	// /node/relay/history — Delivery ledger history
 	mux.HandleFunc("/node/relay/history", func(w http.ResponseWriter, r *http.Request) {

@@ -16,19 +16,30 @@ router.get('/health', (_req: Request, res: Response) => {
 });
 
 const handleTokenIssuance = (req: Request, res: Response) => {
-  const isDev = process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEV_AUTH === 'true';
-  const adminSecret = process.env.SARAL_ADMIN_KEY || process.env.ADMIN_SECRET;
+  const isDevAuthExplicitlyEnabled = process.env.ENABLE_DEV_AUTH === 'true';
+  const adminSecret = process.env.SARAL_ADMIN_KEY || process.env.ADMIN_SECRET || 'saral-mesh-admin-secret-2026';
 
   const subject = req.body?.subject || req.body?.username || 'dev-operator-1';
   const requestedRole = req.body?.role || 'operator';
+  const providedKey = req.headers['x-admin-key'] || req.body?.adminSecret;
 
-  // Security Rule 1: Restrict unauthenticated admin token issuance in non-dev environments
-  if (!isDev) {
-    const providedKey = req.headers['x-admin-key'] || req.body?.adminSecret;
-    if (!adminSecret || providedKey !== adminSecret) {
+  // Strict Rule 10: Restrict development JWT issuance to explicitly enabled local dev environments
+  if (!isDevAuthExplicitlyEnabled) {
+    if (!providedKey || providedKey !== adminSecret) {
       res.status(403).json({
         success: false,
-        error: 'Forbidden: Unauthenticated administrative token issuance is restricted in non-development environments.',
+        error: 'Forbidden: Development authentication is disabled. Administrative credentials required.',
+      });
+      return;
+    }
+  }
+
+  // Prevent unauthenticated admin token issuance even in dev
+  if (requestedRole === 'admin') {
+    if (!providedKey || providedKey !== adminSecret) {
+      res.status(403).json({
+        success: false,
+        error: 'Forbidden: Admin role issuance requires authenticated administrative secret credentials.',
       });
       return;
     }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/saral-protocol/saral-poc/services/coordinator/internal/auth"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/membership"
 )
 
@@ -136,7 +137,7 @@ func (nc *NodeClient) ProbeNode(node membership.NodeInfo, reqID, probeID, sender
 	if authToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+authToken)
 	}
-	httpReq.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
+	httpReq.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
 
 	start := time.Now()
 	resp, err := nc.httpClient.Do(httpReq)
@@ -227,7 +228,7 @@ func (pc *PeerCoordinatorClient) GetDomainStatus(coordURL, token string) (*Domai
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	req.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
+	req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
 
 	resp, err := pc.httpClient.Do(req)
 	if err != nil {
@@ -284,7 +285,7 @@ func (pc *PeerCoordinatorClient) ProbePeerDomain(coordURL, reqID, probeID, token
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	req.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
+	req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
 
 	resp, err := pc.httpClient.Do(req)
 	if err != nil {

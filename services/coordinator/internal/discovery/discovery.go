@@ -3,9 +3,11 @@ package discovery
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/saral-protocol/saral-poc/services/coordinator/internal/auth"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/membership"
 )
 
@@ -33,6 +35,7 @@ type Monitor struct {
 	peerCoords      []string
 	nodeStates      map[string]*NodeState
 	peerCoordStates map[string]*PeerCoordinatorState
+	peerNodeStates  map[string]*NodeState
 	mu              sync.RWMutex
 	httpClient      *http.Client
 	stopChan        chan struct{}
@@ -44,6 +47,7 @@ func NewMonitor(registry *membership.NodeRegistry, peerCoordinatorURLs []string)
 		peerCoords:      peerCoordinatorURLs,
 		nodeStates:      make(map[string]*NodeState),
 		peerCoordStates: make(map[string]*PeerCoordinatorState),
+		peerNodeStates:  make(map[string]*NodeState),
 		httpClient: &http.Client{
 			Timeout: 2 * time.Second,
 		},
@@ -80,7 +84,7 @@ func (m *Monitor) Stop() {
 func (m *Monitor) pollLoop() {
 	m.pollAll()
 
-	ticker := time.NewTicker(4 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -149,23 +153,22 @@ func (m *Monitor) pollNode(n membership.NodeInfo) {
 
 func (m *Monitor) pollPeerCoordinator(ep string) {
 	start := time.Now()
-	resp, err := m.httpClient.Get(ep + "/health")
+	healthURL := strings.TrimRight(ep, "/") + "/health"
+	resp, err := m.httpClient.Get(healthURL)
 	latency := time.Since(start).Milliseconds()
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	state, exists := m.peerCoordStates[ep]
 	if !exists {
 		state = &PeerCoordinatorState{Endpoint: ep}
 		m.peerCoordStates[ep] = state
 	}
-
 	state.LastChecked = time.Now()
 	state.LatencyMs = latency
 
 	if err != nil || resp.StatusCode != http.StatusOK {
 		state.Status = "UNREACHABLE"
+		m.mu.Unlock()
 		return
 	}
 	defer resp.Body.Close()
@@ -179,6 +182,36 @@ func (m *Monitor) pollPeerCoordinator(ep string) {
 		state.Domain = hResp.Domain
 	} else {
 		state.Status = "DEGRADED"
+	}
+	m.mu.Unlock()
+
+	// Query peer nodes to maintain cluster-wide participant registry
+	regURL := strings.TrimRight(ep, "/") + "/registry/participants"
+	req, err := http.NewRequest("GET", regURL, nil)
+	if err == nil {
+		req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+		pResp, err := m.httpClient.Do(req)
+		if err == nil && pResp.StatusCode == http.StatusOK {
+			defer pResp.Body.Close()
+			var partResp struct {
+				Participants map[string]membership.ParticipantEntry `json:"participants"`
+			}
+			if json.NewDecoder(pResp.Body).Decode(&partResp) == nil {
+				m.mu.Lock()
+				for k, p := range partResp.Participants {
+					canonicalID, _ := membership.NormalizeNodeID(k)
+					m.peerNodeStates[canonicalID] = &NodeState{
+						NodeID:       canonicalID,
+						Domain:       p.Domain,
+						Endpoint:     p.Endpoint,
+						Status:       "HEALTHY",
+						PublicKeyHex: p.PublicKeyHex,
+						LastChecked:  time.Now(),
+					}
+				}
+				m.mu.Unlock()
+			}
+		}
 	}
 }
 
@@ -204,3 +237,44 @@ func (m *Monitor) GetPeerCoordinatorStates() []PeerCoordinatorState {
 	return res
 }
 
+// GetAuthorizedParticipants returns all known and authenticated participants in cluster
+func (m *Monitor) GetAuthorizedParticipants() map[string]membership.ParticipantEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[string]membership.ParticipantEntry)
+
+	// Add local nodes
+	for _, s := range m.nodeStates {
+		if s.PublicKeyHex != "" {
+			canonicalID, domain := membership.NormalizeNodeID(s.NodeID)
+			if s.Domain != "" {
+				domain = s.Domain
+			}
+			result[canonicalID] = membership.ParticipantEntry{
+				NodeID:       canonicalID,
+				Domain:       domain,
+				PublicKeyHex: s.PublicKeyHex,
+				Endpoint:     s.Endpoint,
+			}
+		}
+	}
+
+	// Add peer nodes
+	for _, s := range m.peerNodeStates {
+		if s.PublicKeyHex != "" {
+			canonicalID, domain := membership.NormalizeNodeID(s.NodeID)
+			if s.Domain != "" {
+				domain = s.Domain
+			}
+			result[canonicalID] = membership.ParticipantEntry{
+				NodeID:       canonicalID,
+				Domain:       domain,
+				PublicKeyHex: s.PublicKeyHex,
+				Endpoint:     s.Endpoint,
+			}
+		}
+	}
+
+	return result
+}

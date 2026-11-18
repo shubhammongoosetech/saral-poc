@@ -144,6 +144,28 @@ func (tv *TokenVerifier) VerifyTokenWithRole(tokenStr string, requiredRole strin
 	)
 
 	if err != nil || !token.Valid {
+		// In case of auth-server restart or key rotation, attempt a fresh key reload
+		if tv.authServerURL != "" {
+			if reloadErr := tv.LoadPublicKey(); reloadErr == nil {
+				tv.mu.RLock()
+				refreshedPubKey := tv.parsedPubKey
+				tv.mu.RUnlock()
+
+				token, err = jwt.Parse(tokenClean, func(token *jwt.Token) (interface{}, error) {
+					if token.Method.Alg() != "RS256" {
+						return nil, fmt.Errorf("invalid token algorithm %v: only RS256 is permitted", token.Header["alg"])
+					}
+					return refreshedPubKey, nil
+				},
+					jwt.WithIssuer("saral-auth-server"),
+					jwt.WithAudience("saral-domain-coordinators"),
+					jwt.WithLeeway(10*time.Second),
+				)
+			}
+		}
+	}
+
+	if err != nil || !token.Valid {
 		errMsg := "invalid token signature, algorithm or claims"
 		if err != nil {
 			errMsg = err.Error()

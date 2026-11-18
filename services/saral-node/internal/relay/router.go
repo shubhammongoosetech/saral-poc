@@ -8,11 +8,16 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/saral-protocol/saral-poc/services/saral-node/internal/auth"
+	"github.com/saral-protocol/saral-poc/services/saral-node/internal/crypto"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/identity"
+	"github.com/saral-protocol/saral-poc/services/saral-node/internal/membership"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/p2p"
 )
 
@@ -27,7 +32,8 @@ type RelayRouter struct {
 	domain              string
 	p2pMgr              *p2p.P2PManager
 	coordinatorURL      string
-	trustedParticipants map[string]string // NodeID -> PublicKeyHex
+	vaultDir            string
+	trustedParticipants map[string]membership.ParticipantEntry // Canonical NodeID -> ParticipantEntry
 	seenMessages        map[string]*RelayAck
 	history             []*DeliveryRecord
 	mu                  sync.RWMutex
@@ -40,13 +46,15 @@ func NewRelayRouter(
 	domain string,
 	p2pMgr *p2p.P2PManager,
 	coordinatorURL string,
+	vaultDir string,
 ) *RelayRouter {
 	r := &RelayRouter{
 		idMgr:               idMgr,
 		domain:              strings.ToUpper(domain),
 		p2pMgr:              p2pMgr,
 		coordinatorURL:      coordinatorURL,
-		trustedParticipants: make(map[string]string),
+		vaultDir:            vaultDir,
+		trustedParticipants: make(map[string]membership.ParticipantEntry),
 		seenMessages:        make(map[string]*RelayAck),
 		history:             make([]*DeliveryRecord, 0, MaxHistoryItems),
 		httpClient: &http.Client{
@@ -55,7 +63,12 @@ func NewRelayRouter(
 		stopChan: make(chan struct{}),
 	}
 
+	// Restore persistent deduplication cache across process restarts
+	r.loadSeenMessagesFromDisk()
+
 	go r.cleanupLoop()
+	go r.syncParticipantsLoop()
+
 	return r
 }
 
@@ -63,11 +76,98 @@ func (r *RelayRouter) Stop() {
 	close(r.stopChan)
 }
 
-func (r *RelayRouter) RegisterTrustedParticipant(nodeID, pubKeyHex string) {
+func (r *RelayRouter) RegisterTrustedParticipant(p membership.ParticipantEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	canonicalID, _ := NormalizeNodeID(nodeID)
-	r.trustedParticipants[canonicalID] = pubKeyHex
+	canonicalID, domain := membership.NormalizeNodeID(p.NodeID)
+	if p.Domain == "" {
+		p.Domain = domain
+	}
+	p.NodeID = canonicalID
+	r.trustedParticipants[canonicalID] = p
+	if r.p2pMgr != nil {
+		r.p2pMgr.RegisterTrustedParticipant(p)
+	}
+}
+
+func (r *RelayRouter) loadSeenMessagesFromDisk() {
+	if r.vaultDir == "" {
+		return
+	}
+	cacheFile := filepath.Join(r.vaultDir, "seen_relay_messages.json")
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var loaded map[string]*RelayAck
+	if err := json.Unmarshal(data, &loaded); err == nil && loaded != nil {
+		r.seenMessages = loaded
+		log.Printf("[SARAL Node - %s] Restored %d deduplication records from persistent vault", r.domain, len(loaded))
+	}
+}
+
+func (r *RelayRouter) saveSeenMessagesToDisk() {
+	if r.vaultDir == "" {
+		return
+	}
+	cacheFile := filepath.Join(r.vaultDir, "seen_relay_messages.json")
+	data, err := json.Marshal(r.seenMessages)
+	if err == nil {
+		_ = os.WriteFile(cacheFile, data, 0600)
+	}
+}
+
+func (r *RelayRouter) syncParticipantsLoop() {
+	if r.coordinatorURL == "" {
+		return
+	}
+
+	// Initial sync
+	r.fetchParticipantsFromCoordinator()
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.stopChan:
+			return
+		case <-ticker.C:
+			r.fetchParticipantsFromCoordinator()
+		}
+	}
+}
+
+func (r *RelayRouter) fetchParticipantsFromCoordinator() {
+	if r.coordinatorURL == "" {
+		return
+	}
+
+	url := strings.TrimRight(r.coordinatorURL, "/") + "/registry/participants"
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return
+	}
+	defer resp.Body.Close()
+
+	var partResp struct {
+		Participants map[string]membership.ParticipantEntry `json:"participants"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&partResp); err == nil {
+		for _, p := range partResp.Participants {
+			r.RegisterTrustedParticipant(p)
+		}
+	}
 }
 
 func (r *RelayRouter) cleanupLoop() {
@@ -81,10 +181,15 @@ func (r *RelayRouter) cleanupLoop() {
 		case <-ticker.C:
 			r.mu.Lock()
 			now := time.Now().UnixMilli()
+			changed := false
 			for k, ack := range r.seenMessages {
-				if now-ack.Timestamp > 300000 { // 5 minutes retention
+				if now-ack.Timestamp > 600000 { // 10 minutes retention
 					delete(r.seenMessages, k)
+					changed = true
 				}
+			}
+			if changed {
+				r.saveSeenMessagesToDisk()
 			}
 			r.mu.Unlock()
 		}
@@ -102,29 +207,53 @@ func (r *RelayRouter) Send(req RelaySendRequest) (*DeliveryRecord, error) {
 		req.TimeoutMs = DefaultTimeout
 	}
 
-	targetNode, targetDomain := NormalizeNodeID(req.TargetNode)
+	targetNode, targetDomain := membership.NormalizeNodeID(req.TargetNode)
 	if req.TargetDomain != "" {
 		targetDomain = strings.ToUpper(req.TargetDomain)
 	}
 
+	// Payload size validation
+	rawPayload, err := json.Marshal(req.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("invalid payload: %w", err)
+	}
+	if len(rawPayload) > MaxPayloadBytes {
+		return nil, fmt.Errorf("payload exceeds maximum allowed size (%d bytes > %d limit)", len(rawPayload), MaxPayloadBytes)
+	}
+
+	// Encrypted wire transport
+	encPayload, err := crypto.EncryptPayload(req.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("payload encryption failed: %w", err)
+	}
+
 	now := time.Now().UnixMilli()
 	msg := &RelayMessage{
-		MessageID:    req.MessageID,
-		SourceNode:   r.idMgr.Identity.NodeID,
-		SourceDomain: r.domain,
-		TargetNode:   targetNode,
-		TargetDomain: targetDomain,
-		Type:         req.Type,
-		Payload:      req.Payload,
-		Timestamp:    now,
-		TimestampISO: time.Now().UTC().Format(time.RFC3339),
-		ExpiresAt:    now + int64(req.TimeoutMs),
-		HopLimit:     5,
-		Hops:         []string{r.idMgr.Identity.NodeID},
+		MessageID:        req.MessageID,
+		SourceNode:       r.idMgr.Identity.NodeID,
+		SourceDomain:     r.domain,
+		TargetNode:       targetNode,
+		TargetDomain:     targetDomain,
+		Type:             req.Type,
+		Payload:          nil, // Strip plaintext from wire transport
+		EncryptedPayload: encPayload,
+		Timestamp:        now,
+		TimestampISO:     time.Now().UTC().Format(time.RFC3339),
+		ExpiresAt:        now + int64(req.TimeoutMs),
+		HopLimit:         5,
+		Hops:             []string{r.idMgr.Identity.NodeID},
+		RoutingTrace: []HopTraceRecord{
+			{
+				HopID:     r.idMgr.Identity.NodeID,
+				Domain:    r.domain,
+				Timestamp: now,
+				Action:    "ORIGIN_SEND",
+			},
+		},
 		PublicKeyHex: r.idMgr.Identity.PublicKeyHex,
 	}
 
-	// Sign canonical representation
+	// Sign canonical immutable message fields
 	canonicalPayload := CanonicalMessagePayload(msg)
 	msg.SignatureHex = r.idMgr.Sign(canonicalPayload)
 
@@ -138,6 +267,7 @@ func (r *RelayRouter) Send(req RelaySendRequest) (*DeliveryRecord, error) {
 		CreatedAt:    now,
 		UpdatedAt:    now,
 		Hops:         msg.Hops,
+		RoutingTrace: msg.RoutingTrace,
 	}
 
 	r.appendHistory(record)
@@ -149,7 +279,7 @@ func (r *RelayRouter) Send(req RelaySendRequest) (*DeliveryRecord, error) {
 
 	if r.p2pMgr != nil {
 		for _, peer := range r.p2pMgr.GetPeers() {
-			normPeer, _ := NormalizeNodeID(peer.NodeID)
+			normPeer, _ := membership.NormalizeNodeID(peer.NodeID)
 			if normPeer == targetNode && peer.Connected {
 				destURL = peer.Endpoint + "/p2p/relay"
 				isDirectP2P = true
@@ -187,16 +317,34 @@ func (r *RelayRouter) Send(req RelaySendRequest) (*DeliveryRecord, error) {
 
 	// Verify recipient signature on ACK
 	if ack.Status == StateAcknowledged || ack.Status == StateDelivered {
+		// Strict Security Rule 5: Bind recipient ACK verification to enrolled destination public key!
+		// Never trust a public key solely because it appears inside an ACK.
+		r.mu.RLock()
+		expectedEntry, hasExpected := r.trustedParticipants[targetNode]
+		r.mu.RUnlock()
+
+		verifyKey := ack.RecipientPubKey
+		if len(r.trustedParticipants) > 0 && hasExpected {
+			if ack.RecipientPubKey != expectedEntry.PublicKeyHex {
+				record.State = StateFailed
+				record.Error = fmt.Sprintf("forged ACK recipient public key for %s: expected %s, got %s",
+					targetNode, expectedEntry.PublicKeyHex, ack.RecipientPubKey)
+				record.UpdatedAt = time.Now().UnixMilli()
+				return record, fmt.Errorf("%s", record.Error)
+			}
+			verifyKey = expectedEntry.PublicKeyHex
+		}
+
 		canonicalAck := CanonicalAckPayload(ack)
-		if !identity.VerifySignature(ack.RecipientPubKey, canonicalAck, ack.RecipientSigHex) {
+		if !identity.VerifySignature(verifyKey, canonicalAck, ack.RecipientSigHex) {
 			record.State = StateFailed
 			record.Error = "recipient ACK signature verification failed (forged or corrupted ACK)"
 			record.UpdatedAt = time.Now().UnixMilli()
 			return record, fmt.Errorf("%s", record.Error)
 		}
 
-		// Verify that the ACK was indeed signed by the intended recipient
-		normAckTarget, _ := NormalizeNodeID(ack.TargetNode)
+		// Verify intended recipient node ID
+		normAckTarget, _ := membership.NormalizeNodeID(ack.TargetNode)
 		if normAckTarget != targetNode {
 			record.State = StateFailed
 			record.Error = fmt.Sprintf("ACK recipient mismatch: expected %s, got %s", targetNode, ack.TargetNode)
@@ -207,6 +355,7 @@ func (r *RelayRouter) Send(req RelaySendRequest) (*DeliveryRecord, error) {
 		record.State = StateAcknowledged
 		record.Ack = ack
 		record.Hops = ack.ForwardedBy
+		record.RoutingTrace = ack.RoutingTrace
 		record.UpdatedAt = time.Now().UnixMilli()
 		return record, nil
 	}
@@ -233,7 +382,7 @@ func (r *RelayRouter) dispatchWithRetry(url string, msg *RelayMessage, maxRetrie
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
+		req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
 
 		resp, err := r.httpClient.Do(req)
 		if err == nil {
@@ -260,7 +409,23 @@ func (r *RelayRouter) dispatchWithRetry(url string, msg *RelayMessage, maxRetrie
 func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 	now := time.Now().UnixMilli()
 
-	// 1. Expiration check
+	// 1. Freshness check (clock skew / delayed packets)
+	diff := now - msg.Timestamp
+	if diff < -5000 || diff > 60000 {
+		return &RelayAck{
+			MessageID:    msg.MessageID,
+			TargetNode:   r.idMgr.Identity.NodeID,
+			TargetDomain: r.domain,
+			SourceNode:   msg.SourceNode,
+			SourceDomain: msg.SourceDomain,
+			Status:       StateFailed,
+			Timestamp:    now,
+			TimestampISO: time.Now().UTC().Format(time.RFC3339),
+			Error:        fmt.Sprintf("timestamp outside freshness window (diff: %d ms)", diff),
+		}, nil
+	}
+
+	// 2. Expiration check
 	if msg.ExpiresAt > 0 && now > msg.ExpiresAt {
 		return &RelayAck{
 			MessageID:    msg.MessageID,
@@ -275,7 +440,7 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		}, nil
 	}
 
-	// 2. Hop limit & loop check
+	// 3. Hop limit & loop check
 	if msg.HopLimit <= 0 {
 		return &RelayAck{
 			MessageID:    msg.MessageID,
@@ -306,7 +471,26 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		}
 	}
 
-	// 3. Sender signature verification
+	// 4. Decrypt payload if encrypted
+	if msg.EncryptedPayload != "" {
+		decrypted, err := crypto.DecryptPayload(msg.EncryptedPayload)
+		if err != nil {
+			return &RelayAck{
+				MessageID:    msg.MessageID,
+				TargetNode:   r.idMgr.Identity.NodeID,
+				TargetDomain: r.domain,
+				SourceNode:   msg.SourceNode,
+				SourceDomain: msg.SourceDomain,
+				Status:       StateFailed,
+				Timestamp:    now,
+				TimestampISO: time.Now().UTC().Format(time.RFC3339),
+				Error:        fmt.Sprintf("payload decryption failed: %v", err),
+			}, nil
+		}
+		msg.Payload = decrypted
+	}
+
+	// 5. Canonical Sender signature verification
 	canonicalPayload := CanonicalMessagePayload(&msg)
 	if !identity.VerifySignature(msg.PublicKeyHex, canonicalPayload, msg.SignatureHex) {
 		return &RelayAck{
@@ -322,12 +506,14 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		}, nil
 	}
 
-	// 4. Trusted participant verification
-	r.mu.Lock()
-	canonicalSender, _ := NormalizeNodeID(msg.SourceNode)
-	if expectedKey, exists := r.trustedParticipants[canonicalSender]; exists {
-		if expectedKey != msg.PublicKeyHex {
-			r.mu.Unlock()
+	// 6. Strict Participant Registry Verification (NO auto-enrollment!)
+	canonicalSender, _ := membership.NormalizeNodeID(msg.SourceNode)
+	r.mu.RLock()
+	trustedEntry, exists := r.trustedParticipants[canonicalSender]
+	r.mu.RUnlock()
+
+	if len(r.trustedParticipants) > 0 {
+		if !exists {
 			return &RelayAck{
 				MessageID:    msg.MessageID,
 				TargetNode:   r.idMgr.Identity.NodeID,
@@ -337,24 +523,48 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 				Status:       StateFailed,
 				Timestamp:    now,
 				TimestampISO: time.Now().UTC().Format(time.RFC3339),
-				Error:        fmt.Sprintf("sender public key mismatch: registered %s, received %s", expectedKey, msg.PublicKeyHex),
+				Error:        fmt.Sprintf("unknown peer: sender %s is not in trusted participant registry", msg.SourceNode),
 			}, nil
 		}
-	} else {
-		// Auto-enroll validly signed peer
-		r.trustedParticipants[canonicalSender] = msg.PublicKeyHex
+		if trustedEntry.PublicKeyHex != msg.PublicKeyHex {
+			return &RelayAck{
+				MessageID:    msg.MessageID,
+				TargetNode:   r.idMgr.Identity.NodeID,
+				TargetDomain: r.domain,
+				SourceNode:   msg.SourceNode,
+				SourceDomain: msg.SourceDomain,
+				Status:       StateFailed,
+				Timestamp:    now,
+				TimestampISO: time.Now().UTC().Format(time.RFC3339),
+				Error:        fmt.Sprintf("forged sender public key for %s: registered %s, received %s", msg.SourceNode, trustedEntry.PublicKeyHex, msg.PublicKeyHex),
+			}, nil
+		}
+		if trustedEntry.Domain != "" && msg.SourceDomain != "" && !strings.EqualFold(trustedEntry.Domain, msg.SourceDomain) {
+			return &RelayAck{
+				MessageID:    msg.MessageID,
+				TargetNode:   r.idMgr.Identity.NodeID,
+				TargetDomain: r.domain,
+				SourceNode:   msg.SourceNode,
+				SourceDomain: msg.SourceDomain,
+				Status:       StateFailed,
+				Timestamp:    now,
+				TimestampISO: time.Now().UTC().Format(time.RFC3339),
+				Error:        fmt.Sprintf("sender domain mismatch for %s: registered %s, claimed %s", msg.SourceNode, trustedEntry.Domain, msg.SourceDomain),
+			}, nil
+		}
 	}
 
-	// 5. Deduplication check
+	// 7. Deduplication check (Idempotent response)
+	r.mu.Lock()
 	if prevAck, exists := r.seenMessages[msg.MessageID]; exists {
 		r.mu.Unlock()
 		return prevAck, nil // Idempotent response
 	}
 	r.mu.Unlock()
 
-	// 6. Target Node Verification
-	normTarget, _ := NormalizeNodeID(msg.TargetNode)
-	normSelf, _ := NormalizeNodeID(r.idMgr.Identity.NodeID)
+	// 8. Target Node Verification
+	normTarget, _ := membership.NormalizeNodeID(msg.TargetNode)
+	normSelf, _ := membership.NormalizeNodeID(r.idMgr.Identity.NodeID)
 
 	if normTarget != normSelf {
 		return &RelayAck{
@@ -370,8 +580,15 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		}, nil
 	}
 
-	// 7. Successfully delivered to destination! Create and sign ACK
+	// 9. Successfully delivered to destination! Create and sign ACK
 	hops := append(msg.Hops, r.idMgr.Identity.NodeID)
+	trace := append(msg.RoutingTrace, HopTraceRecord{
+		HopID:     r.idMgr.Identity.NodeID,
+		Domain:    r.domain,
+		Timestamp: now,
+		Action:    "DESTINATION_DELIVER",
+	})
+
 	latency := now - msg.Timestamp
 	if latency < 0 {
 		latency = 0
@@ -389,6 +606,7 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		LatencyMs:       latency,
 		RecipientPubKey: r.idMgr.Identity.PublicKeyHex,
 		ForwardedBy:     hops,
+		RoutingTrace:    trace,
 	}
 
 	canonicalAck := CanonicalAckPayload(ack)
@@ -396,6 +614,7 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 
 	r.mu.Lock()
 	r.seenMessages[msg.MessageID] = ack
+	r.saveSeenMessagesToDisk()
 	r.mu.Unlock()
 
 	r.appendHistory(&DeliveryRecord{
@@ -408,6 +627,7 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		CreatedAt:    now,
 		UpdatedAt:    now,
 		Hops:         hops,
+		RoutingTrace: trace,
 		Ack:          ack,
 	})
 

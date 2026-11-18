@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/saral-protocol/saral-poc/services/coordinator/internal/auth"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/discovery"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/membership"
 	"github.com/saral-protocol/saral-poc/services/coordinator/internal/relay"
@@ -81,7 +82,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Handle internal coordinator-to-coordinator and node-to-coordinator relay forwarding
 	if r.URL.Path == "/relay/forward" {
+		if !auth.ValidateInternalAuth(r) {
+			http.Error(w, `{"error":"Unauthorized internal relay RPC: valid service credentials required"}`, http.StatusUnauthorized)
+			return
+		}
 		s.handleRelayForward(w, r)
+		return
+	}
+
+	// Handle internal participant registry query
+	if r.URL.Path == "/registry/participants" {
+		if !auth.ValidateInternalAuth(r) {
+			http.Error(w, `{"error":"Unauthorized internal registry RPC: valid service credentials required"}`, http.StatusUnauthorized)
+			return
+		}
+		s.handleGetParticipants(w, r)
 		return
 	}
 
@@ -145,6 +160,8 @@ func (s *Server) dispatch(method string, params json.RawMessage, token string) (
 		return s.handleGetRelayAuditLog(token)
 	case "saral_getRelayDeliveryStatus":
 		return s.handleGetRelayDeliveryStatus(params, token)
+	case "saral_getParticipants":
+		return s.monitor.GetAuthorizedParticipants(), nil
 	// Cryptographic Stubs - Explicitly NOT_IMPLEMENTED as per Section 8
 	case "saral_signTransaction", "saral_createWallet", "saral_startDkg", "saral_getPublicKey":
 		return nil, &JsonRpcErr{
@@ -428,22 +445,28 @@ func (s *Server) handleRelayForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authHeader := r.Header.Get("Authorization")
-	internalToken := r.Header.Get("X-Saral-Internal-Token")
-	if authHeader == "" && internalToken == "" {
-		http.Error(w, `{"error":"Unauthorized internal relay RPC"}`, http.StatusUnauthorized)
-		return
-	}
-
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024) // 1 MB limit
 	var msg relay.RelayMessage
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
-		http.Error(w, `{"error":"Invalid relay payload"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"Invalid relay payload or exceeds 1MB limit"}`, http.StatusBadRequest)
 		return
 	}
 
 	ack, _ := s.relayCoord.ForwardRelay(&msg)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ack)
+}
+
+func (s *Server) handleGetParticipants(w http.ResponseWriter, r *http.Request) {
+	participants := s.monitor.GetAuthorizedParticipants()
+	resp := map[string]interface{}{
+		"domain":       string(s.domain),
+		"participants": participants,
+		"count":        len(participants),
+		"timestamp":    time.Now().UTC().Format(time.RFC3339),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleSendRelayMessage(params json.RawMessage, token string) (interface{}, *JsonRpcErr) {

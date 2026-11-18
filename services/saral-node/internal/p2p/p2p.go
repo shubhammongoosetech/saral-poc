@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/saral-protocol/saral-poc/services/saral-node/internal/auth"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/identity"
+	"github.com/saral-protocol/saral-poc/services/saral-node/internal/membership"
 )
 
 type PeerInfo struct {
@@ -51,8 +53,8 @@ type P2PManager struct {
 	idMgr               *identity.IdentityManager
 	domain              string
 	peers               map[string]*PeerInfo
-	trustedParticipants map[string]string // NodeID -> Expected PublicKeyHex
-	seenNonces          map[string]int64  // Nonce -> Expire UnixMilli
+	trustedParticipants map[string]membership.ParticipantEntry // Canonical NodeID -> ParticipantEntry
+	seenNonces          map[string]int64                       // Nonce -> Expire UnixMilli
 	mu                  sync.RWMutex
 	httpClient          *http.Client
 	stopChan            chan struct{}
@@ -63,7 +65,7 @@ func NewP2PManager(idMgr *identity.IdentityManager, domain string, peerEndpoints
 		idMgr:               idMgr,
 		domain:              domain,
 		peers:               make(map[string]*PeerInfo),
-		trustedParticipants: make(map[string]string),
+		trustedParticipants: make(map[string]membership.ParticipantEntry),
 		seenNonces:          make(map[string]int64),
 		httpClient: &http.Client{
 			Timeout: 2 * time.Second,
@@ -82,10 +84,15 @@ func NewP2PManager(idMgr *identity.IdentityManager, domain string, peerEndpoints
 	return mgr
 }
 
-func (m *P2PManager) RegisterTrustedParticipant(nodeID, pubKeyHex string) {
+func (m *P2PManager) RegisterTrustedParticipant(p membership.ParticipantEntry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.trustedParticipants[nodeID] = pubKeyHex
+	canonicalID, domain := membership.NormalizeNodeID(p.NodeID)
+	if p.Domain == "" {
+		p.Domain = domain
+	}
+	p.NodeID = canonicalID
+	m.trustedParticipants[canonicalID] = p
 }
 
 func (m *P2PManager) Start() {
@@ -165,7 +172,7 @@ func (m *P2PManager) pingPeer(endpoint string) {
 	}
 	m.mu.RUnlock()
 
-	// Canonical payload: SenderID:ReceiverID:Domain:Timestamp:Nonce
+	// Canonical wire payload: SenderID:ReceiverID:Domain:Timestamp:Nonce
 	msgToSign := fmt.Sprintf("%s:%s:%s:%d:%s", m.idMgr.Identity.NodeID, receiverID, m.domain, now, nonce)
 	sig := m.idMgr.Sign([]byte(msgToSign))
 
@@ -185,7 +192,14 @@ func (m *P2PManager) pingPeer(endpoint string) {
 	}
 
 	start := time.Now()
-	resp, err := m.httpClient.Post(endpoint+"/p2p/ping", "application/json", bytes.NewReader(data))
+	req, err := http.NewRequest("POST", endpoint+"/p2p/ping", bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+
+	resp, err := m.httpClient.Do(req)
 	latency := time.Since(start).Milliseconds()
 
 	m.mu.Lock()
@@ -211,7 +225,7 @@ func (m *P2PManager) pingPeer(endpoint string) {
 		return
 	}
 
-	// Phase 1.5: Verify signed acknowledgement from receiver
+	// 1. Verify signed acknowledgement from receiver
 	ackPayload := fmt.Sprintf("%s:%s:%s:%d:%s", ack.ReceiverID, m.idMgr.Identity.NodeID, ack.Domain, ack.Timestamp, nonce)
 	if !identity.VerifySignature(ack.PublicKeyHex, []byte(ackPayload), ack.SignatureHex) {
 		info.Connected = false
@@ -219,11 +233,20 @@ func (m *P2PManager) pingPeer(endpoint string) {
 		return
 	}
 
-	// Phase 1.4: Check receiver against trusted registry if configured
-	if trustedKey, hasKey := m.trustedParticipants[ack.ReceiverID]; hasKey && trustedKey != ack.PublicKeyHex {
-		info.Connected = false
-		info.Status = "UNTRUSTED_KEY_MISMATCH"
-		return
+	// 2. Strict Enrollment Check: Verify receiver identity against pre-enrolled registry
+	canonicalReceiver, _ := membership.NormalizeNodeID(ack.ReceiverID)
+	trusted, hasKey := m.trustedParticipants[canonicalReceiver]
+	if len(m.trustedParticipants) > 0 {
+		if !hasKey {
+			info.Connected = false
+			info.Status = "UNTRUSTED_UNKNOWN_PEER"
+			return
+		}
+		if trusted.PublicKeyHex != ack.PublicKeyHex {
+			info.Connected = false
+			info.Status = "UNTRUSTED_KEY_MISMATCH"
+			return
+		}
 	}
 
 	// Update peer status
@@ -234,9 +257,6 @@ func (m *P2PManager) pingPeer(endpoint string) {
 	info.LastSeen = time.Now()
 	info.LatencyMs = latency
 	info.Status = "CONNECTED"
-
-	// Register in participant cache
-	m.trustedParticipants[ack.ReceiverID] = ack.PublicKeyHex
 }
 
 func (m *P2PManager) HandleIncomingPing(ping PingMessage) (*PingAck, error) {
@@ -270,16 +290,24 @@ func (m *P2PManager) HandleIncomingPing(ping PingMessage) (*PingAck, error) {
 	}
 	m.seenNonces[ping.Nonce] = now + (60 * 1000) // keep for 60 seconds
 
-	// 5. Trusted participant registry verification
-	if expectedKey, exists := m.trustedParticipants[ping.SenderID]; exists {
-		if expectedKey != ping.PublicKeyHex {
+	// 5. Trusted participant registry verification (NO auto-enrollment!)
+	canonicalSender, _ := membership.NormalizeNodeID(ping.SenderID)
+	trusted, exists := m.trustedParticipants[canonicalSender]
+	if len(m.trustedParticipants) > 0 {
+		if !exists {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("unknown peer: sender %s is not in trusted participant registry", ping.SenderID)
+		}
+		if trusted.PublicKeyHex != ping.PublicKeyHex {
 			m.mu.Unlock()
 			return nil, fmt.Errorf("participant key mismatch for %s: registered %s, received %s",
-				ping.SenderID, expectedKey, ping.PublicKeyHex)
+				ping.SenderID, trusted.PublicKeyHex, ping.PublicKeyHex)
 		}
-	} else {
-		// Enroll peer key
-		m.trustedParticipants[ping.SenderID] = ping.PublicKeyHex
+		if trusted.Domain != "" && ping.Domain != "" && !strings.EqualFold(trusted.Domain, ping.Domain) {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("participant domain mismatch for %s: registered %s, received %s",
+				ping.SenderID, trusted.Domain, ping.Domain)
+		}
 	}
 	m.mu.Unlock()
 
@@ -290,23 +318,21 @@ func (m *P2PManager) HandleIncomingPing(ping PingMessage) (*PingAck, error) {
 		return nil, fmt.Errorf("invalid Ed25519 signature from peer %s", ping.SenderID)
 	}
 
-	// 7. Generate Signed Acknowledgement
-	ackTime := time.Now().UnixMilli()
-	ackPayload := fmt.Sprintf("%s:%s:%s:%d:%s", m.idMgr.Identity.NodeID, ping.SenderID, m.domain, ackTime, ping.Nonce)
+	// 7. Generate Signed PingAck
+	ackNonce := generateNonce()
+	ackPayload := fmt.Sprintf("%s:%s:%s:%d:%s", m.idMgr.Identity.NodeID, ping.SenderID, m.domain, now, ping.Nonce)
 	ackSig := m.idMgr.Sign([]byte(ackPayload))
 
-	ack := &PingAck{
+	return &PingAck{
 		Acknowledged: true,
 		ReceiverID:   m.idMgr.Identity.NodeID,
 		SenderID:     ping.SenderID,
 		Domain:       m.domain,
-		Timestamp:    ackTime,
-		Nonce:        ping.Nonce,
+		Timestamp:    now,
+		Nonce:        ackNonce,
 		PublicKeyHex: m.idMgr.Identity.PublicKeyHex,
 		SignatureHex: ackSig,
-	}
-
-	return ack, nil
+	}, nil
 }
 
 func (m *P2PManager) GetPeers() []PeerInfo {

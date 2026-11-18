@@ -71,7 +71,7 @@ func main() {
 		coordURL = fmt.Sprintf("http://coordinator-%s:%d", strings.ToLower(domain), 9001+domainOffset)
 	}
 
-	relayRouter := relay.NewRelayRouter(idMgr, domain, p2pMgr, coordURL)
+	relayRouter := relay.NewRelayRouter(idMgr, domain, p2pMgr, coordURL, *vaultDirFlag)
 	defer relayRouter.Stop()
 
 	// 5. Setup HTTP Routes
