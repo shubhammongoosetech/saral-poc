@@ -1,3 +1,3 @@
 module github.com/saral-protocol/saral-poc/services/saral-node
 
-go 1.27.4
+go 1.23

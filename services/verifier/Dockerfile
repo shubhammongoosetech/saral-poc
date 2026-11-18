@@ -11,3 +11,4 @@ COPY --from=builder /bin/verifier /usr/local/bin/verifier
 ENV PORT=9101
 EXPOSE 9101
 ENTRYPOINT ["/usr/local/bin/verifier"]
+

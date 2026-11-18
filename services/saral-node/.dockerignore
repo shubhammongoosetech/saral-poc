@@ -1,0 +1,5 @@
+bin
+vault
+*.key
+*.pem
+*.log

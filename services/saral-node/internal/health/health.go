@@ -31,3 +31,4 @@ func NewHandler(nodeID, domain string, startTime time.Time) http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
+

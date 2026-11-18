@@ -69,7 +69,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Saral-Internal-Token")
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
@@ -94,6 +94,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	if token == "" {
+		token = r.Header.Get("X-Saral-Internal-Token")
+	}
 
 	result, rpcErr := s.dispatch(req.Method, req.Params, token)
 	if rpcErr != nil {
@@ -126,7 +129,7 @@ func (s *Server) dispatch(method string, params json.RawMessage, token string) (
 	case "saral_probeNetwork":
 		return s.handleProbeNetwork(params, token)
 	case "saral_probeDomain":
-		return s.handleProbeDomain(params)
+		return s.handleProbeDomain(params, token)
 	// Cryptographic Stubs - Explicitly NOT_IMPLEMENTED as per Section 8
 	case "saral_signTransaction", "saral_createWallet", "saral_startDkg", "saral_getPublicKey":
 		return nil, &JsonRpcErr{
@@ -196,7 +199,7 @@ func (s *Server) handleGetTopology() (interface{}, *JsonRpcErr) {
 func (s *Server) handleGetNetworkStatus(token string) (interface{}, *JsonRpcErr) {
 	// Verify token through local Verifier
 	if s.verifierClient != nil {
-		_, err := s.verifierClient.VerifyToken(token)
+		_, err := s.verifierClient.VerifyTokenWithRole(token, "operator")
 		if err != nil {
 			return nil, &JsonRpcErr{
 				Code:    -32001,
@@ -259,17 +262,28 @@ func (s *Server) handleGetNetworkStatus(token string) (interface{}, *JsonRpcErr)
 	}
 
 	return map[string]interface{}{
-		"network":        "SARAL Protocol V3",
-		"leadDomain":     s.domain,
-		"totalNodes":     totalNodes,
-		"onlineNodes":    totalOnline,
-		"domains":        domains,
+		"network":          "SARAL Protocol V3",
+		"leadDomain":       s.domain,
+		"totalNodes":       totalNodes,
+		"onlineNodes":      totalOnline,
+		"domains":          domains,
 		"peerCoordinators": s.monitor.GetPeerCoordinatorStates(),
-		"timestamp":      time.Now().UTC().Format(time.RFC3339),
+		"timestamp":        time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 
-func (s *Server) handleProbeDomain(params json.RawMessage) (interface{}, *JsonRpcErr) {
+func (s *Server) handleProbeDomain(params json.RawMessage, token string) (interface{}, *JsonRpcErr) {
+	// Security Check: Authenticate caller via verifier
+	if s.verifierClient != nil {
+		_, err := s.verifierClient.VerifyTokenWithRole(token, "operator")
+		if err != nil {
+			return nil, &JsonRpcErr{
+				Code:    -32001,
+				Message: fmt.Sprintf("Authorization rejected by Verifier: %s", err.Error()),
+			}
+		}
+	}
+
 	var p struct {
 		RequestID string `json:"requestId"`
 		ProbeID   string `json:"probeId"`
@@ -292,7 +306,7 @@ func (s *Server) handleProbeDomain(params json.RawMessage) (interface{}, *JsonRp
 		wg.Add(1)
 		go func(node membership.NodeInfo) {
 			defer wg.Done()
-			res, err := s.nodeClient.ProbeNode(node, p.RequestID, p.ProbeID, fmt.Sprintf("coord-%s", s.domain))
+			res, err := s.nodeClient.ProbeNode(node, p.RequestID, p.ProbeID, fmt.Sprintf("coord-%s", s.domain), token)
 			if err != nil && res != nil {
 				probeChan <- *res
 			} else if res != nil {
@@ -319,7 +333,7 @@ func (s *Server) handleProbeDomain(params json.RawMessage) (interface{}, *JsonRp
 func (s *Server) handleProbeNetwork(params json.RawMessage, token string) (interface{}, *JsonRpcErr) {
 	// Verify token through Verifier
 	if s.verifierClient != nil {
-		_, err := s.verifierClient.VerifyToken(token)
+		_, err := s.verifierClient.VerifyTokenWithRole(token, "operator")
 		if err != nil {
 			return nil, &JsonRpcErr{
 				Code:    -32001,
@@ -340,7 +354,7 @@ func (s *Server) handleProbeNetwork(params json.RawMessage, token string) (inter
 		wg.Add(1)
 		go func(node membership.NodeInfo) {
 			defer wg.Done()
-			res, _ := s.nodeClient.ProbeNode(node, requestID, probeID, fmt.Sprintf("coord-%s", s.domain))
+			res, _ := s.nodeClient.ProbeNode(node, requestID, probeID, fmt.Sprintf("coord-%s", s.domain), token)
 			if res != nil {
 				probeChan <- *res
 			}
@@ -384,8 +398,8 @@ func (s *Server) handleProbeNetwork(params json.RawMessage, token string) (inter
 	return map[string]interface{}{
 		"probeId":            probeID,
 		"requestId":          requestID,
-		"senderCoordinator": string(s.domain),
-		"probesDispatched":   len(allProbes),
+		"senderCoordinator":  fmt.Sprintf("coord-%s", s.domain),
+		"probesDispatched":   len(nodes) + len(s.peerCoords)*len(nodes),
 		"probesAcknowledged": acknowledged,
 		"averageLatencyMs":   avgLatency,
 		"probes":             allProbes,
@@ -393,21 +407,21 @@ func (s *Server) handleProbeNetwork(params json.RawMessage, token string) (inter
 	}, nil
 }
 
-func (s *Server) writeError(w http.ResponseWriter, id interface{}, code int, msg string) {
+func (s *Server) writeError(w http.ResponseWriter, id interface{}, code int, message string) {
 	resp := JsonRpcResponse{
 		JsonRpc: "2.0",
 		ID:      id,
 		Error: &JsonRpcErr{
 			Code:    code,
-			Message: msg,
+			Message: message,
 		},
 	}
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func randomHex(n int) string {
-	b := make([]byte, n)
+func randomHex(bytesLen int) string {
+	b := make([]byte, bytesLen)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }

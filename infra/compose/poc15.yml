@@ -4,10 +4,13 @@ services:
     build:
       context: ../../apps/auth-server
       dockerfile: Dockerfile
+    image: saral-auth-server:v3
     container_name: saral-auth-server
     restart: unless-stopped
     environment:
       PORT: 3001
+      NODE_ENV: development
+      ENABLE_DEV_AUTH: "true"
     ports:
       - '3001:3001'
     networks:
@@ -23,61 +26,70 @@ services:
     build:
       context: ../../services/verifier
       dockerfile: Dockerfile
+    image: saral-verifier:v3
     container_name: saral-verifier-foundation
     restart: unless-stopped
     environment:
       PORT: 9101
       DOMAIN: FOUNDATION
       AUTH_SERVER_URL: http://auth-server:3001
-    ports:
-      - '9101:9101'
     depends_on:
       auth-server:
         condition: service_healthy
     networks:
       - saral-mesh
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:9101/health']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   verifier-public:
-    build:
-      context: ../../services/verifier
-      dockerfile: Dockerfile
+    image: saral-verifier:v3
     container_name: saral-verifier-public
     restart: unless-stopped
     environment:
       PORT: 9102
       DOMAIN: PUBLIC
       AUTH_SERVER_URL: http://auth-server:3001
-    ports:
-      - '9102:9102'
     depends_on:
       auth-server:
         condition: service_healthy
     networks:
       - saral-mesh
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:9102/health']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   verifier-private:
-    build:
-      context: ../../services/verifier
-      dockerfile: Dockerfile
+    image: saral-verifier:v3
     container_name: saral-verifier-private
     restart: unless-stopped
     environment:
       PORT: 9103
       DOMAIN: PRIVATE
       AUTH_SERVER_URL: http://auth-server:3001
-    ports:
-      - '9103:9103'
     depends_on:
       auth-server:
         condition: service_healthy
     networks:
       - saral-mesh
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:9103/health']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   # ─── Foundation SARAL Nodes (1 - 5) ──────────────────────────────────
   node-f1:
-    build: { context: ../../services/saral-node, dockerfile: Dockerfile }
+    build:
+      context: ../../services/saral-node
+      dockerfile: Dockerfile
     image: saral-node:v3
     container_name: saral-node-f1
+    restart: unless-stopped
     environment:
       NODE_ID: saral-foundation-1
       DOMAIN: FOUNDATION
@@ -86,10 +98,16 @@ services:
       PEER_NODES: http://node-f2:8001,http://node-p1:8001,http://node-r1:8001
     volumes: ['node_f1_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-f2:
     image: saral-node:v3
     container_name: saral-node-f2
+    restart: unless-stopped
     environment:
       NODE_ID: saral-foundation-2
       DOMAIN: FOUNDATION
@@ -98,10 +116,16 @@ services:
       PEER_NODES: http://node-f1:8001,http://node-f3:8001
     volumes: ['node_f2_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-f3:
     image: saral-node:v3
     container_name: saral-node-f3
+    restart: unless-stopped
     environment:
       NODE_ID: saral-foundation-3
       DOMAIN: FOUNDATION
@@ -110,10 +134,16 @@ services:
       PEER_NODES: http://node-f2:8001,http://node-f4:8001
     volumes: ['node_f3_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-f4:
     image: saral-node:v3
     container_name: saral-node-f4
+    restart: unless-stopped
     environment:
       NODE_ID: saral-foundation-4
       DOMAIN: FOUNDATION
@@ -122,10 +152,16 @@ services:
       PEER_NODES: http://node-f3:8001,http://node-f5:8001
     volumes: ['node_f4_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-f5:
     image: saral-node:v3
     container_name: saral-node-f5
+    restart: unless-stopped
     environment:
       NODE_ID: saral-foundation-5
       DOMAIN: FOUNDATION
@@ -134,11 +170,17 @@ services:
       PEER_NODES: http://node-f4:8001,http://node-f1:8001
     volumes: ['node_f5_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   # ─── Public SARAL Nodes (1 - 5) ──────────────────────────────────────
   node-p1:
     image: saral-node:v3
     container_name: saral-node-p1
+    restart: unless-stopped
     environment:
       NODE_ID: saral-public-1
       DOMAIN: PUBLIC
@@ -147,10 +189,16 @@ services:
       PEER_NODES: http://node-f1:8001,http://node-p2:8001,http://node-r1:8001
     volumes: ['node_p1_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-p2:
     image: saral-node:v3
     container_name: saral-node-p2
+    restart: unless-stopped
     environment:
       NODE_ID: saral-public-2
       DOMAIN: PUBLIC
@@ -159,10 +207,16 @@ services:
       PEER_NODES: http://node-p1:8001,http://node-p3:8001
     volumes: ['node_p2_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-p3:
     image: saral-node:v3
     container_name: saral-node-p3
+    restart: unless-stopped
     environment:
       NODE_ID: saral-public-3
       DOMAIN: PUBLIC
@@ -171,10 +225,16 @@ services:
       PEER_NODES: http://node-p2:8001,http://node-p4:8001
     volumes: ['node_p3_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-p4:
     image: saral-node:v3
     container_name: saral-node-p4
+    restart: unless-stopped
     environment:
       NODE_ID: saral-public-4
       DOMAIN: PUBLIC
@@ -183,10 +243,16 @@ services:
       PEER_NODES: http://node-p3:8001,http://node-p5:8001
     volumes: ['node_p4_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-p5:
     image: saral-node:v3
     container_name: saral-node-p5
+    restart: unless-stopped
     environment:
       NODE_ID: saral-public-5
       DOMAIN: PUBLIC
@@ -195,11 +261,17 @@ services:
       PEER_NODES: http://node-p4:8001,http://node-p1:8001
     volumes: ['node_p5_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   # ─── Private SARAL Nodes (1 - 5) ─────────────────────────────────────
   node-r1:
     image: saral-node:v3
     container_name: saral-node-r1
+    restart: unless-stopped
     environment:
       NODE_ID: saral-private-1
       DOMAIN: PRIVATE
@@ -208,10 +280,16 @@ services:
       PEER_NODES: http://node-f1:8001,http://node-p1:8001,http://node-r2:8001
     volumes: ['node_r1_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-r2:
     image: saral-node:v3
     container_name: saral-node-r2
+    restart: unless-stopped
     environment:
       NODE_ID: saral-private-2
       DOMAIN: PRIVATE
@@ -220,10 +298,16 @@ services:
       PEER_NODES: http://node-r1:8001,http://node-r3:8001
     volumes: ['node_r2_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-r3:
     image: saral-node:v3
     container_name: saral-node-r3
+    restart: unless-stopped
     environment:
       NODE_ID: saral-private-3
       DOMAIN: PRIVATE
@@ -232,10 +316,16 @@ services:
       PEER_NODES: http://node-r2:8001,http://node-r4:8001
     volumes: ['node_r3_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-r4:
     image: saral-node:v3
     container_name: saral-node-r4
+    restart: unless-stopped
     environment:
       NODE_ID: saral-private-4
       DOMAIN: PRIVATE
@@ -244,10 +334,16 @@ services:
       PEER_NODES: http://node-r3:8001,http://node-r5:8001
     volumes: ['node_r4_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-r5:
     image: saral-node:v3
     container_name: saral-node-r5
+    restart: unless-stopped
     environment:
       NODE_ID: saral-private-5
       DOMAIN: PRIVATE
@@ -256,12 +352,18 @@ services:
       PEER_NODES: http://node-r4:8001,http://node-r1:8001
     volumes: ['node_r5_vault:/vault']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   # ─── Coordinators (Foundation, Public, Private) ────────────────────────
   coordinator-foundation:
     build:
       context: ../../services/coordinator
       dockerfile: Dockerfile
+    image: saral-coordinator:v3
     container_name: saral-coord-foundation
     restart: unless-stopped
     environment:
@@ -273,14 +375,20 @@ services:
     ports:
       - '9001:9001'
     depends_on:
-      - verifier-foundation
+      verifier-foundation:
+        condition: service_healthy
+      node-f1:
+        condition: service_healthy
     networks:
       - saral-mesh
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:9001/health']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   coordinator-public:
-    build:
-      context: ../../services/coordinator
-      dockerfile: Dockerfile
+    image: saral-coordinator:v3
     container_name: saral-coord-public
     restart: unless-stopped
     environment:
@@ -292,14 +400,20 @@ services:
     ports:
       - '9002:9002'
     depends_on:
-      - verifier-public
+      verifier-public:
+        condition: service_healthy
+      node-p1:
+        condition: service_healthy
     networks:
       - saral-mesh
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:9002/health']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   coordinator-private:
-    build:
-      context: ../../services/coordinator
-      dockerfile: Dockerfile
+    image: saral-coordinator:v3
     container_name: saral-coord-private
     restart: unless-stopped
     environment:
@@ -311,24 +425,40 @@ services:
     ports:
       - '9003:9003'
     depends_on:
-      - verifier-private
+      verifier-private:
+        condition: service_healthy
+      node-r1:
+        condition: service_healthy
     networks:
       - saral-mesh
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:9003/health']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   # ─── Web Frontend ──────────────────────────────────────────────────────
   web:
     build:
       context: ../../apps/web
       dockerfile: Dockerfile
+    image: saral-web:v3
     container_name: saral-web
     restart: unless-stopped
     ports:
       - '3000:80'
     depends_on:
-      - auth-server
-      - coordinator-foundation
+      auth-server:
+        condition: service_healthy
+      coordinator-foundation:
+        condition: service_healthy
     networks:
       - saral-mesh
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:80']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
 networks:
   saral-mesh:

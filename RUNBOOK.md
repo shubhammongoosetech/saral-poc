@@ -94,20 +94,59 @@ Sample output:
 
 ---
 
-## 4. Triggering Probes via JSON-RPC CLI
+## 4. Triggering Probes and Querying via JSON-RPC CLI
 
-You can trigger a real network probe directly from the terminal:
+You can trigger a real network probe and query status directly from the terminal:
 
 ```bash
-# 1. Fetch Auth Token
-TOKEN=$(curl -s -X POST http://localhost:3001/auth/token -H "Content-Type: application/json" -d '{"subject":"cli-admin"}' | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+# 1. Fetch RS256 Auth Token (Dev auth enabled by default in local compose)
+TOKEN=$(curl -s -X POST http://localhost:3001/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"subject":"cli-admin","role":"operator"}' | grep -o '"token":"[^"]*' | cut -d'"' -f4)
 
-# 2. Dispatch Network Probe to Coordinator (:9001)
+# 2. Query 15-Node Cross-Domain Status from Foundation Coordinator (:9001)
 curl -s -X POST http://localhost:9001/rpc \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"saral_probeNetwork","params":{}}' | jq .
+  -d '{"jsonrpc":"2.0","id":1,"method":"saral_getNetworkStatus","params":{}}' | jq .
+
+# 3. Dispatch Live Cryptographically Signed Network Probe across all 15 nodes
+curl -s -X POST http://localhost:9001/rpc \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"saral_probeNetwork","params":{}}' | jq .
 ```
+
+The probe response returns cryptographically verified Ed25519 signatures and real millisecond latencies from all 15 nodes across Foundation, Public, and Private domains.
+
+---
+
+## 5. Running the Automated Architecture Test Suite
+
+Execute the 13 end-to-end integration tests on the host:
+
+```bash
+# Runs Vitest SDK tests followed by the 13 Go distributed integration tests
+npm test
+
+# OR run the Go integration tests directly:
+npm run test:go
+```
+
+The integration test suite validates:
+1. Microservice binary compilation
+2. RSA keypair and RS256 token issuance
+3. 3 Verifiers running in isolation with fail-closed semantics
+4. 15 independent Node processes with persistent Ed25519 vaults
+5. P2P authentication, signed pings, signed ACKs, and replay attack rejection
+6. Node identity persistence across restarts
+7. 3 Coordinators cross-domain discovery
+8. Domain-specific status aggregation
+9. Unauthorized RPC rejection (-32001)
+10. Cross-domain aggregated status (15/15 nodes)
+11. Real multi-process network probe with 15/15 Ed25519 signatures
+12. Verifier failure (Coordinator immediately rejects requests when Verifier goes down)
+13. Cryptographic stubs return `NOT_IMPLEMENTED` (-32000)
 
 ---
 
@@ -158,3 +197,4 @@ To backup node identity files to host:
 ```bash
 docker run --rm -v saral-poc_node_f1_vault:/vault -v $(pwd):/backup alpine tar czf /backup/node_f1_identity.tar.gz -C /vault .
 ```
+

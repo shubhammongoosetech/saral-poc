@@ -2,6 +2,8 @@ package relay
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,12 +39,17 @@ func NewVerifierClient(endpoint string) *VerifierClient {
 }
 
 func (vc *VerifierClient) VerifyToken(tokenStr string) (*TokenVerifyResult, error) {
+	return vc.VerifyTokenWithRole(tokenStr, "")
+}
+
+func (vc *VerifierClient) VerifyTokenWithRole(tokenStr, requiredRole string) (*TokenVerifyResult, error) {
 	if tokenStr == "" {
 		return &TokenVerifyResult{Valid: false, Error: "missing authorization token"}, errors.New("missing token")
 	}
 
 	reqBody := map[string]string{
-		"token": tokenStr,
+		"token":        tokenStr,
+		"requiredRole": requiredRole,
 	}
 	data, err := json.Marshal(reqBody)
 	if err != nil {
@@ -76,6 +83,7 @@ type NodeProbeResult struct {
 	Timestamp    int64  `json:"timestamp"`
 	Acknowledged bool   `json:"acknowledged"`
 	LatencyMs    int64  `json:"latencyMs"`
+	PublicKeyHex string `json:"publicKeyHex"`
 	SignatureHex string `json:"signatureHex"`
 	Error        string `json:"error,omitempty"`
 }
@@ -92,13 +100,27 @@ func NewNodeClient() *NodeClient {
 	}
 }
 
-func (nc *NodeClient) ProbeNode(node membership.NodeInfo, reqID, probeID, sender string) (*NodeProbeResult, error) {
+func verifyEd25519Signature(pubKeyHex, sigHex string, data []byte) bool {
+	pubBytes, err := hex.DecodeString(pubKeyHex)
+	if err != nil || len(pubBytes) != ed25519.PublicKeySize {
+		return false
+	}
+	sigBytes, err := hex.DecodeString(sigHex)
+	if err != nil || len(sigBytes) != ed25519.SignatureSize {
+		return false
+	}
+	return ed25519.Verify(ed25519.PublicKey(pubBytes), data, sigBytes)
+}
+
+func (nc *NodeClient) ProbeNode(node membership.NodeInfo, reqID, probeID, sender, authToken string) (*NodeProbeResult, error) {
+	now := time.Now().UnixMilli()
 	reqPayload := map[string]interface{}{
-		"requestId": reqID,
-		"probeId":   probeID,
-		"sender":    sender,
-		"domain":    string(node.Domain),
-		"timestamp": time.Now().UnixMilli(),
+		"requestId":  reqID,
+		"probeId":    probeID,
+		"sender":     sender,
+		"receiverId": node.NodeID,
+		"domain":     string(node.Domain),
+		"timestamp":  now,
 	}
 
 	data, err := json.Marshal(reqPayload)
@@ -106,8 +128,18 @@ func (nc *NodeClient) ProbeNode(node membership.NodeInfo, reqID, probeID, sender
 		return nil, err
 	}
 
+	httpReq, err := http.NewRequest("POST", node.Endpoint+"/node/probe", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	httpReq.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
+
 	start := time.Now()
-	resp, err := nc.httpClient.Post(node.Endpoint+"/node/probe", "application/json", bytes.NewReader(data))
+	resp, err := nc.httpClient.Do(httpReq)
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
@@ -133,6 +165,16 @@ func (nc *NodeClient) ProbeNode(node membership.NodeInfo, reqID, probeID, sender
 	var res NodeProbeResult
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, err
+	}
+
+	// Phase 1.5: Verify cryptographic signature on probe acknowledgment from node
+	msgToVerify := fmt.Sprintf("%s:%s:%s:%s:%d", res.ProbeID, res.RequestID, res.ReceiverID, res.Domain, res.Timestamp)
+	if res.PublicKeyHex != "" && res.SignatureHex != "" {
+		valid := verifyEd25519Signature(res.PublicKeyHex, res.SignatureHex, []byte(msgToVerify))
+		if !valid {
+			res.Acknowledged = false
+			res.Error = "invalid Ed25519 cryptographic signature from node"
+		}
 	}
 
 	return &res, nil
@@ -185,6 +227,7 @@ func (pc *PeerCoordinatorClient) GetDomainStatus(coordURL, token string) (*Domai
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	req.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
 
 	resp, err := pc.httpClient.Do(req)
 	if err != nil {
@@ -241,6 +284,7 @@ func (pc *PeerCoordinatorClient) ProbePeerDomain(coordURL, reqID, probeID, token
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	req.Header.Set("X-Saral-Internal-Token", "saral-internal-coordinator-secret")
 
 	resp, err := pc.httpClient.Do(req)
 	if err != nil {

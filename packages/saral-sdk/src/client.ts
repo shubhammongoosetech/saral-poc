@@ -173,3 +173,4 @@ export class SaralClient {
     return this.rpcCall<NetworkProbeResponse>('saral_probeNetwork', {}, coordUrl);
   }
 }
+

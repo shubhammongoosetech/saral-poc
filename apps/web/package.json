@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": ">=26.0.0",
-    "npm": ">=11.0.0"
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   },
   "scripts": {
     "dev": "vite",
@@ -27,7 +27,6 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
-    "@saral/saral-sdk": "file:../../packages/saral-sdk",
     "tailwind-merge": "^3.7.0",
     "tailwindcss": "^4.3.5"
   },

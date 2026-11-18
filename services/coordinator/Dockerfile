@@ -11,3 +11,4 @@ COPY --from=builder /bin/coordinator /usr/local/bin/coordinator
 ENV PORT=9001
 EXPOSE 9001
 ENTRYPOINT ["/usr/local/bin/coordinator"]
+

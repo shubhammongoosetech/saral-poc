@@ -14,7 +14,8 @@ import (
 )
 
 type VerifyRequest struct {
-	Token string `json:"token"`
+	Token        string `json:"token"`
+	RequiredRole string `json:"requiredRole,omitempty"`
 }
 
 func main() {
@@ -48,7 +49,7 @@ func main() {
 			req.Token = r.Header.Get("Authorization")
 		}
 
-		result, _ := verifier.VerifyToken(req.Token)
+		result, _ := verifier.VerifyTokenWithRole(req.Token, req.RequiredRole)
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(result)
 	})

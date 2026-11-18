@@ -334,18 +334,32 @@ export const App: React.FC = () => {
                       {dName} Domain
                     </h3>
                   </div>
-                  <span
-                    style={{
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      padding: '3px 8px',
-                      borderRadius: '4px',
-                      backgroundColor: isHealthy ? '#064e3b' : '#450a0a',
-                      color: isHealthy ? '#6ee7b7' : '#fca5a5',
-                    }}
-                  >
-                    {isHealthy ? 'COORDINATOR READY' : 'OFFLINE'}
-                  </span>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        padding: '3px 8px',
+                        borderRadius: '4px',
+                        backgroundColor: isHealthy ? '#064e3b' : '#450a0a',
+                        color: isHealthy ? '#6ee7b7' : '#fca5a5',
+                      }}
+                    >
+                      {isHealthy ? 'COORDINATOR ONLINE' : 'OFFLINE'}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        padding: '3px 8px',
+                        borderRadius: '4px',
+                        backgroundColor: isHealthy ? '#1e1b4b' : '#312e81',
+                        color: '#c7d2fe',
+                      }}
+                    >
+                      VERIFIER ACTIVE
+                    </span>
+                  </div>
                 </div>
 
                 <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '12px', display: 'flex', justifyContent: 'space-between' }}>

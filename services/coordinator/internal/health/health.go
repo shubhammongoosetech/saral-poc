@@ -31,3 +31,4 @@ func NewHandler(domain string, getNodeCount func() int, getPeerCount func() int)
 		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
+

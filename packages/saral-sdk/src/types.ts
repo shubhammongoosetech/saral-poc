@@ -105,3 +105,4 @@ export interface TopologyInfo {
   }>;
   peerCoordinators: string[];
 }
+

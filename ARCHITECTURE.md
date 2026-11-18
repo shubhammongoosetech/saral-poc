@@ -70,14 +70,17 @@ SARAL V3 implements a tripartite separation-of-powers architecture across three 
 ### 2.5 Domain Verifiers (`services/verifier`)
 - Stateless Go verification microservice.
 - Loads trusted RSA public key material from Auth Server or persistent volume.
-- Fails closed if trust material is unavailable.
-- Validates JWT token signatures, issuer, audience, and expiration.
+- Fails closed if trust material is unavailable or if token signatures/claims are invalid.
+- Validates JWT token algorithm (`RS256`), issuer (`saral-auth-server`), audience (`saral-domain-coordinators`), expiration (`exp`), and authorization claims (`domainRole`, `mfaVerified`).
 
 ### 2.6 SARAL Nodes (`services/saral-node`)
 - Single reusable Go binary powering all 15 or 24 node instances.
 - **Persistent Unique Identity:** Generates Ed25519 keypair and persistent Node ID on first boot; saves to vault directory with `0600` permissions.
-- **P2P Mesh:** Periodically exchanges authenticated ping/pong heartbeats signed with Ed25519 keys.
-- **Probe Handler:** Responds to network probes with signed acknowledgements, timestamps, and real latency measurements.
+- **Trusted Participant Registry:** Validates peer public keys and identities against a configured participant directory before admitting connections.
+- **Cryptographic P2P Mesh:** Periodically exchanges authenticated ping/pong heartbeats signed with Ed25519 keys, carrying nonces, timestamps (30s freshness window), and receiver ID verification.
+- **Mutual Replay Protection:** Maintains nonce tracking (`seenNonces`) with automated expiration pruning to reject replayed messages.
+- **Signed Acknowledgements:** Requires receiver-signed `PingAck` verified by sender before marking a peer connected.
+- **Internal RPC Security:** Internal `/node/probe` and maintenance endpoints protected by `X-Saral-Internal-Token` and Ed25519-signed probe confirmations.
 
 ---
 
@@ -111,3 +114,4 @@ In compliance with Section 8 of the V3 specification, this release provides the 
 | **Threshold Signing (TSS)** | *Future Phase (Responds NOT_IMPLEMENTED)* | CGGMP21 with Paillier MtA |
 | **FROST Schnorr / Taproot** | *Future Phase* | BIP-340 Compliant Signing |
 | **EVM Transaction Broadcasting** | *Future Phase* | Multichain RPC Adapters |
+

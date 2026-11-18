@@ -1,0 +1,13 @@
+node_modules
+*/node_modules
+.git
+.env
+.env.*
+*.key
+*.pem
+*.vault
+vault
+.saral*
+dist
+build
+bin

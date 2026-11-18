@@ -37,3 +37,4 @@ func Handler(domain string, isReady func() bool) http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
+

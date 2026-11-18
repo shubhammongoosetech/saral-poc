@@ -53,7 +53,6 @@ func (tv *TokenVerifier) Ready() bool {
 
 func (tv *TokenVerifier) LoadPublicKey() error {
 	var pemBytes []byte
-	var err error
 
 	// 1. Try file path if specified
 	if tv.pubKeyPath != "" {
@@ -98,6 +97,10 @@ func (tv *TokenVerifier) LoadPublicKey() error {
 }
 
 func (tv *TokenVerifier) VerifyToken(tokenStr string) (*AuthResult, error) {
+	return tv.VerifyTokenWithRole(tokenStr, "")
+}
+
+func (tv *TokenVerifier) VerifyTokenWithRole(tokenStr string, requiredRole string) (*AuthResult, error) {
 	// Re-attempt load if not yet ready
 	if !tv.Ready() {
 		if err := tv.LoadPublicKey(); err != nil {
@@ -124,15 +127,24 @@ func (tv *TokenVerifier) VerifyToken(tokenStr string) (*AuthResult, error) {
 		return &AuthResult{Valid: false, Error: "Missing or empty bearer token"}, errors.New("missing token")
 	}
 
+	// Parse and validate signature, alg, iss, aud, exp, nbf
 	token, err := jwt.Parse(tokenClean, func(token *jwt.Token) (interface{}, error) {
+		// Strict RS256 algorithm enforcement
+		if token.Method.Alg() != "RS256" {
+			return nil, fmt.Errorf("invalid token algorithm %v: only RS256 is permitted", token.Header["alg"])
+		}
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return pubKey, nil
-	}, jwt.WithIssuer("saral-auth-server"))
+	},
+		jwt.WithIssuer("saral-auth-server"),
+		jwt.WithAudience("saral-domain-coordinators"),
+		jwt.WithLeeway(10*time.Second),
+	)
 
 	if err != nil || !token.Valid {
-		errMsg := "invalid token signature or claims"
+		errMsg := "invalid token signature, algorithm or claims"
 		if err != nil {
 			errMsg = err.Error()
 		}
@@ -147,8 +159,25 @@ func (tv *TokenVerifier) VerifyToken(tokenStr string) (*AuthResult, error) {
 		return &AuthResult{Valid: false, Error: "Invalid claims structure"}, errors.New("invalid claims")
 	}
 
+	// Validate MFA claim
+	if mfa, ok := claims["mfaVerified"].(bool); !ok || !mfa {
+		return &AuthResult{Valid: false, Error: "MFA verification claim missing or false"}, errors.New("mfa claim required")
+	}
+
 	sub, _ := claims.GetSubject()
 	role, _ := claims["domainRole"].(string)
+
+	// Validate role authorization if required
+	if requiredRole != "" {
+		if role != "admin" && role != requiredRole {
+			return &AuthResult{
+				Valid: false,
+				Sub:   sub,
+				Role:  role,
+				Error: fmt.Sprintf("insufficient permissions: required %s, got %s", requiredRole, role),
+			}, fmt.Errorf("insufficient role permissions: %s", role)
+		}
+	}
 
 	return &AuthResult{
 		Valid:  true,

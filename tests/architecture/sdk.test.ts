@@ -39,3 +39,4 @@ describe('SARAL Protocol V3 — Architecture SDK Client', () => {
     expect(typeof client.authenticate).toBe('function');
   });
 });
+

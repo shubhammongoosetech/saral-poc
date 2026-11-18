@@ -29,3 +29,4 @@ func CleanPeers(peers []string, selfEndpoint string) []string {
 	}
 	return cleaned
 }
+

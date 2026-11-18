@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/identity"
@@ -11,11 +12,12 @@ import (
 )
 
 type ProbeRequest struct {
-	RequestID string `json:"requestId"`
-	ProbeID   string `json:"probeId"`
-	Sender    string `json:"sender"`
-	Domain    string `json:"domain"`
-	Timestamp int64  `json:"timestamp"`
+	RequestID  string `json:"requestId"`
+	ProbeID    string `json:"probeId"`
+	Sender     string `json:"sender"`
+	ReceiverID string `json:"receiverId,omitempty"`
+	Domain     string `json:"domain"`
+	Timestamp  int64  `json:"timestamp"`
 }
 
 type ProbeResponse struct {
@@ -27,20 +29,21 @@ type ProbeResponse struct {
 	Timestamp    int64  `json:"timestamp"`
 	Acknowledged bool   `json:"acknowledged"`
 	LatencyMs    int64  `json:"latencyMs"`
+	PublicKeyHex string `json:"publicKeyHex"`
 	SignatureHex string `json:"signatureHex"`
 }
 
 type NodeStatusResponse struct {
-	NodeID          string         `json:"nodeId"`
-	Domain          string         `json:"domain"`
-	NodeIndex       int            `json:"nodeIndex"`
-	PublicKeyHex    string         `json:"publicKeyHex"`
-	ConnectedPeers  int            `json:"connectedPeers"`
-	TotalPeers      int            `json:"totalPeers"`
-	Peers           []p2p.PeerInfo `json:"peers"`
-	Status          string         `json:"status"`
-	UptimeSec       int64          `json:"uptimeSec"`
-	VaultDirectory  string         `json:"vaultDirectory"`
+	NodeID         string         `json:"nodeId"`
+	Domain         string         `json:"domain"`
+	NodeIndex      int            `json:"nodeIndex"`
+	PublicKeyHex   string         `json:"publicKeyHex"`
+	ConnectedPeers int            `json:"connectedPeers"`
+	TotalPeers     int            `json:"totalPeers"`
+	Peers          []p2p.PeerInfo `json:"peers"`
+	Status         string         `json:"status"`
+	UptimeSec      int64          `json:"uptimeSec"`
+	VaultDirectory string         `json:"vaultDirectory"`
 }
 
 func RegisterRoutes(
@@ -77,10 +80,18 @@ func RegisterRoutes(
 		_ = json.NewEncoder(w).Encode(p2pMgr.GetPeers())
 	})
 
-	// Probe endpoint (Network probe handled with real evidence)
+	// Probe endpoint (Network probe handled with real cryptographic evidence and auth)
 	mux.HandleFunc("/node/probe", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Security Check: Verify internal caller authorization
+		authHeader := r.Header.Get("Authorization")
+		internalToken := r.Header.Get("X-Saral-Internal-Token")
+		if authHeader == "" && internalToken == "" {
+			http.Error(w, `{"error":"Unauthorized internal node RPC: authentication required"}`, http.StatusUnauthorized)
 			return
 		}
 
@@ -91,12 +102,26 @@ func RegisterRoutes(
 		}
 
 		now := time.Now().UnixMilli()
+
+		// Freshness check on probe request
+		diff := now - req.Timestamp
+		if diff < -5000 || diff > 30000 {
+			http.Error(w, fmt.Sprintf(`{"error":"Probe timestamp outside freshness window (diff: %d ms)"}`, diff), http.StatusBadRequest)
+			return
+		}
+
+		// Receiver ID verification
+		if req.ReceiverID != "" && req.ReceiverID != idMgr.Identity.NodeID {
+			http.Error(w, fmt.Sprintf(`{"error":"Receiver mismatch: intended for %s, got %s"}`, req.ReceiverID, idMgr.Identity.NodeID), http.StatusBadRequest)
+			return
+		}
+
 		latency := now - req.Timestamp
 		if latency < 0 {
 			latency = 0
 		}
 
-		msgToSign := fmt.Sprintf("%s:%s:%s:%d", req.ProbeID, idMgr.Identity.NodeID, domain, now)
+		msgToSign := fmt.Sprintf("%s:%s:%s:%s:%d", req.ProbeID, req.RequestID, idMgr.Identity.NodeID, domain, now)
 		sig := idMgr.Sign([]byte(msgToSign))
 
 		resp := ProbeResponse{
@@ -108,6 +133,7 @@ func RegisterRoutes(
 			Timestamp:    now,
 			Acknowledged: true,
 			LatencyMs:    latency,
+			PublicKeyHex: idMgr.Identity.PublicKeyHex,
 			SignatureHex: sig,
 		}
 
@@ -130,7 +156,11 @@ func RegisterRoutes(
 
 		ack, err := p2pMgr.HandleIncomingPing(ping)
 		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusUnauthorized)
+			status := http.StatusUnauthorized
+			if strings.Contains(err.Error(), "replay") {
+				status = http.StatusConflict
+			}
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), status)
 			return
 		}
 

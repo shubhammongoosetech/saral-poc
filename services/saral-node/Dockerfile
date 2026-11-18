@@ -13,3 +13,4 @@ ENV VAULT_DIR=/vault
 VOLUME ["/vault"]
 EXPOSE 8001
 ENTRYPOINT ["/usr/local/bin/saral-node"]
+
