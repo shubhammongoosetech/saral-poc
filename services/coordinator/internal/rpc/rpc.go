@@ -49,6 +49,7 @@ type Server struct {
 	peerCoords     []string
 	relayCoord     *relay.RelayCoordinator
 	avssSessions   map[string]*AVSSSessionInfo
+	dkgSessions    map[string]*DKGSessionMeta
 	avssMu         sync.RWMutex
 }
 
@@ -70,6 +71,7 @@ func NewServer(
 		peerCoords:     peerCoordinatorURLs,
 		relayCoord:     relayCoord,
 		avssSessions:   make(map[string]*AVSSSessionInfo),
+		dkgSessions:    make(map[string]*DKGSessionMeta),
 	}
 }
 
@@ -213,11 +215,22 @@ func (s *Server) dispatch(method string, params json.RawMessage, token string) (
 		return s.handleRequestProactiveRefresh(params, token)
 	case "saral_getRefreshStatus":
 		return s.handleGetRefreshStatus(params)
+	// Phase 3 Dealerless DKG Methods
+	case "saral_startDkg":
+		return s.handleStartDKG(params, token)
+	case "saral_getDkgStatus":
+		return s.handleGetDKGStatus(params)
+	case "saral_getDkgParticipants":
+		return s.handleGetDKGParticipants(params)
+	case "saral_getDkgPublicKey", "saral_getPublicKey":
+		return s.handleGetDKGPublicKey(params)
+	case "saral_getDkgVerificationStatus":
+		return s.handleGetDKGVerificationStatus(params)
 	// Cryptographic Stubs - Explicitly NOT_IMPLEMENTED as per Section 8
-	case "saral_signTransaction", "saral_createWallet", "saral_startDkg", "saral_getPublicKey":
+	case "saral_signTransaction", "saral_createWallet":
 		return nil, &JsonRpcErr{
 			Code:    -32000,
-			Message: "NOT_IMPLEMENTED: Cryptographic key generation, signing, and DKG are scheduled for future phases.",
+			Message: "NOT_IMPLEMENTED: Cryptographic signing and wallet transactions are scheduled for future phases.",
 		}
 	default:
 		return nil, &JsonRpcErr{Code: -32601, Message: fmt.Sprintf("Method not found: %s", method)}

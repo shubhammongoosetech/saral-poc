@@ -20,6 +20,12 @@ import {
   ProactiveEpochStatusResponse,
   ProactiveRefreshRequest,
   ProactiveRefreshResponse,
+  DKGStartRequest,
+  DKGStartResponse,
+  DKGStatusResponse,
+  DKGParticipantsResponse,
+  DKGPublicKeyResponse,
+  DKGVerificationStatusResponse,
 } from './types';
 
 export interface SaralClientConfig {
@@ -266,6 +272,46 @@ export class SaralClient {
    */
   public async getRefreshStatus(committeeId?: string, coordUrl?: string): Promise<ProactiveEpochStatusResponse> {
     return this.rpcCall<ProactiveEpochStatusResponse>('saral_getRefreshStatus', { committeeId }, coordUrl);
+  }
+
+  // ==========================================
+  // Dealerless Distributed Key Generation (DKG)
+  // ==========================================
+
+  /**
+   * Initiates a dealerless DKG across the specified committee.
+   * Parameters must satisfy n > 3*t, n - 2*t >= k, and k >= t + 1.
+   */
+  public async startDkg(req: DKGStartRequest, coordUrl?: string): Promise<DKGStartResponse> {
+    return this.rpcCall<DKGStartResponse>('saral_startDkg', req, coordUrl);
+  }
+
+  /**
+   * Returns current DKG progress across the committee.
+   */
+  public async getDkgStatus(sessionId?: string, coordUrl?: string): Promise<DKGStatusResponse> {
+    return this.rpcCall<DKGStatusResponse>('saral_getDkgStatus', { sessionId }, coordUrl);
+  }
+
+  /**
+   * Returns participants and qualified set information for a DKG session.
+   */
+  public async getDkgParticipants(sessionId?: string, coordUrl?: string): Promise<DKGParticipantsResponse> {
+    return this.rpcCall<DKGParticipantsResponse>('saral_getDkgParticipants', { sessionId }, coordUrl);
+  }
+
+  /**
+   * Returns the agreed master public key for a completed DKG session.
+   */
+  public async getDkgPublicKey(sessionId?: string, coordUrl?: string): Promise<DKGPublicKeyResponse> {
+    return this.rpcCall<DKGPublicKeyResponse>('saral_getDkgPublicKey', { sessionId }, coordUrl);
+  }
+
+  /**
+   * Returns cryptographic verification status of the DKG session.
+   */
+  public async getDkgVerificationStatus(sessionId?: string, coordUrl?: string): Promise<DKGVerificationStatusResponse> {
+    return this.rpcCall<DKGVerificationStatusResponse>('saral_getDkgVerificationStatus', { sessionId }, coordUrl);
   }
 }
 

@@ -17,6 +17,9 @@ type RelaySender interface {
 	SendToNode(targetNode, targetDomain, msgType string, payload []byte) error
 }
 
+// SharingCompletionListener is called whenever an AVSS session successfully completes
+type SharingCompletionListener func(sessionID string, sess *Session)
+
 // Engine manages the local node's AVSS protocol sessions, relay routing, and share lifecycle
 type Engine struct {
 	NodeID       string
@@ -26,8 +29,9 @@ type Engine struct {
 	SessionStore *SessionStore
 	Relay        RelaySender
 
-	sessions map[string]*Session
-	mu       sync.RWMutex
+	sessions            map[string]*Session
+	completionListeners []SharingCompletionListener
+	mu                  sync.RWMutex
 }
 
 // NewEngine initializes the AVSS protocol engine
@@ -45,6 +49,13 @@ func NewEngine(
 		Relay:        relay,
 		sessions:     make(map[string]*Session),
 	}
+}
+
+// AddCompletionListener registers a callback invoked when any AVSS session finishes
+func (e *Engine) AddCompletionListener(listener SharingCompletionListener) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.completionListeners = append(e.completionListeners, listener)
 }
 
 // GetSession returns an active session by ID
@@ -313,6 +324,16 @@ func (e *Engine) onSharingCompleted(sess *Session) {
 		if err := e.ShareStore.SaveShare(meta, sess.Share, sess.BlindShare); err != nil {
 			log.Printf("[AVSS Engine - %s] Error persisting share to vault: %v", e.NodeID, err)
 		}
+	}
+
+	// Notify registered observers (DKG Engine, Proactive Manager)
+	e.mu.RLock()
+	listeners := make([]SharingCompletionListener, len(e.completionListeners))
+	copy(listeners, e.completionListeners)
+	e.mu.RUnlock()
+
+	for _, l := range listeners {
+		l(sess.SessionID, sess)
 	}
 }
 

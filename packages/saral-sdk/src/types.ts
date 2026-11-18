@@ -275,4 +275,85 @@ export interface ProactiveRefreshResponse {
   timestamp: string;
 }
 
+// ==========================================
+// Dealerless Distributed Key Generation (DKG) (Kate et al. 2012 / Cachin et al. 2002)
+// ==========================================
+
+export interface DKGStartRequest {
+  sessionId?: string;
+  committeeId?: string;
+  n?: number;
+  k?: number;
+  t?: number;
+  committee?: string[];
+}
+
+export interface DKGStartResponse {
+  success: boolean;
+  sessionId: string;
+  committeeId: string;
+  state: string;
+  n: number;
+  k: number;
+  t: number;
+  committee: string[];
+}
+
+export interface DKGParticipantSummary {
+  nodeId: string;
+  nodeIndex: number;
+  contributionDealt: boolean;
+  secretCommitment?: string;
+  completedSharings: number;
+  inQualifiedSet: boolean;
+  publicShareCommit?: string;
+  status: string;
+}
+
+export interface DKGStatusResponse {
+  sessionId: string;
+  committeeId: string;
+  epoch: number;
+  n: number;
+  k: number;
+  t: number;
+  state: string;
+  committee: string[];
+  qualifiedSet?: string[];
+  masterPublicKey?: string;
+  curve: string;
+  completedNodes: number;
+  totalNodes: number;
+  participants: Record<string, DKGParticipantSummary>;
+  message?: string;
+}
+
+export interface DKGParticipantsResponse {
+  sessionId: string;
+  committeeId: string;
+  participants: Record<string, DKGParticipantSummary>;
+  qualifiedSet?: string[];
+}
+
+export interface DKGPublicKeyResponse {
+  sessionId: string;
+  committeeId: string;
+  masterPublicKey: string;
+  curve: string;
+  threshold: number;
+  state: string;
+}
+
+export interface DKGVerificationStatusResponse {
+  sessionId: string;
+  committeeId: string;
+  verified: boolean;
+  state: string;
+  masterPublicKey?: string;
+  qualifiedSet?: string[];
+  completedNodes: number;
+  totalNodes: number;
+}
+
+
 

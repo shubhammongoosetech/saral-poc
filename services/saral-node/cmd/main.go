@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/saral-protocol/saral-poc/services/saral-node/avss"
+	"github.com/saral-protocol/saral-poc/services/saral-node/dkg"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/health"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/identity"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/membership"
@@ -94,6 +95,8 @@ func main() {
 	relayAdapter := relay.NewNodeRelayAdapter(relayRouter)
 	avssEngine := avss.NewEngine(idMgr.Identity.NodeID, domain, *vaultDirFlag, shareStore, relayAdapter)
 	proactiveMgr := proactive.NewManager(idMgr.Identity.NodeID, domain, shareStore, avssEngine, relayAdapter)
+	dkgEngine := dkg.NewEngine(idMgr.Identity.NodeID, domain, *vaultDirFlag, shareStore, avssEngine, relayAdapter)
+	avssEngine.AddCompletionListener(dkgEngine.OnAVSSSubprotocolCompleted)
 
 	// Register AVSS and Proactive relay message handlers
 	relayRouter.RegisterMessageHandler(avss.MessageTypeSend, func(msg *relay.RelayMessage) error {
@@ -204,6 +207,30 @@ func main() {
 		return proactiveMgr.HandleAgreementCoinShare(&coinMsg)
 	})
 
+	relayRouter.RegisterMessageHandler(dkg.MessageTypeDKGInit, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var initMsg dkg.DKGInitMessage
+		if err := json.Unmarshal(rawBytes, &initMsg); err != nil {
+			return err
+		}
+		return dkgEngine.HandleDKGInit(&initMsg)
+	})
+
+	relayRouter.RegisterMessageHandler(dkg.MessageTypeDKGContribution, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var contribMsg dkg.DKGContributionMessage
+		if err := json.Unmarshal(rawBytes, &contribMsg); err != nil {
+			return err
+		}
+		return dkgEngine.HandleDKGContribution(&contribMsg)
+	})
+
 	// 5. Setup HTTP Routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/node/health", health.NewHandler(idMgr.Identity.NodeID, domain, startTime))
@@ -235,6 +262,7 @@ func main() {
 
 	rpc.RegisterRoutes(mux, idMgr, domain, *nodeIndexFlag, p2pMgr, relayRouter, startTime)
 	rpc.RegisterAVSSRoutes(mux, avssEngine, proactiveMgr)
+	rpc.RegisterDKGRoutes(mux, dkgEngine)
 
 	// 6. Setup TLS 1.3 / mTLS Server & Client
 	mtlsPort := *mtlsPortFlag

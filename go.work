@@ -9,4 +9,5 @@ use (
 	./tests/avss
 	./tests/proactive
 	./tests/integration
+	./tests/dkg
 )

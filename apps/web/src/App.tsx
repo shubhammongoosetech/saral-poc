@@ -129,6 +129,32 @@ export const App: React.FC = () => {
   const [proactiveRefreshing, setProactiveRefreshing] = useState<boolean>(false);
   const [cryptoNotice, setCryptoNotice] = useState<string>('');
 
+  // DKG State (Kate et al. 2012 / Cachin et al. 2002)
+  const [dkgConfig, setDkgConfig] = useState<'GLOBAL' | 'DOMAIN'>('GLOBAL');
+  const [dkgSessionData, setDkgSessionData] = useState<{
+    sessionId: string;
+    committeeId: string;
+    epoch: number;
+    n: number;
+    k: number;
+    t: number;
+    state: string;
+    committee: string[];
+    qualifiedSet?: string[];
+    masterPublicKey?: string;
+    completedNodes: number;
+    totalNodes: number;
+    participants: Record<string, {
+      nodeId: string;
+      nodeIndex: number;
+      contributionDealt: boolean;
+      inQualifiedSet: boolean;
+      status: string;
+    }>;
+  } | null>(null);
+  const [dkgStarting, setDkgStarting] = useState<boolean>(false);
+  const [dkgStatusLoading, setDkgStatusLoading] = useState<boolean>(false);
+
   const addEvent = useCallback((type: ProtocolEvent['type'], message: string) => {
     setEvents((prev) => [
       {
@@ -488,6 +514,78 @@ export const App: React.FC = () => {
       setCryptoNotice(`Error: ${msg}`);
     } finally {
       setProactiveRefreshing(false);
+    }
+  };
+
+  // Start Dealerless DKG
+  const handleStartDKG = async () => {
+    setDkgStarting(true);
+    try {
+      const isGlobal = dkgConfig === 'GLOBAL';
+      const n = isGlobal ? 15 : 5;
+      const k = isGlobal ? 5 : 2;
+      const t = isGlobal ? 4 : 1;
+      const committeeId = isGlobal ? 'saral-global-15' : 'saral-foundation-5';
+
+      addEvent('INFO', `Initiating Dealerless DKG (${dkgConfig}: n=${n}, k=${k}, t=${t})...`);
+
+      const resp = await fetch(`${coordUrl}/rpc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'saral_startDkg',
+          params: { n, k, t, committeeId },
+        }),
+      });
+
+      const json = await resp.json();
+      if (json.error) {
+        throw new Error(json.error.message);
+      }
+
+      setCryptoNotice(`Dealerless DKG session ${json.result.sessionId} initiated. Honest contributors independently generating polynomial shares.`);
+      addEvent('INFO', `DKG ${json.result.sessionId} started across ${n} nodes. AVSS sharing and Qualified Set agreement underway.`);
+      setTimeout(() => handlePollDKGStatus(json.result.sessionId), 1000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setCryptoNotice(`DKG failed to start: ${msg}`);
+      addEvent('ERROR', `DKG failed: ${msg}`);
+    } finally {
+      setDkgStarting(false);
+    }
+  };
+
+  // Poll DKG Status
+  const handlePollDKGStatus = async (sessId?: string) => {
+    setDkgStatusLoading(true);
+    try {
+      const resp = await fetch(`${coordUrl}/rpc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'saral_getDkgStatus',
+          params: sessId ? { sessionId: sessId } : {},
+        }),
+      });
+
+      const json = await resp.json();
+      if (json.error) {
+        throw new Error(json.error.message);
+      }
+
+      setDkgSessionData(json.result);
+      if (json.result.state === 'COMPLETED') {
+        addEvent('INFO', `DKG Session ${json.result.sessionId} COMPLETED! Master Public Key: ${json.result.masterPublicKey?.substring(0, 16)}...`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addEvent('ERROR', `Failed to poll DKG status: ${msg}`);
+    } finally {
+      setDkgStatusLoading(false);
     }
   };
 
@@ -1054,6 +1152,241 @@ export const App: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+
+        {/* ─── DEALERLESS DISTRIBUTED KEY GENERATION (DKG) (Kate et al. 2012 / Cachin et al. 2002) ─────────── */}
+        <div style={{ marginTop: '24px', backgroundColor: '#111827', border: '1px solid #1f2937', borderRadius: '8px', padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #1f2937', paddingBottom: '14px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '18px' }}>🔑</span>
+                <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0, color: '#f3f4f6' }}>
+                  Dealerless Distributed Key Generation (DKG)
+                </h2>
+              </div>
+              <p style={{ color: '#94a3b8', fontSize: '12px', margin: '4px 0 0 26px' }}>
+                Kate, Huang, Goldberg (ASIACCS 2012 / ePrint 2012/377) — Asynchronous AVSS-Backed DKG & Common Coin Agreement
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  borderRadius: '9999px',
+                  backgroundColor: dkgSessionData?.state === 'COMPLETED' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(56, 189, 248, 0.2)',
+                  color: dkgSessionData?.state === 'COMPLETED' ? '#34d399' : '#38bdf8',
+                  border: `1px solid ${dkgSessionData?.state === 'COMPLETED' ? '#10b981' : '#0284c7'}`,
+                }}
+              >
+                ● {dkgSessionData?.state || 'READY'}
+              </span>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  borderRadius: '9999px',
+                  backgroundColor: 'rgba(99, 102, 241, 0.2)',
+                  color: '#818cf8',
+                  border: '1px solid #6366f1',
+                }}
+              >
+                Epoch τ=1 (Initial DKG)
+              </span>
+            </div>
+          </div>
+
+          {/* Committee Configuration Selector */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+            <div
+              onClick={() => setDkgConfig('GLOBAL')}
+              style={{
+                padding: '12px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                backgroundColor: dkgConfig === 'GLOBAL' ? '#1e293b' : '#0f172a',
+                border: `2px solid ${dkgConfig === 'GLOBAL' ? '#38bdf8' : '#1e293b'}`,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <strong style={{ fontSize: '13px', color: '#f8fafc' }}>Global Committee (15 Nodes)</strong>
+                <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>n=15, t=4, k=5</span>
+              </div>
+              <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: '#94a3b8' }}>
+                Full cross-domain committee. Fault tolerance: t=4. Qualified set: |QUAL*| ≥ 11 nodes.
+              </p>
+            </div>
+
+            <div
+              onClick={() => setDkgConfig('DOMAIN')}
+              style={{
+                padding: '12px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                backgroundColor: dkgConfig === 'DOMAIN' ? '#1e293b' : '#0f172a',
+                border: `2px solid ${dkgConfig === 'DOMAIN' ? '#38bdf8' : '#1e293b'}`,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <strong style={{ fontSize: '13px', color: '#f8fafc' }}>Domain Committee (5 Nodes)</strong>
+                <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 600 }}>n=5, t=1, k=2</span>
+              </div>
+              <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: '#94a3b8' }}>
+                Single domain committee. Fault tolerance: t=1. Qualified set: |QUAL*| ≥ 4 nodes.
+              </p>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+            <button
+              onClick={handleStartDKG}
+              disabled={dkgStarting}
+              style={{
+                flex: 1,
+                padding: '10px 16px',
+                backgroundColor: '#2563eb',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '6px',
+                fontWeight: 600,
+                fontSize: '13px',
+                cursor: dkgStarting ? 'not-allowed' : 'pointer',
+                opacity: dkgStarting ? 0.6 : 1,
+              }}
+            >
+              {dkgStarting ? 'Initiating Distributed Contributions...' : '🚀 Start Dealerless DKG'}
+            </button>
+            <button
+              onClick={() => handlePollDKGStatus(dkgSessionData?.sessionId)}
+              disabled={dkgStatusLoading || !dkgSessionData?.sessionId}
+              style={{
+                padding: '10px 18px',
+                backgroundColor: '#1e293b',
+                color: '#e2e8f0',
+                border: '1px solid #334155',
+                borderRadius: '6px',
+                fontWeight: 600,
+                fontSize: '13px',
+                cursor: dkgStatusLoading || !dkgSessionData?.sessionId ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {dkgStatusLoading ? 'Checking...' : '🔄 Poll DKG Status'}
+            </button>
+          </div>
+
+          {/* DKG Session Progress & Output */}
+          {dkgSessionData && (
+            <div style={{ backgroundColor: '#182234', borderRadius: '6px', padding: '14px', marginBottom: '16px', border: '1px solid #2d3748' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div>
+                  <span style={{ fontSize: '12px', color: '#94a3b8' }}>Session: </span>
+                  <strong style={{ color: '#38bdf8', fontFamily: 'monospace', fontSize: '12px' }}>{dkgSessionData.sessionId}</strong>
+                  <span style={{ marginLeft: '12px', fontSize: '11px', color: '#94a3b8' }}>
+                    Committee: <span style={{ color: '#cbd5e1' }}>{dkgSessionData.committeeId}</span>
+                  </span>
+                </div>
+                <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                  Progress: <strong style={{ color: '#34d399' }}>{dkgSessionData.completedNodes} / {dkgSessionData.totalNodes} Nodes Completed</strong>
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              <div style={{ height: '8px', backgroundColor: '#0f172a', borderRadius: '4px', overflow: 'hidden', marginBottom: '12px' }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${(dkgSessionData.completedNodes / Math.max(dkgSessionData.totalNodes, 1)) * 100}%`,
+                    backgroundColor: dkgSessionData.state === 'COMPLETED' ? '#10b981' : '#38bdf8',
+                    transition: 'width 0.3s ease',
+                  }}
+                />
+              </div>
+
+              {/* Master Public Key Y */}
+              {dkgSessionData.masterPublicKey && (
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '12px', fontFamily: 'monospace' }}>
+                  <span style={{ color: '#34d399', fontWeight: 600 }}>Agreed Master Public Key Y = ∑ C⁽ⁱ⁾₀,₀ (NIST P-256):</span>
+                  <div style={{ color: '#a78bfa', wordBreak: 'break-all', backgroundColor: '#0f172a', padding: '8px 10px', borderRadius: '4px', marginTop: '4px', border: '1px solid #10b981' }}>
+                    {dkgSessionData.masterPublicKey}
+                  </div>
+                </div>
+              )}
+
+              {/* Qualified Set QUAL* */}
+              {dkgSessionData.qualifiedSet && dkgSessionData.qualifiedSet.length > 0 && (
+                <div style={{ marginBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', color: '#94a3b8' }}>Agreed Qualified Set (QUAL*): </span>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '4px' }}>
+                    {dkgSessionData.qualifiedSet.map((nodeId) => (
+                      <span
+                        key={nodeId}
+                        style={{
+                          fontSize: '10px',
+                          fontFamily: 'monospace',
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                          color: '#34d399',
+                          border: '1px solid #059669',
+                        }}
+                      >
+                        {nodeId}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Participants Table */}
+              <h4 style={{ fontSize: '12px', fontWeight: 600, margin: '12px 0 6px 0', color: '#cbd5e1' }}>
+                Committee Participant Status
+              </h4>
+              <div style={{ maxHeight: '180px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', fontSize: '11px', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ color: '#9ca3af', borderBottom: '1px solid #1f2937' }}>
+                      <th style={{ padding: '4px 8px' }}>Node ID</th>
+                      <th style={{ padding: '4px 8px' }}>Index</th>
+                      <th style={{ padding: '4px 8px' }}>Contribution Dealt</th>
+                      <th style={{ padding: '4px 8px' }}>In QUAL*</th>
+                      <th style={{ padding: '4px 8px' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.values(dkgSessionData.participants || {}).map((p) => (
+                      <tr key={p.nodeId} style={{ borderBottom: '1px solid #1e293b' }}>
+                        <td style={{ padding: '4px 8px', fontFamily: 'monospace', color: '#f8fafc' }}>{p.nodeId}</td>
+                        <td style={{ padding: '4px 8px', color: '#94a3b8' }}>#{p.nodeIndex}</td>
+                        <td style={{ padding: '4px 8px' }}>
+                          <span style={{ color: p.contributionDealt ? '#34d399' : '#f87171' }}>
+                            {p.contributionDealt ? '✓ Dealt' : '✗ Pending'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '4px 8px' }}>
+                          <span style={{ color: p.inQualifiedSet ? '#34d399' : '#64748b' }}>
+                            {p.inQualifiedSet ? '✓ QUAL*' : '—'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '4px 8px' }}>
+                          <span style={{ color: p.status === 'COMPLETED' ? '#34d399' : '#38bdf8', fontWeight: 600 }}>
+                            {p.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Zero-Knowledge Guarantee Notice */}
+          <div style={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '6px', padding: '12px', fontSize: '11px', color: '#94a3b8' }}>
+            🛡️ <strong style={{ color: '#e2e8f0' }}>Dealerless Security Guarantee:</strong> No single entity or coordinator acts as a trusted dealer. Master secret shares xⱼ = ∑ᵢ sᵢ,ⱼ are computed strictly within each node's local process space, and the master private key is never centralized or reconstructed.
+          </div>
         </div>
 
         {/* ─── AVSS & PROACTIVE CRYPTOSYSTEMS INTERFACE (Cachin et al. CCS 2002) ─────────── */}
