@@ -108,6 +108,267 @@ func TestValidatedByzantineAgreement(t *testing.T) {
 	}
 }
 
+func TestRandomizedAgreementConflictingProposals(t *testing.T) {
+	// n=5, t=1 committee with 2 conflicting valid proposals S1 and S2
+	committee := []string{"n1", "n2", "n3", "n4", "n5"}
+	n := 5
+	tVal := 1
+	quorum := 2*tVal + 1 // 3
+
+	predicate := func(candidates []string) bool {
+		return len(candidates) >= quorum
+	}
+
+	instances := make(map[string]*proactive.ValidatedAgreementInstance)
+	for _, id := range committee {
+		instances[id] = proactive.NewValidatedAgreementInstance("comm-conflict", 2, id, committee, n, tVal, quorum, predicate)
+	}
+
+	// Two conflicting valid proposals
+	set1 := []string{"n1", "n2", "n3"}
+	set2 := []string{"n2", "n3", "n4"}
+	hash1 := proactive.HashCandidateSet(set1)
+	hash2 := proactive.HashCandidateSet(set2)
+
+	if hash1 == hash2 {
+		t.Fatalf("conflicting sets must produce different hashes")
+	}
+
+	prop1 := &proactive.AgreementProposeMessage{
+		CommitteeID:  "comm-conflict",
+		Epoch:        2,
+		ProposerID:   "n1",
+		CandidateSet: set1,
+	}
+	prop2 := &proactive.AgreementProposeMessage{
+		CommitteeID:  "comm-conflict",
+		Epoch:        2,
+		ProposerID:   "n4",
+		CandidateSet: set2,
+	}
+
+	// Register proposals on all nodes
+	for _, id := range committee {
+		_, _ = instances[id].ProcessProposal(prop1)
+		_, _ = instances[id].ProcessProposal(prop2)
+	}
+
+	// Simulate asymmetric network scheduling: n1, n2 vote for prop1; n3, n4, n5 vote for prop2
+	round1Prevotes := make([]*proactive.AgreementVoteMessage, 0)
+	for idx, id := range committee {
+		cand := hash1
+		if idx >= 2 {
+			cand = hash2
+		}
+		vote := &proactive.AgreementVoteMessage{
+			CommitteeID:   "comm-conflict",
+			Epoch:         2,
+			Round:         1,
+			Step:          proactive.StepPreVote,
+			SenderID:      id,
+			CandidateHash: cand,
+			VoteValue:     proactive.VoteAccept,
+		}
+		round1Prevotes = append(round1Prevotes, vote)
+	}
+
+	// Exchange Step 1 PRE-VOTEs across all nodes
+	round1Mainvotes := make([]*proactive.AgreementVoteMessage, 0)
+	for _, id := range committee {
+		for _, pv := range round1Prevotes {
+			nextVote, _, _, _, err := instances[id].ProcessVote(pv)
+			if err != nil {
+				t.Fatalf("node %s ProcessVote error: %v", id, err)
+			}
+			if nextVote != nil {
+				round1Mainvotes = append(round1Mainvotes, nextVote)
+			}
+		}
+	}
+
+	// Exchange Step 2 MAIN-VOTEs across all nodes
+	coinSharesRound1 := make([]*proactive.AgreementCoinShareMessage, 0)
+	decidedCount := 0
+	for _, id := range committee {
+		for _, mv := range round1Mainvotes {
+			nextVote, coinShareMsg, decided, _, err := instances[id].ProcessVote(mv)
+			if err != nil {
+				t.Fatalf("node %s ProcessVote error: %v", id, err)
+			}
+			if decided {
+				decidedCount++
+			}
+			if coinShareMsg != nil {
+				coinSharesRound1 = append(coinSharesRound1, coinShareMsg)
+			}
+			_ = nextVote
+		}
+	}
+
+	// If not decided in round 1 due to split vote, exchange threshold coin shares
+	if decidedCount < n {
+		round2Prevotes := make([]*proactive.AgreementVoteMessage, 0)
+		for _, id := range committee {
+			for _, csMsg := range coinSharesRound1 {
+				nextVote, decided, _, err := instances[id].ProcessCoinShare(csMsg)
+				if err != nil {
+					t.Fatalf("node %s ProcessCoinShare error: %v", id, err)
+				}
+				if decided {
+					decidedCount++
+				}
+				if nextVote != nil {
+					round2Prevotes = append(round2Prevotes, nextVote)
+				}
+			}
+		}
+
+		// Process Round 2 PRE-VOTEs
+		round2Mainvotes := make([]*proactive.AgreementVoteMessage, 0)
+		for _, id := range committee {
+			for _, pv := range round2Prevotes {
+				nextVote, _, decided, _, err := instances[id].ProcessVote(pv)
+				if err != nil {
+					t.Fatalf("node %s ProcessVote error: %v", id, err)
+				}
+				if decided {
+					decidedCount++
+				}
+				if nextVote != nil {
+					round2Mainvotes = append(round2Mainvotes, nextVote)
+				}
+			}
+		}
+
+		// Process Round 2 MAIN-VOTEs
+		for _, id := range committee {
+			for _, mv := range round2Mainvotes {
+				_, _, decided, _, err := instances[id].ProcessVote(mv)
+				if err != nil {
+					t.Fatalf("node %s ProcessVote error: %v", id, err)
+				}
+				if decided {
+					decidedCount++
+				}
+			}
+		}
+	}
+
+	// Verify Byzantine Agreement invariant: ALL nodes must reach decision on the exact same hash
+	firstDecidedHash := ""
+	for _, id := range committee {
+		inst := instances[id]
+		if !inst.IsDecided {
+			t.Fatalf("node %s failed to decide under conflicting proposals", id)
+		}
+		if firstDecidedHash == "" {
+			firstDecidedHash = inst.DecidedHash
+		} else if inst.DecidedHash != firstDecidedHash {
+			t.Fatalf("CONSENSUS SAFETY VIOLATED: node %s decided on %s, expected %s",
+				id, inst.DecidedHash, firstDecidedHash)
+		}
+		if !predicate(inst.DecidedSet) {
+			t.Fatalf("decided set failed validity predicate")
+		}
+	}
+}
+
+func TestByzantineEquivocationDefense(t *testing.T) {
+	committee := []string{"n1", "n2", "n3", "n4", "n5"}
+	n := 5
+	tVal := 1
+	quorum := 3
+
+	inst := proactive.NewValidatedAgreementInstance("comm-eq", 2, "n1", committee, n, tVal, quorum, func([]string) bool { return true })
+
+	// Honest vote from n2
+	vote1 := &proactive.AgreementVoteMessage{
+		CommitteeID:   "comm-eq",
+		Epoch:         2,
+		Round:         1,
+		Step:          proactive.StepPreVote,
+		SenderID:      "n2",
+		CandidateHash: "hash-alpha",
+		VoteValue:     proactive.VoteAccept,
+	}
+	_, _, _, _, err := inst.ProcessVote(vote1)
+	if err != nil {
+		t.Fatalf("honest vote rejected: %v", err)
+	}
+
+	// Byzantine n2 attempts to equivocate with a conflicting vote in the same round and step
+	equivocatingVote := &proactive.AgreementVoteMessage{
+		CommitteeID:   "comm-eq",
+		Epoch:         2,
+		Round:         1,
+		Step:          proactive.StepPreVote,
+		SenderID:      "n2",
+		CandidateHash: "hash-beta", // CONFLICTING CANDIDATE!
+		VoteValue:     proactive.VoteAccept,
+	}
+	_, _, _, _, err = inst.ProcessVote(equivocatingVote)
+	if err == nil {
+		t.Fatalf("expected error detecting Byzantine equivocation")
+	}
+
+	// Duplicate identical vote from n2: should be safely ignored without error
+	_, _, _, _, err = inst.ProcessVote(vote1)
+	if err != nil {
+		t.Fatalf("duplicate identical vote should be silently ignored: %v", err)
+	}
+}
+
+func TestByzantineCorruptedCoinShareDefense(t *testing.T) {
+	committee := []string{"n1", "n2", "n3", "n4", "n5"}
+	n := 5
+	tVal := 1
+	quorum := 3
+
+	inst := proactive.NewValidatedAgreementInstance("comm-bad-coin", 2, "n1", committee, n, tVal, quorum, func([]string) bool { return true })
+
+	// Valid coin share from n2
+	validShare, err := inst.CoinKeyShare.GenerateShare(1, inst.SessionTag)
+	if err != nil {
+		t.Fatalf("GenerateShare failed: %v", err)
+	}
+	validMsg := &proactive.AgreementCoinShareMessage{
+		CommitteeID: "comm-bad-coin",
+		Epoch:       2,
+		Round:       1,
+		SenderID:    "n1",
+		CoinShare:   validShare,
+	}
+	_, _, _, err = inst.ProcessCoinShare(validMsg)
+	if err != nil {
+		t.Fatalf("valid coin share failed: %v", err)
+	}
+
+	// Byzantine corrupted coin share from n3 (tampered challenge in DLEQ proof)
+	corruptedShare := &cryptography.CoinShare{
+		CommitteeID: validShare.CommitteeID,
+		NodeID:      "n3",
+		NodeIndex:   3,
+		Round:       1,
+		Tag:         validShare.Tag,
+		SharePoint:  validShare.SharePoint,
+		Proof: &cryptography.DLEQProof{
+			Challenge: validShare.Proof.Challenge.Add(cryptography.NewFieldElement(1)), // TAMPERED!
+			Response:  validShare.Proof.Response,
+		},
+	}
+	corruptedMsg := &proactive.AgreementCoinShareMessage{
+		CommitteeID: "comm-bad-coin",
+		Epoch:       2,
+		Round:       1,
+		SenderID:    "n3",
+		CoinShare:   corruptedShare,
+	}
+	_, _, _, err = inst.ProcessCoinShare(corruptedMsg)
+	if err != proactive.ErrInvalidCoinShare {
+		t.Fatalf("expected ErrInvalidCoinShare for tampered DLEQ proof, got: %v", err)
+	}
+}
+
 func TestCompleteProactiveShareRefresh5Nodes(t *testing.T) {
 	// Configuration B: n = 5, t = 1, k = 2 (k = t+1)
 	tempDir, err := os.MkdirTemp("", "saral-refresh-test-*")

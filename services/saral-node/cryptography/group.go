@@ -48,9 +48,9 @@ func init() {
 	}
 }
 
-// deriveGeneratorH derives a nothing-up-my-sleeve (NUMS) curve point from a public seed
-// using transparent trial-and-increment hash-to-curve on P-256.
-func deriveGeneratorH(seed string) (*CurvePoint, error) {
+// HashToCurve deterministically maps an arbitrary seed string to a valid point on NIST P-256
+// with prime subgroup order N using transparent trial-and-increment.
+func HashToCurve(seed string) (*CurvePoint, error) {
 	params := P256.Params()
 	// y^2 = x^3 - 3x + b mod p
 	p := params.P
@@ -96,7 +96,13 @@ func deriveGeneratorH(seed string) (*CurvePoint, error) {
 		}
 		counter++
 	}
-	return nil, errors.New("could not find valid curve point for generator H")
+	return nil, errors.New("could not find valid curve point on NIST P-256")
+}
+
+// deriveGeneratorH derives a nothing-up-my-sleeve (NUMS) curve point from a public seed
+// using transparent trial-and-increment hash-to-curve on P-256.
+func deriveGeneratorH(seed string) (*CurvePoint, error) {
+	return HashToCurve(seed)
 }
 
 // CurvePoint represents an affine point (X, Y) on NIST P-256.

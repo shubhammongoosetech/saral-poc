@@ -215,21 +215,78 @@ func (m *Manager) HandleAgreementReady(ready *AgreementReadyMessage) error {
 	}
 
 	if decided {
-		log.Printf("[Proactive Manager - %s] AGREEMENT DECIDED on candidate set %v", m.NodeID, decidedSet)
-		// Compute new refreshed share
-		if err := rs.ComputeNewShare(decidedSet, m.ShareStore); err != nil {
-			log.Printf("[Proactive Manager - %s] Failed computing new share: %v", m.NodeID, err)
-			return err
-		}
-
-		m.mu.Lock()
-		m.ActiveEpoch = rs.NewEpoch
-		m.State = EpochStateActive
-		m.mu.Unlock()
-
-		log.Printf("[Proactive Manager - %s] PROACTIVE REFRESH SUCCESSFUL! Advanced to epoch %d",
-			m.NodeID, rs.NewEpoch)
+		return m.finalizeRefresh(rs, decidedSet)
 	}
+	return nil
+}
+
+// HandleAgreementVote processes an incoming PRE-VOTE or MAIN-VOTE message in randomized ABBA consensus
+func (m *Manager) HandleAgreementVote(msg *AgreementVoteMessage) error {
+	m.mu.Lock()
+	rs := m.CurrentSession
+	m.mu.Unlock()
+
+	if rs == nil {
+		return errors.New("no active refresh session for agreement vote")
+	}
+
+	nextVote, coinShareMsg, decided, decidedSet, err := rs.Agreement.ProcessVote(msg)
+	if err != nil {
+		return err
+	}
+
+	if nextVote != nil {
+		m.broadcastProactive(rs.Committee, MessageTypeAgreementVote, nextVote)
+	}
+	if coinShareMsg != nil {
+		m.broadcastProactive(rs.Committee, MessageTypeAgreementCoinShare, coinShareMsg)
+	}
+
+	if decided {
+		return m.finalizeRefresh(rs, decidedSet)
+	}
+	return nil
+}
+
+// HandleAgreementCoinShare processes an incoming threshold common-coin share
+func (m *Manager) HandleAgreementCoinShare(msg *AgreementCoinShareMessage) error {
+	m.mu.Lock()
+	rs := m.CurrentSession
+	m.mu.Unlock()
+
+	if rs == nil {
+		return errors.New("no active refresh session for agreement coin share")
+	}
+
+	nextVote, decided, decidedSet, err := rs.Agreement.ProcessCoinShare(msg)
+	if err != nil {
+		return err
+	}
+
+	if nextVote != nil {
+		m.broadcastProactive(rs.Committee, MessageTypeAgreementVote, nextVote)
+	}
+
+	if decided {
+		return m.finalizeRefresh(rs, decidedSet)
+	}
+	return nil
+}
+
+func (m *Manager) finalizeRefresh(rs *RefreshSession, decidedSet []string) error {
+	log.Printf("[Proactive Manager - %s] AGREEMENT DECIDED on candidate set %v", m.NodeID, decidedSet)
+	if err := rs.ComputeNewShare(decidedSet, m.ShareStore); err != nil {
+		log.Printf("[Proactive Manager - %s] Failed computing new share: %v", m.NodeID, err)
+		return err
+	}
+
+	m.mu.Lock()
+	m.ActiveEpoch = rs.NewEpoch
+	m.State = EpochStateActive
+	m.mu.Unlock()
+
+	log.Printf("[Proactive Manager - %s] PROACTIVE REFRESH SUCCESSFUL! Advanced to epoch %d",
+		m.NodeID, rs.NewEpoch)
 	return nil
 }
 

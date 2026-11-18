@@ -953,3 +953,255 @@ func TestE2ENodeRestartAndEpochInterruption(t *testing.T) {
 
 	t.Logf("Crash recovery successfully verified: recovered active share at epoch %d with correct state", recMeta.Epoch)
 }
+
+// TestE2ERandomizedABBAConflictingProposals15Nodes tests the randomized Asynchronous Byzantine Agreement
+// protocol resolving conflicting valid proposals across 15 nodes with a threshold common coin.
+func TestE2ERandomizedABBAConflictingProposals15Nodes(t *testing.T) {
+	n := 15
+	k := 5
+	f := 4 // Byzantine fault bound t = 4, quorum 2t+1 = 9
+
+	tempDir, err := os.MkdirTemp("", "saral-abba-e2e-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	committee := make([]string, n)
+	for i := 0; i < n; i++ {
+		committee[i] = fmt.Sprintf("saral-node-%d", i+1)
+	}
+
+	masterSecret := cryptography.NewFieldElement(987654321)
+	masterBlind := cryptography.NewFieldElement(123456789)
+	masterCommitment := cryptography.PedersenCommitment(masterSecret, masterBlind)
+
+	// Step 1: Dealer generates Epoch 1 sharing
+	dealerPkg, err := avss.GenerateDealerSharing(
+		"init-epoch-1", "comm-abba-15", committee[0], 1, committee, k, masterSecret, masterBlind,
+	)
+	if err != nil {
+		t.Fatalf("dealer sharing failed: %v", err)
+	}
+
+	vaults := make(map[string]*vault.ShareStore)
+	peerCommitments := make(map[string]*cryptography.CurvePoint)
+	epoch1Shares := make(map[string]*cryptography.FieldElement)
+	epoch1BlindShares := make(map[string]*cryptography.FieldElement)
+
+	for idx, id := range committee {
+		nodeVault := filepath.Join(tempDir, id)
+		_ = os.MkdirAll(nodeVault, 0700)
+		ss, _ := vault.NewShareStore(nodeVault, []byte("key-"+id))
+		vaults[id] = ss
+
+		idxFE := cryptography.NewFieldElement(int64(idx + 1))
+		sI := dealerPkg.F.RowPolynomial(idxFE).Coeffs[0]
+		sPrimeI := dealerPkg.FPrime.RowPolynomial(idxFE).Coeffs[0]
+		qI := dealerPkg.CommitmentMatrix.ComputeShareCommitment(idxFE)
+
+		epoch1Shares[id] = sI
+		epoch1BlindShares[id] = sPrimeI
+		peerCommitments[id] = qI
+
+		meta := vault.ShareRecordMetadata{
+			CommitteeID:            "comm-abba-15",
+			SessionID:              "init-epoch-1",
+			NodeID:                 id,
+			NodeIndex:              idx + 1,
+			Epoch:                  1,
+			ShareVersion:           1,
+			State:                  "ACTIVE",
+			PublicShareCommitment:  qI.Hex(),
+			PublicSecretCommitment: masterCommitment.Hex(),
+		}
+		_ = ss.SaveShare(meta, sI, sPrimeI)
+	}
+
+	// Step 2: Initialize RefreshSessions for all 15 nodes
+	refreshSessions := make(map[string]*proactive.RefreshSession)
+	for idx, id := range committee {
+		rs, err := proactive.NewRefreshSession(
+			"comm-abba-15", 1, id, idx+1, committee, k, f,
+			epoch1Shares[id], epoch1BlindShares[id], peerCommitments, masterCommitment,
+		)
+		if err != nil {
+			t.Fatalf("failed init refresh session on %s: %v", id, err)
+		}
+		refreshSessions[id] = rs
+	}
+
+	// Step 3: All 15 nodes deal AVSS subprotocol sharing
+	subPkgs := make(map[string]*avss.DealerPackage)
+	for _, id := range committee {
+		pkg, err := avss.GenerateDealerSharing(
+			"sub-epoch-2-"+id, "comm-abba-15", id, 2, committee, k, epoch1Shares[id], epoch1BlindShares[id],
+		)
+		if err != nil {
+			t.Fatalf("subprotocol dealer %s failed: %v", id, err)
+		}
+		subPkgs[id] = pkg
+	}
+
+	for dealerID, pkg := range subPkgs {
+		for recipientID, sendMsg := range pkg.SendMessages {
+			rIdx := avss.NodeIndexInCommittee(committee, recipientID)
+			sess, _ := avss.NewSession(sendMsg.SessionID, "comm-abba-15", dealerID, recipientID, rIdx, 2, n, k, f, committee)
+			_, _ = sess.ProcessSendMessage(sendMsg)
+			_ = sess.FinalizeShare()
+			refreshSessions[recipientID].RecordCompletedSharing(dealerID, sess)
+		}
+	}
+
+	// Step 4: Two conflicting valid candidate sets (both size 9 >= 2t+1)
+	candidateSet1 := committee[:9]
+	candidateSet2 := committee[1:10]
+	hash1 := proactive.HashCandidateSet(candidateSet1)
+	hash2 := proactive.HashCandidateSet(candidateSet2)
+
+	prop1 := &proactive.AgreementProposeMessage{
+		CommitteeID:  "comm-abba-15",
+		Epoch:        2,
+		ProposerID:   committee[0],
+		CandidateSet: candidateSet1,
+	}
+	prop2 := &proactive.AgreementProposeMessage{
+		CommitteeID:  "comm-abba-15",
+		Epoch:        2,
+		ProposerID:   committee[4],
+		CandidateSet: candidateSet2,
+	}
+
+	for _, id := range committee {
+		_, _ = refreshSessions[id].Agreement.ProcessProposal(prop1)
+		_, _ = refreshSessions[id].Agreement.ProcessProposal(prop2)
+	}
+
+	// Step 5: Asymmetric network delivery causing split PRE-VOTEs in Round 1
+	round1Prevotes := make([]*proactive.AgreementVoteMessage, 0)
+	for idx, id := range committee {
+		chosenHash := hash1
+		if idx >= 7 { // nodes 8..15 prefer proposal 2
+			chosenHash = hash2
+		}
+		round1Prevotes = append(round1Prevotes, &proactive.AgreementVoteMessage{
+			CommitteeID:   "comm-abba-15",
+			Epoch:         2,
+			Round:         1,
+			Step:          proactive.StepPreVote,
+			SenderID:      id,
+			CandidateHash: chosenHash,
+			VoteValue:     proactive.VoteAccept,
+		})
+	}
+
+	// Exchange Round 1 PRE-VOTEs
+	round1Mainvotes := make([]*proactive.AgreementVoteMessage, 0)
+	for _, id := range committee {
+		for _, pv := range round1Prevotes {
+			nextVote, _, _, _, _ := refreshSessions[id].Agreement.ProcessVote(pv)
+			if nextVote != nil {
+				round1Mainvotes = append(round1Mainvotes, nextVote)
+			}
+		}
+	}
+
+	// Exchange Round 1 MAIN-VOTEs -> Triggers threshold common coin query
+	coinSharesRound1 := make([]*proactive.AgreementCoinShareMessage, 0)
+	for _, id := range committee {
+		for _, mv := range round1Mainvotes {
+			_, coinMsg, _, _, _ := refreshSessions[id].Agreement.ProcessVote(mv)
+			if coinMsg != nil {
+				coinSharesRound1 = append(coinSharesRound1, coinMsg)
+			}
+		}
+	}
+
+	// Exchange Round 1 Coin Shares -> Resolves tie with threshold common coin!
+	round2Prevotes := make([]*proactive.AgreementVoteMessage, 0)
+	for _, id := range committee {
+		for _, csMsg := range coinSharesRound1 {
+			nextVote, _, _, _ := refreshSessions[id].Agreement.ProcessCoinShare(csMsg)
+			if nextVote != nil {
+				round2Prevotes = append(round2Prevotes, nextVote)
+			}
+		}
+	}
+
+	// Exchange Round 2 PRE-VOTEs (all nodes now aligned by common coin!)
+	round2Mainvotes := make([]*proactive.AgreementVoteMessage, 0)
+	for _, id := range committee {
+		for _, pv := range round2Prevotes {
+			nextVote, _, _, _, _ := refreshSessions[id].Agreement.ProcessVote(pv)
+			if nextVote != nil {
+				round2Mainvotes = append(round2Mainvotes, nextVote)
+			}
+		}
+	}
+
+	// Exchange Round 2 MAIN-VOTEs -> All nodes DECIDE!
+	for _, id := range committee {
+		for _, mv := range round2Mainvotes {
+			_, _, _, _, _ = refreshSessions[id].Agreement.ProcessVote(mv)
+		}
+	}
+
+	// Step 6: Verify Byzantine Agreement Safety and Finalize Refreshed Shares
+	var decidedHash string
+	for _, id := range committee {
+		rs := refreshSessions[id]
+		if !rs.Agreement.IsDecided {
+			t.Fatalf("node %s failed to decide under conflicting proposals with common coin", id)
+		}
+		if decidedHash == "" {
+			decidedHash = rs.Agreement.DecidedHash
+		} else if rs.Agreement.DecidedHash != decidedHash {
+			t.Fatalf("SAFETY VIOLATION: node %s decided %s != %s", id, rs.Agreement.DecidedHash, decidedHash)
+		}
+
+		// Compute refreshed share
+		if err := rs.ComputeNewShare(rs.Agreement.DecidedSet, vaults[id]); err != nil {
+			t.Fatalf("node %s failed computing refreshed share: %v", id, err)
+		}
+	}
+
+	// Step 7: Verify Mathematical Invariance across arbitrary subset of k=5 refreshed shares
+	subsetNodes := []string{"saral-node-2", "saral-node-5", "saral-node-7", "saral-node-11", "saral-node-14"}
+	reconShares := make([]*cryptography.FieldElement, k)
+	reconBlinds := make([]*cryptography.FieldElement, k)
+	xs := make([]*cryptography.FieldElement, k)
+	for i, id := range subsetNodes {
+		rs := refreshSessions[id]
+		reconShares[i] = rs.NewShare
+		reconBlinds[i] = rs.NewBlindShare
+		nodeIndex := avss.NodeIndexInCommittee(committee, id)
+		xs[i] = cryptography.NewFieldElement(int64(nodeIndex))
+	}
+
+	recoveredSecret := cryptography.NewFieldElement(0)
+	recoveredBlind := cryptography.NewFieldElement(0)
+	xTarget := cryptography.NewFieldElement(0)
+
+	for i := 0; i < k; i++ {
+		lambdaI, err := cryptography.LagrangeCoefficient(xTarget, xs[i], xs)
+		if err != nil {
+			t.Fatalf("Lagrange coeff failed: %v", err)
+		}
+		recoveredSecret = recoveredSecret.Add(lambdaI.Mul(reconShares[i]))
+		recoveredBlind = recoveredBlind.Add(lambdaI.Mul(reconBlinds[i]))
+	}
+
+	if !recoveredSecret.Equal(masterSecret) {
+		t.Fatalf("SECRET INVARIANCE BROKEN: recovered %s != original %s", recoveredSecret.Hex(), masterSecret.Hex())
+	}
+	if !recoveredBlind.Equal(masterBlind) {
+		t.Fatalf("blind secret mismatch")
+	}
+
+	reconCommit := cryptography.PedersenCommitment(recoveredSecret, recoveredBlind)
+	if !reconCommit.Equal(masterCommitment) {
+		t.Fatalf("secret commitment mismatch after proactive refresh")
+	}
+
+	t.Logf("15-node randomized ABBA agreement with common coin, conflicting proposals, and secret invariance SUCCESSFUL!")
+}

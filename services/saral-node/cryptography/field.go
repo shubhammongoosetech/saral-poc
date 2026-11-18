@@ -10,10 +10,16 @@ import (
 )
 
 var (
-	// OrderQ is the prime group order of NIST P-256.
-	// q = 2^256 - 2^224 + 2^192 + 2^96 - 1
+	// OrderQ is the prime subgroup order N of NIST P-256 (secp256r1).
+	// All scalar arithmetic, polynomial coefficients, secret shares, and blinding factors
+	// are elements of Z_N.
 	// In hex: 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 	OrderQ *big.Int
+
+	// FieldP is the base field prime P of NIST P-256 (P = 2^256 - 2^224 + 2^192 + 2^96 - 1).
+	// In hex: 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
+	// Point coordinates (X, Y) lie in F_P, while scalar multipliers lie in Z_N (OrderQ).
+	FieldP *big.Int
 
 	// Zero and One field constants
 	Zero *big.Int
@@ -28,6 +34,7 @@ var (
 func init() {
 	curve := elliptic.P256()
 	OrderQ = new(big.Int).Set(curve.Params().N)
+	FieldP = new(big.Int).Set(curve.Params().P)
 	Zero = big.NewInt(0)
 	One = big.NewInt(1)
 }

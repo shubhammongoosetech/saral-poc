@@ -271,3 +271,196 @@ func TestAdversarialMaliciousRefreshDealer(t *testing.T) {
 	}
 }
 
+func TestRandomizedAgreement15NodesWithConflictingProposalsAndByzantineFaults(t *testing.T) {
+	n := 15
+	tVal := 4 // up to 4 Byzantine participants
+	quorum := 2*tVal + 1 // 9
+
+	committee := make([]string, n)
+	for i := 0; i < n; i++ {
+		committee[i] = fmt.Sprintf("saral-node-%d", i+1)
+	}
+
+	predicate := func(candidates []string) bool {
+		return len(candidates) >= quorum
+	}
+
+	instances := make(map[string]*proactive.ValidatedAgreementInstance)
+	for _, id := range committee {
+		instances[id] = proactive.NewValidatedAgreementInstance("comm-15-integ", 2, id, committee, n, tVal, quorum, predicate)
+	}
+
+	// Honest Proposal A from saral-node-1 (size 9: nodes 1..9)
+	setA := committee[:9]
+	hashA := proactive.HashCandidateSet(setA)
+	propA := &proactive.AgreementProposeMessage{
+		CommitteeID:  "comm-15-integ",
+		Epoch:        2,
+		ProposerID:   committee[0],
+		CandidateSet: setA,
+	}
+
+	// Honest Proposal B from saral-node-5 (size 9: nodes 2..10)
+	setB := committee[1:10]
+	hashB := proactive.HashCandidateSet(setB)
+	propB := &proactive.AgreementProposeMessage{
+		CommitteeID:  "comm-15-integ",
+		Epoch:        2,
+		ProposerID:   committee[4],
+		CandidateSet: setB,
+	}
+
+	// Malicious Proposal from Byzantine saral-node-12 (< quorum 9)
+	setBad := committee[:5]
+	propBad := &proactive.AgreementProposeMessage{
+		CommitteeID:  "comm-15-integ",
+		Epoch:        2,
+		ProposerID:   committee[11],
+		CandidateSet: setBad,
+	}
+
+	// 1. Verify honest nodes strictly reject the undersized Byzantine proposal
+	_, err := instances[committee[0]].ProcessProposal(propBad)
+	if err == nil {
+		t.Fatalf("honest node accepted invalid proposal from Byzantine participant")
+	}
+
+	// 2. Deliver valid proposals A and B to honest nodes
+	honestNodes := committee[:11] // 11 honest nodes (n - t = 15 - 4 = 11)
+	for _, id := range honestNodes {
+		_, _ = instances[id].ProcessProposal(propA)
+		_, _ = instances[id].ProcessProposal(propB)
+	}
+
+	// 3. Round 1: Asymmetric PRE-VOTEs (honest nodes split: 5 vote for A, 6 vote for B)
+	round1Prevotes := make([]*proactive.AgreementVoteMessage, 0)
+	for idx, id := range honestNodes {
+		cand := hashA
+		if idx >= 5 {
+			cand = hashB
+		}
+		round1Prevotes = append(round1Prevotes, &proactive.AgreementVoteMessage{
+			CommitteeID:   "comm-15-integ",
+			Epoch:         2,
+			Round:         1,
+			Step:          proactive.StepPreVote,
+			SenderID:      id,
+			CandidateHash: cand,
+			VoteValue:     proactive.VoteAccept,
+		})
+	}
+
+	// 4. Exchange Round 1 PRE-VOTEs among honest nodes
+	round1Mainvotes := make([]*proactive.AgreementVoteMessage, 0)
+	for _, id := range honestNodes {
+		for _, pv := range round1Prevotes {
+			nextVote, _, _, _, err := instances[id].ProcessVote(pv)
+			if err != nil {
+				t.Fatalf("honest node %s failed processing PRE-VOTE: %v", id, err)
+			}
+			if nextVote != nil {
+				round1Mainvotes = append(round1Mainvotes, nextVote)
+			}
+		}
+	}
+
+	// 5. Exchange Round 1 MAIN-VOTEs among honest nodes (split -> generates coin shares)
+	coinSharesRound1 := make([]*proactive.AgreementCoinShareMessage, 0)
+	for _, id := range honestNodes {
+		for _, mv := range round1Mainvotes {
+			_, coinMsg, decided, _, err := instances[id].ProcessVote(mv)
+			if err != nil {
+				t.Fatalf("honest node %s failed processing MAIN-VOTE: %v", id, err)
+			}
+			if decided {
+				// decided in round 1
+			}
+			if coinMsg != nil {
+				coinSharesRound1 = append(coinSharesRound1, coinMsg)
+			}
+		}
+	}
+
+	// Byzantine nodes 12..15 inject corrupted coin shares
+	for bIdx := 11; bIdx < 15; bIdx++ {
+		bID := committee[bIdx]
+		badShare := &cryptography.CoinShare{
+			CommitteeID: "comm-15-integ",
+			NodeID:      bID,
+			NodeIndex:   bIdx + 1,
+			Round:       1,
+			Tag:         instances[committee[0]].SessionTag + ":round:1",
+			SharePoint:  cryptography.GeneratorG, // BOGUS POINT!
+			Proof: &cryptography.DLEQProof{
+				Challenge: cryptography.NewFieldElement(123),
+				Response:  cryptography.NewFieldElement(456),
+			},
+		}
+		coinSharesRound1 = append(coinSharesRound1, &proactive.AgreementCoinShareMessage{
+			CommitteeID: "comm-15-integ",
+			Epoch:       2,
+			Round:       1,
+			SenderID:    bID,
+			CoinShare:   badShare,
+		})
+	}
+
+	// 6. Process coin shares across honest nodes (corrupted shares dropped, honest shares combined)
+	round2Prevotes := make([]*proactive.AgreementVoteMessage, 0)
+	for _, id := range honestNodes {
+		for _, csMsg := range coinSharesRound1 {
+			nextVote, _, _, err := instances[id].ProcessCoinShare(csMsg)
+			if err != nil && err != proactive.ErrInvalidCoinShare {
+				t.Fatalf("unexpected error processing coin share: %v", err)
+			}
+			if nextVote != nil {
+				round2Prevotes = append(round2Prevotes, nextVote)
+			}
+		}
+	}
+
+	// 7. Process Round 2 PRE-VOTEs (all honest nodes now aligned by common coin!)
+	round2Mainvotes := make([]*proactive.AgreementVoteMessage, 0)
+	for _, id := range honestNodes {
+		for _, pv := range round2Prevotes {
+			nextVote, _, _, _, err := instances[id].ProcessVote(pv)
+			if err != nil {
+				t.Fatalf("honest node %s failed processing Round 2 PRE-VOTE: %v", id, err)
+			}
+			if nextVote != nil {
+				round2Mainvotes = append(round2Mainvotes, nextVote)
+			}
+		}
+	}
+
+	// 8. Process Round 2 MAIN-VOTEs -> All honest nodes DECIDE!
+	for _, id := range honestNodes {
+		for _, mv := range round2Mainvotes {
+			_, _, _, _, err := instances[id].ProcessVote(mv)
+			if err != nil {
+				t.Fatalf("honest node %s failed processing Round 2 MAIN-VOTE: %v", id, err)
+			}
+		}
+	}
+
+	// 9. Verify Byzantine Agreement Safety across ALL 11 honest nodes
+	var agreedHash string
+	for _, id := range honestNodes {
+		inst := instances[id]
+		if !inst.IsDecided {
+			t.Fatalf("honest node %s failed to decide after common coin resolution in 15-node committee", id)
+		}
+		if agreedHash == "" {
+			agreedHash = inst.DecidedHash
+		} else if inst.DecidedHash != agreedHash {
+			t.Fatalf("SAFETY VIOLATION in 15-node committee: node %s decided %s != %s",
+				id, inst.DecidedHash, agreedHash)
+		}
+		if !predicate(inst.DecidedSet) {
+			t.Fatalf("decided set failed validity predicate")
+		}
+	}
+	t.Logf("15-node Byzantine Agreement successfully decided on proposal %s across all 11 honest nodes!", agreedHash)
+}
+
+

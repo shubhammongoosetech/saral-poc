@@ -180,6 +180,30 @@ func main() {
 		return proactiveMgr.HandleAgreementReady(&readyMsg)
 	})
 
+	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementVote, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var voteMsg proactive.AgreementVoteMessage
+		if err := json.Unmarshal(rawBytes, &voteMsg); err != nil {
+			return err
+		}
+		return proactiveMgr.HandleAgreementVote(&voteMsg)
+	})
+
+	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementCoinShare, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var coinMsg proactive.AgreementCoinShareMessage
+		if err := json.Unmarshal(rawBytes, &coinMsg); err != nil {
+			return err
+		}
+		return proactiveMgr.HandleAgreementCoinShare(&coinMsg)
+	})
+
 	// 5. Setup HTTP Routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/node/health", health.NewHandler(idMgr.Identity.NodeID, domain, startTime))

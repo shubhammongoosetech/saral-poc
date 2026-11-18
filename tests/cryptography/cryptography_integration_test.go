@@ -56,5 +56,34 @@ func TestCryptographicTestVectors(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error on point not on curve")
 	}
+
+	// 6. Base field prime P vs Subgroup order N separation
+	expectedPrimeHex := "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff"
+	if hex.EncodeToString(cryptography.FieldP.Bytes()) != expectedPrimeHex {
+		t.Fatalf("unexpected P-256 base field prime P: got %s, want %s",
+			hex.EncodeToString(cryptography.FieldP.Bytes()), expectedPrimeHex)
+	}
+	if cryptography.FieldP.Cmp(cryptography.OrderQ) <= 0 {
+		t.Fatalf("prime P must be strictly greater than order N")
+	}
+	// Passing base field prime P as scalar must fail (P >= N)
+	_, err = cryptography.NewFieldElementFromBigInt(cryptography.FieldP)
+	if err == nil {
+		t.Fatalf("expected error when parsing base field prime P as scalar in Z_N")
+	}
+
+	// 7. Canonical boundary N-1 self-inverse: (N-1)^(-1) == N-1 mod N
+	nMinus1 := new(big.Int).Sub(cryptography.OrderQ, big.NewInt(1))
+	feNMinus1, err := cryptography.NewFieldElementFromBigInt(nMinus1)
+	if err != nil {
+		t.Fatalf("failed to create N-1 scalar: %v", err)
+	}
+	invNMinus1, err := feNMinus1.Inv()
+	if err != nil {
+		t.Fatalf("failed to invert N-1 scalar: %v", err)
+	}
+	if !invNMinus1.Equal(feNMinus1) {
+		t.Fatalf("expected (N-1)^(-1) == N-1, got %s", invNMinus1.Hex())
+	}
 }
 

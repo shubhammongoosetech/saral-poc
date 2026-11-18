@@ -255,3 +255,81 @@ func TestRandomnessProperties(t *testing.T) {
 		t.Fatalf("DeterministicScalar produced identical output for different indices")
 	}
 }
+
+func TestNISTP256OrderVsFieldPrime(t *testing.T) {
+	// Standard NIST P-256 constants
+	expectedOrderHex := "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"
+	expectedPrimeHex := "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff"
+
+	actualOrderHex := cryptography.OrderQ.Text(16)
+	actualPrimeHex := cryptography.FieldP.Text(16)
+
+	if actualOrderHex != expectedOrderHex {
+		t.Fatalf("NIST P-256 group order N mismatch: got %s, want %s", actualOrderHex, expectedOrderHex)
+	}
+	if actualPrimeHex != expectedPrimeHex {
+		t.Fatalf("NIST P-256 base field prime P mismatch: got %s, want %s", actualPrimeHex, expectedPrimeHex)
+	}
+
+	// Verify that P > N
+	if cryptography.FieldP.Cmp(cryptography.OrderQ) <= 0 {
+		t.Fatalf("base field prime P must be strictly greater than subgroup order N on NIST P-256")
+	}
+
+	// Base field prime P must be rejected as scalar (P >= N)
+	_, err := cryptography.NewFieldElementFromBigInt(cryptography.FieldP)
+	if err == nil {
+		t.Fatalf("expected rejection when attempting to use base field prime P as scalar")
+	}
+
+	// Order N must be rejected as scalar (N >= N)
+	_, err = cryptography.NewFieldElementFromBigInt(cryptography.OrderQ)
+	if err == nil {
+		t.Fatalf("expected rejection when attempting to use group order N as scalar")
+	}
+
+	// N - 1 must be accepted
+	nMinus1 := new(big.Int).Sub(cryptography.OrderQ, big.NewInt(1))
+	feNMinus1, err := cryptography.NewFieldElementFromBigInt(nMinus1)
+	if err != nil {
+		t.Fatalf("N - 1 must be accepted as canonical scalar: %v", err)
+	}
+
+	// Mathematical self-inverse property: (N - 1)^2 = (-1)^2 = 1 mod N
+	prod := feNMinus1.Mul(feNMinus1)
+	if !prod.Equal(cryptography.NewFieldElement(1)) {
+		t.Fatalf("(N - 1)^2 != 1 mod N: got %s", prod.Hex())
+	}
+
+	invNMinus1, err := feNMinus1.Inv()
+	if err != nil {
+		t.Fatalf("failed to invert N - 1: %v", err)
+	}
+	if !invNMinus1.Equal(feNMinus1) {
+		t.Fatalf("expected (N - 1)^(-1) == N - 1 mod N, got %s", invNMinus1.Hex())
+	}
+}
+
+func TestHashToCurveProperties(t *testing.T) {
+	pt1, err := cryptography.HashToCurve("saral-test-tag-1")
+	if err != nil {
+		t.Fatalf("HashToCurve failed: %v", err)
+	}
+	if !pt1.IsOnCurve() {
+		t.Fatalf("HashToCurve returned point not on NIST P-256 curve")
+	}
+
+	// Subgroup order check: N * pt1 == point at infinity (0, 0)
+	infPt := pt1.ScalarMult(cryptography.NewFieldElement(0))
+	if infPt.X.Sign() != 0 || infPt.Y.Sign() != 0 {
+		t.Fatalf("0 * pt1 must be point at infinity")
+	}
+
+	pt2, err := cryptography.HashToCurve("saral-test-tag-2")
+	if err != nil {
+		t.Fatalf("HashToCurve failed on second tag: %v", err)
+	}
+	if pt1.Equal(pt2) {
+		t.Fatalf("HashToCurve produced identical point for distinct tags")
+	}
+}

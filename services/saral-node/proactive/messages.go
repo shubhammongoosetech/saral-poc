@@ -6,6 +6,8 @@ const (
 	MessageTypeAgreementPropose = "PROACTIVE_AGREEMENT_PROPOSE"
 	MessageTypeAgreementEcho    = "PROACTIVE_AGREEMENT_ECHO"
 	MessageTypeAgreementReady   = "PROACTIVE_AGREEMENT_READY"
+	MessageTypeAgreementVote    = "PROACTIVE_AGREEMENT_VOTE"
+	MessageTypeAgreementCoinShare = "PROACTIVE_AGREEMENT_COIN_SHARE"
 	MessageTypeRefreshComplete  = "PROACTIVE_REFRESH_COMPLETE"
 	MessageTypeEpochAbort       = "PROACTIVE_EPOCH_ABORT"
 )
@@ -43,6 +45,29 @@ type AgreementReadyMessage struct {
 	SenderID     string `json:"senderId"`
 	ProposalHash string `json:"proposalHash"`
 	Timestamp    int64  `json:"timestamp"`
+}
+
+// AgreementVoteMessage exchanges binary agreement votes (Step 1: PRE-VOTE, Step 2: MAIN-VOTE)
+// in the randomized Asynchronous Byzantine Agreement (ABBA) protocol (CKS00 / CKS05).
+type AgreementVoteMessage struct {
+	CommitteeID   string `json:"committeeId"`
+	Epoch         uint64 `json:"epoch"`
+	Round         int    `json:"round"`
+	Step          int    `json:"step"` // 1: PRE_VOTE, 2: MAIN_VOTE
+	SenderID      string `json:"senderId"`
+	CandidateHash string `json:"candidateHash"`
+	VoteValue     int    `json:"voteValue"` // 0: Reject/Skip, 1: Accept Candidate, -1: Abstain/Split
+	Timestamp     int64  `json:"timestamp"`
+}
+
+// AgreementCoinShareMessage broadcasts a participant's verifiable common-coin share for round r.
+type AgreementCoinShareMessage struct {
+	CommitteeID string                  `json:"committeeId"`
+	Epoch       uint64                  `json:"epoch"`
+	Round       int                     `json:"round"`
+	SenderID    string                  `json:"senderId"`
+	CoinShare   interface{}             `json:"coinShare"`
+	Timestamp   int64                   `json:"timestamp"`
 }
 
 // RefreshCompleteNotification notifies peers that the local node finalized the refresh
