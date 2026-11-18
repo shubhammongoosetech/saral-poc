@@ -1,8 +1,13 @@
 package discovery
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -12,14 +17,15 @@ import (
 )
 
 type NodeState struct {
-	NodeID       string    `json:"nodeId"`
-	Domain       string    `json:"domain"`
-	Endpoint     string    `json:"endpoint"`
-	Status       string    `json:"status"` // HEALTHY | UNREACHABLE | DEGRADED
-	LastChecked  time.Time `json:"lastChecked"`
-	LatencyMs    int64     `json:"latencyMs"`
-	PublicKeyHex string    `json:"publicKeyHex,omitempty"`
-	PeerCount    int       `json:"peerCount"`
+	NodeID          string    `json:"nodeId"`
+	Domain          string    `json:"domain"`
+	Endpoint        string    `json:"endpoint"`
+	Status          string    `json:"status"` // HEALTHY | UNREACHABLE | DEGRADED | UNAPPROVED_NOT_ENROLLED | UNTRUSTED_KEY_MISMATCH
+	LastChecked     time.Time `json:"lastChecked"`
+	LatencyMs       int64     `json:"latencyMs"`
+	PublicKeyHex    string    `json:"publicKeyHex,omitempty"`
+	EncryptionKeyHex string   `json:"encryptionKeyHex,omitempty"`
+	PeerCount       int       `json:"peerCount"`
 }
 
 type PeerCoordinatorState struct {
@@ -31,23 +37,25 @@ type PeerCoordinatorState struct {
 }
 
 type Monitor struct {
-	registry        *membership.NodeRegistry
-	peerCoords      []string
-	nodeStates      map[string]*NodeState
-	peerCoordStates map[string]*PeerCoordinatorState
-	peerNodeStates  map[string]*NodeState
-	mu              sync.RWMutex
-	httpClient      *http.Client
-	stopChan        chan struct{}
+	registry         *membership.NodeRegistry
+	peerCoords       []string
+	nodeStates       map[string]*NodeState
+	peerCoordStates  map[string]*PeerCoordinatorState
+	peerNodeStates   map[string]*NodeState
+	approvedRegistry map[string]membership.ParticipantEntry // Canonical ID -> approved participant
+	mu               sync.RWMutex
+	httpClient       *http.Client
+	stopChan         chan struct{}
 }
 
 func NewMonitor(registry *membership.NodeRegistry, peerCoordinatorURLs []string) *Monitor {
 	m := &Monitor{
-		registry:        registry,
-		peerCoords:      peerCoordinatorURLs,
-		nodeStates:      make(map[string]*NodeState),
-		peerCoordStates: make(map[string]*PeerCoordinatorState),
-		peerNodeStates:  make(map[string]*NodeState),
+		registry:         registry,
+		peerCoords:       peerCoordinatorURLs,
+		nodeStates:       make(map[string]*NodeState),
+		peerCoordStates:  make(map[string]*PeerCoordinatorState),
+		peerNodeStates:   make(map[string]*NodeState),
+		approvedRegistry: make(map[string]membership.ParticipantEntry),
 		httpClient: &http.Client{
 			Timeout: 2 * time.Second,
 		},
@@ -70,7 +78,165 @@ func NewMonitor(registry *membership.NodeRegistry, peerCoordinatorURLs []string)
 		}
 	}
 
+	// Bootstrap approved genesis registry from standard locations
+	genesisPaths := []string{
+		os.Getenv("SARAL_GENESIS_REGISTRY_FILE"),
+		"/run/secrets/saral_genesis_participants",
+		"/run/secrets/saral_genesis_participants.json",
+		"infra/config/genesis_participants.json",
+		"../../infra/config/genesis_participants.json",
+		"../../../infra/config/genesis_participants.json",
+	}
+	for _, p := range genesisPaths {
+		if p != "" {
+			if err := m.LoadApprovedGenesisFile(p); err == nil {
+				log.Printf("[Discovery Monitor] Successfully bootstrapped %d approved participants from %s",
+					len(m.approvedRegistry), p)
+				break
+			}
+		}
+	}
+
 	return m
+}
+
+func (m *Monitor) LoadApprovedGenesisFile(filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+
+	var mapEntries map[string]membership.ParticipantEntry
+	if err := json.Unmarshal(data, &mapEntries); err == nil && len(mapEntries) > 0 {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for k, v := range mapEntries {
+			cID, domain := membership.NormalizeNodeID(k)
+			if v.Domain == "" {
+				v.Domain = domain
+			}
+			v.NodeID = cID
+			if v.ApprovedBy == "" {
+				v.ApprovedBy = "genesis-bootstrap"
+			}
+			if v.EnrolledAt == "" {
+				v.EnrolledAt = time.Now().UTC().Format(time.RFC3339)
+			}
+			m.approvedRegistry[cID] = v
+		}
+		return nil
+	}
+
+	var listEntries []membership.ParticipantEntry
+	if err := json.Unmarshal(data, &listEntries); err == nil && len(listEntries) > 0 {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for _, v := range listEntries {
+			cID, domain := membership.NormalizeNodeID(v.NodeID)
+			if v.Domain == "" {
+				v.Domain = domain
+			}
+			v.NodeID = cID
+			if v.ApprovedBy == "" {
+				v.ApprovedBy = "genesis-bootstrap"
+			}
+			if v.EnrolledAt == "" {
+				v.EnrolledAt = time.Now().UTC().Format(time.RFC3339)
+			}
+			m.approvedRegistry[cID] = v
+		}
+		return nil
+	}
+
+	return errors.New("invalid genesis participants format: expected JSON map or array")
+}
+
+// EnrollParticipant adds or updates an administrator-approved participant
+func (m *Monitor) EnrollParticipant(entry membership.ParticipantEntry, approvedBy string) error {
+	if entry.NodeID == "" {
+		return errors.New("missing nodeId")
+	}
+	canonicalID, domain := membership.NormalizeNodeID(entry.NodeID)
+	if entry.Domain == "" {
+		entry.Domain = domain
+	}
+	entry.NodeID = canonicalID
+
+	if len(entry.PublicKeyHex) != 64 {
+		return fmt.Errorf("invalid Ed25519 public key length: expected 64 hex chars, got %d", len(entry.PublicKeyHex))
+	}
+	if _, err := hex.DecodeString(entry.PublicKeyHex); err != nil {
+		return fmt.Errorf("invalid hex in public key: %w", err)
+	}
+
+	if entry.EncryptionKeyHex != "" {
+		if len(entry.EncryptionKeyHex) != 64 {
+			return fmt.Errorf("invalid X25519 encryption key length: expected 64 hex chars, got %d", len(entry.EncryptionKeyHex))
+		}
+		if _, err := hex.DecodeString(entry.EncryptionKeyHex); err != nil {
+			return fmt.Errorf("invalid hex in encryption key: %w", err)
+		}
+	}
+
+	entry.ApprovedBy = approvedBy
+	entry.EnrolledAt = time.Now().UTC().Format(time.RFC3339)
+
+	m.mu.Lock()
+	m.approvedRegistry[canonicalID] = entry
+	m.mu.Unlock()
+
+	log.Printf("[Discovery Monitor] Successfully enrolled participant %s (%s) approved by %s",
+		canonicalID, entry.Domain, approvedBy)
+	return nil
+}
+
+// ReEnrollParticipant updates an enrolled participant's endpoint or keys without deleting anything
+func (m *Monitor) ReEnrollParticipant(entry membership.ParticipantEntry, approvedBy string) error {
+	canonicalID, domain := membership.NormalizeNodeID(entry.NodeID)
+	if entry.Domain == "" {
+		entry.Domain = domain
+	}
+	entry.NodeID = canonicalID
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	existing, exists := m.approvedRegistry[canonicalID]
+	if !exists {
+		return fmt.Errorf("cannot re-enroll node %s: node is not yet enrolled", canonicalID)
+	}
+
+	if entry.PublicKeyHex != "" {
+		if len(entry.PublicKeyHex) != 64 {
+			return errors.New("invalid public key length")
+		}
+		existing.PublicKeyHex = entry.PublicKeyHex
+	}
+	if entry.EncryptionKeyHex != "" {
+		if len(entry.EncryptionKeyHex) != 64 {
+			return errors.New("invalid encryption key length")
+		}
+		existing.EncryptionKeyHex = entry.EncryptionKeyHex
+	}
+	if entry.Endpoint != "" {
+		existing.Endpoint = entry.Endpoint
+	}
+	existing.ApprovedBy = approvedBy
+	existing.EnrolledAt = time.Now().UTC().Format(time.RFC3339)
+
+	m.approvedRegistry[canonicalID] = existing
+	log.Printf("[Discovery Monitor] Successfully re-enrolled participant %s approved by %s", canonicalID, approvedBy)
+	return nil
+}
+
+func (m *Monitor) GetApprovedRegistry() map[string]membership.ParticipantEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	res := make(map[string]membership.ParticipantEntry, len(m.approvedRegistry))
+	for k, v := range m.approvedRegistry {
+		res[k] = v
+	}
+	return res
 }
 
 func (m *Monitor) Start() {
@@ -137,14 +303,48 @@ func (m *Monitor) pollNode(n membership.NodeInfo) {
 	defer resp.Body.Close()
 
 	var statusResp struct {
-		PublicKeyHex   string `json:"publicKeyHex"`
-		ConnectedPeers int    `json:"connectedPeers"`
-		Status         string `json:"status"`
+		PublicKeyHex        string `json:"publicKeyHex"`
+		EncryptionPubKeyHex string `json:"encryptionPubKeyHex"`
+		ConnectedPeers      int    `json:"connectedPeers"`
+		Status              string `json:"status"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&statusResp); err == nil {
+		canonicalID, _ := membership.NormalizeNodeID(n.NodeID)
+		approved, isApproved := m.approvedRegistry[canonicalID]
+		if !isApproved {
+			state.Status = "UNAPPROVED_NOT_ENROLLED"
+			state.PublicKeyHex = ""
+			state.EncryptionKeyHex = ""
+			state.PeerCount = statusResp.ConnectedPeers
+			return
+		}
+
+		if approved.PublicKeyHex != statusResp.PublicKeyHex {
+			state.Status = "UNTRUSTED_KEY_MISMATCH"
+			state.PublicKeyHex = ""
+			state.EncryptionKeyHex = ""
+			state.PeerCount = statusResp.ConnectedPeers
+			log.Printf("[SECURITY ALERT] Node %s key mismatch! Approved: %s, Reported: %s",
+				canonicalID, approved.PublicKeyHex, statusResp.PublicKeyHex)
+			return
+		}
+
+		if approved.EncryptionKeyHex != "" && statusResp.EncryptionPubKeyHex != "" && approved.EncryptionKeyHex != statusResp.EncryptionPubKeyHex {
+			state.Status = "UNTRUSTED_KEY_MISMATCH"
+			state.PublicKeyHex = ""
+			state.EncryptionKeyHex = ""
+			state.PeerCount = statusResp.ConnectedPeers
+			return
+		}
+
 		state.Status = "HEALTHY"
-		state.PublicKeyHex = statusResp.PublicKeyHex
+		state.PublicKeyHex = approved.PublicKeyHex
+		if approved.EncryptionKeyHex != "" {
+			state.EncryptionKeyHex = approved.EncryptionKeyHex
+		} else {
+			state.EncryptionKeyHex = statusResp.EncryptionPubKeyHex
+		}
 		state.PeerCount = statusResp.ConnectedPeers
 	} else {
 		state.Status = "DEGRADED"
@@ -185,7 +385,7 @@ func (m *Monitor) pollPeerCoordinator(ep string) {
 	}
 	m.mu.Unlock()
 
-	// Query peer nodes to maintain cluster-wide participant registry
+	// Query peer coordinator for authenticated participants
 	regURL := strings.TrimRight(ep, "/") + "/registry/participants"
 	req, err := http.NewRequest("GET", regURL, nil)
 	if err == nil {
@@ -201,12 +401,17 @@ func (m *Monitor) pollPeerCoordinator(ep string) {
 				for k, p := range partResp.Participants {
 					canonicalID, _ := membership.NormalizeNodeID(k)
 					m.peerNodeStates[canonicalID] = &NodeState{
-						NodeID:       canonicalID,
-						Domain:       p.Domain,
-						Endpoint:     p.Endpoint,
-						Status:       "HEALTHY",
-						PublicKeyHex: p.PublicKeyHex,
-						LastChecked:  time.Now(),
+						NodeID:           canonicalID,
+						Domain:           p.Domain,
+						Endpoint:         p.Endpoint,
+						Status:           "HEALTHY",
+						PublicKeyHex:     p.PublicKeyHex,
+						EncryptionKeyHex: p.EncryptionKeyHex,
+						LastChecked:      time.Now(),
+					}
+					// If not present in approvedRegistry, register peer's participant if valid
+					if _, exists := m.approvedRegistry[canonicalID]; !exists && len(p.PublicKeyHex) == 64 {
+						m.approvedRegistry[canonicalID] = p
 					}
 				}
 				m.mu.Unlock()
@@ -237,43 +442,22 @@ func (m *Monitor) GetPeerCoordinatorStates() []PeerCoordinatorState {
 	return res
 }
 
-// GetAuthorizedParticipants returns all known and authenticated participants in cluster
+// GetAuthorizedParticipants returns all approved and verified participants
 func (m *Monitor) GetAuthorizedParticipants() map[string]membership.ParticipantEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	result := make(map[string]membership.ParticipantEntry)
 
-	// Add local nodes
-	for _, s := range m.nodeStates {
-		if s.PublicKeyHex != "" {
-			canonicalID, domain := membership.NormalizeNodeID(s.NodeID)
-			if s.Domain != "" {
-				domain = s.Domain
-			}
-			result[canonicalID] = membership.ParticipantEntry{
-				NodeID:       canonicalID,
-				Domain:       domain,
-				PublicKeyHex: s.PublicKeyHex,
-				Endpoint:     s.Endpoint,
+	for id, entry := range m.approvedRegistry {
+		canonicalID, _ := membership.NormalizeNodeID(id)
+		// Exclude explicitly untrusted nodes
+		if s, ok := m.nodeStates[canonicalID]; ok {
+			if s.Status == "UNTRUSTED_KEY_MISMATCH" || s.Status == "UNAPPROVED_NOT_ENROLLED" {
+				continue
 			}
 		}
-	}
-
-	// Add peer nodes
-	for _, s := range m.peerNodeStates {
-		if s.PublicKeyHex != "" {
-			canonicalID, domain := membership.NormalizeNodeID(s.NodeID)
-			if s.Domain != "" {
-				domain = s.Domain
-			}
-			result[canonicalID] = membership.ParticipantEntry{
-				NodeID:       canonicalID,
-				Domain:       domain,
-				PublicKeyHex: s.PublicKeyHex,
-				Endpoint:     s.Endpoint,
-			}
-		}
+		result[canonicalID] = entry
 	}
 
 	return result

@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -97,6 +98,36 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleGetParticipants(w, r)
+		return
+	}
+
+	// Administrator-approved participant enrollment (Requirement 5)
+	if r.URL.Path == "/registry/enroll" {
+		if !s.validateAdminAuth(r) {
+			http.Error(w, `{"error":"Forbidden: Administrative authorization required"}`, http.StatusForbidden)
+			return
+		}
+		s.handleEnrollParticipant(w, r)
+		return
+	}
+
+	// Dynamic re-enrollment without deleting persistent identity (Requirement 9)
+	if r.URL.Path == "/registry/re-enroll" {
+		if !s.validateAdminAuth(r) {
+			http.Error(w, `{"error":"Forbidden: Administrative authorization required"}`, http.StatusForbidden)
+			return
+		}
+		s.handleReEnrollParticipant(w, r)
+		return
+	}
+
+	// Dynamic credential rotation (Requirement 9)
+	if r.URL.Path == "/auth/rotate" {
+		if !s.validateAdminAuth(r) && !auth.ValidateInternalAuth(r) {
+			http.Error(w, `{"error":"Forbidden: Administrative authorization required"}`, http.StatusForbidden)
+			return
+		}
+		s.handleRotateToken(w, r)
 		return
 	}
 
@@ -532,6 +563,123 @@ func (s *Server) handleGetRelayDeliveryStatus(params json.RawMessage, token stri
 	}
 
 	return rec, nil
+}
+
+func (s *Server) validateAdminAuth(r *http.Request) bool {
+	if auth.ValidateAdminAuth(r) {
+		return true
+	}
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" && s.verifierClient != nil {
+		tokenStr := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+		if tokenStr != "" {
+			res, err := s.verifierClient.VerifyTokenWithRole(tokenStr, "admin")
+			if err == nil && res != nil && res.Valid {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Server) handleEnrollParticipant(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	var entry membership.ParticipantEntry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		http.Error(w, `{"error":"Invalid JSON payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := s.monitor.EnrollParticipant(entry, "admin-api"); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"Enrollment rejected: %s"}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	canonicalID, _ := membership.NormalizeNodeID(entry.NodeID)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"status":   "ENROLLED",
+		"nodeId":   canonicalID,
+		"domain":   entry.Domain,
+		"endpoint": entry.Endpoint,
+	})
+}
+
+func (s *Server) handleReEnrollParticipant(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	var entry membership.ParticipantEntry
+	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+		http.Error(w, `{"error":"Invalid JSON payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := s.monitor.ReEnrollParticipant(entry, "admin-api"); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"Re-enrollment rejected: %s"}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	canonicalID, _ := membership.NormalizeNodeID(entry.NodeID)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"status":   "RE_ENROLLED",
+		"nodeId":   canonicalID,
+		"domain":   entry.Domain,
+		"endpoint": entry.Endpoint,
+	})
+}
+
+func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		NewToken string `json:"newToken"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NewToken == "" {
+		http.Error(w, `{"error":"Invalid request payload: newToken required"}`, http.StatusBadRequest)
+		return
+	}
+	if !auth.RotateToken(req.NewToken) {
+		http.Error(w, `{"error":"Invalid or insecure token rejected"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Propagate rotation to managed domain nodes
+	adminKey := auth.GetAdminKey()
+	nodes := s.registry.GetAllNodes()
+	client := &http.Client{Timeout: 3 * time.Second}
+	for _, n := range nodes {
+		bData, _ := json.Marshal(req)
+		nodeReq, err := http.NewRequest("POST", n.Endpoint+"/auth/rotate", bytes.NewReader(bData))
+		if err == nil {
+			nodeReq.Header.Set("Content-Type", "application/json")
+			if adminKey != "" {
+				nodeReq.Header.Set("X-Admin-Key", adminKey)
+			}
+			for _, tok := range auth.GetAllowedTokens() {
+				nodeReq.Header.Add("X-Saral-Internal-Token", tok)
+			}
+			if resp, err := client.Do(nodeReq); err == nil {
+				resp.Body.Close()
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"status":  "ROTATED",
+		"domain":  string(s.domain),
+	})
 }
 
 func (s *Server) writeError(w http.ResponseWriter, id interface{}, code int, message string) {

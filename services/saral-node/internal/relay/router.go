@@ -65,11 +65,48 @@ func NewRelayRouter(
 
 	// Restore persistent deduplication cache across process restarts
 	r.loadSeenMessagesFromDisk()
+	r.loadGenesisParticipants()
 
 	go r.cleanupLoop()
 	go r.syncParticipantsLoop()
 
 	return r
+}
+
+func (r *RelayRouter) loadGenesisParticipants() {
+	paths := []string{
+		os.Getenv("SARAL_GENESIS_REGISTRY_FILE"),
+		"/run/secrets/saral_genesis_participants",
+		"/run/secrets/saral_genesis_participants.json",
+		"infra/config/genesis_participants.json",
+		"../../infra/config/genesis_participants.json",
+		"../../../infra/config/genesis_participants.json",
+	}
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var mapEntries map[string]membership.ParticipantEntry
+		if err := json.Unmarshal(data, &mapEntries); err == nil && len(mapEntries) > 0 {
+			for _, v := range mapEntries {
+				r.RegisterTrustedParticipant(v)
+			}
+			log.Printf("[Relay Router - %s] Loaded %d genesis participants from %s", r.domain, len(mapEntries), p)
+			return
+		}
+		var listEntries []membership.ParticipantEntry
+		if err := json.Unmarshal(data, &listEntries); err == nil && len(listEntries) > 0 {
+			for _, v := range listEntries {
+				r.RegisterTrustedParticipant(v)
+			}
+			log.Printf("[Relay Router - %s] Loaded %d genesis participants from %s", r.domain, len(listEntries), p)
+			return
+		}
+	}
 }
 
 func (r *RelayRouter) Stop() {
@@ -221,10 +258,24 @@ func (r *RelayRouter) Send(req RelaySendRequest) (*DeliveryRecord, error) {
 		return nil, fmt.Errorf("payload exceeds maximum allowed size (%d bytes > %d limit)", len(rawPayload), MaxPayloadBytes)
 	}
 
-	// Encrypted wire transport
-	encPayload, err := crypto.EncryptPayload(req.Payload)
-	if err != nil {
-		return nil, fmt.Errorf("payload encryption failed: %w", err)
+	// Encrypted wire transport - Destination-specific encryption if target key enrolled
+	r.mu.RLock()
+	destEntry, hasDest := r.trustedParticipants[targetNode]
+	r.mu.RUnlock()
+
+	var encPayload string
+	if hasDest && destEntry.EncryptionKeyHex != "" {
+		var encErr error
+		encPayload, encErr = crypto.EncryptForDestination(destEntry.EncryptionKeyHex, req.Payload)
+		if encErr != nil {
+			return nil, fmt.Errorf("destination payload encryption failed: %w", encErr)
+		}
+	} else {
+		var encErr error
+		encPayload, encErr = crypto.EncryptPayload(req.Payload)
+		if encErr != nil {
+			return nil, fmt.Errorf("payload encryption failed: %w", encErr)
+		}
 	}
 
 	now := time.Now().UnixMilli()
@@ -323,17 +374,21 @@ func (r *RelayRouter) Send(req RelaySendRequest) (*DeliveryRecord, error) {
 		expectedEntry, hasExpected := r.trustedParticipants[targetNode]
 		r.mu.RUnlock()
 
-		verifyKey := ack.RecipientPubKey
-		if len(r.trustedParticipants) > 0 && hasExpected {
-			if ack.RecipientPubKey != expectedEntry.PublicKeyHex {
-				record.State = StateFailed
-				record.Error = fmt.Sprintf("forged ACK recipient public key for %s: expected %s, got %s",
-					targetNode, expectedEntry.PublicKeyHex, ack.RecipientPubKey)
-				record.UpdatedAt = time.Now().UnixMilli()
-				return record, fmt.Errorf("%s", record.Error)
-			}
-			verifyKey = expectedEntry.PublicKeyHex
+		if !hasExpected {
+			record.State = StateFailed
+			record.Error = fmt.Sprintf("untrusted recipient ACK: destination %s not found in participant registry", targetNode)
+			record.UpdatedAt = time.Now().UnixMilli()
+			return record, fmt.Errorf("%s", record.Error)
 		}
+
+		if ack.RecipientPubKey != expectedEntry.PublicKeyHex {
+			record.State = StateFailed
+			record.Error = fmt.Sprintf("forged ACK recipient public key for %s: expected %s, got %s",
+				targetNode, expectedEntry.PublicKeyHex, ack.RecipientPubKey)
+			record.UpdatedAt = time.Now().UnixMilli()
+			return record, fmt.Errorf("%s", record.Error)
+		}
+		verifyKey := expectedEntry.PublicKeyHex
 
 		canonicalAck := CanonicalAckPayload(ack)
 		if !identity.VerifySignature(verifyKey, canonicalAck, ack.RecipientSigHex) {
@@ -471,26 +526,7 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		}
 	}
 
-	// 4. Decrypt payload if encrypted
-	if msg.EncryptedPayload != "" {
-		decrypted, err := crypto.DecryptPayload(msg.EncryptedPayload)
-		if err != nil {
-			return &RelayAck{
-				MessageID:    msg.MessageID,
-				TargetNode:   r.idMgr.Identity.NodeID,
-				TargetDomain: r.domain,
-				SourceNode:   msg.SourceNode,
-				SourceDomain: msg.SourceDomain,
-				Status:       StateFailed,
-				Timestamp:    now,
-				TimestampISO: time.Now().UTC().Format(time.RFC3339),
-				Error:        fmt.Sprintf("payload decryption failed: %v", err),
-			}, nil
-		}
-		msg.Payload = decrypted
-	}
-
-	// 5. Canonical Sender signature verification
+	// 4. Canonical Sender signature verification (validates encrypted wire payload)
 	canonicalPayload := CanonicalMessagePayload(&msg)
 	if !identity.VerifySignature(msg.PublicKeyHex, canonicalPayload, msg.SignatureHex) {
 		return &RelayAck{
@@ -506,52 +542,50 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		}, nil
 	}
 
-	// 6. Strict Participant Registry Verification (NO auto-enrollment!)
+	// 6. Strict Mandatory Participant Registry Verification (NO empty bypass, NO auto-enrollment!)
 	canonicalSender, _ := membership.NormalizeNodeID(msg.SourceNode)
 	r.mu.RLock()
 	trustedEntry, exists := r.trustedParticipants[canonicalSender]
 	r.mu.RUnlock()
 
-	if len(r.trustedParticipants) > 0 {
-		if !exists {
-			return &RelayAck{
-				MessageID:    msg.MessageID,
-				TargetNode:   r.idMgr.Identity.NodeID,
-				TargetDomain: r.domain,
-				SourceNode:   msg.SourceNode,
-				SourceDomain: msg.SourceDomain,
-				Status:       StateFailed,
-				Timestamp:    now,
-				TimestampISO: time.Now().UTC().Format(time.RFC3339),
-				Error:        fmt.Sprintf("unknown peer: sender %s is not in trusted participant registry", msg.SourceNode),
-			}, nil
-		}
-		if trustedEntry.PublicKeyHex != msg.PublicKeyHex {
-			return &RelayAck{
-				MessageID:    msg.MessageID,
-				TargetNode:   r.idMgr.Identity.NodeID,
-				TargetDomain: r.domain,
-				SourceNode:   msg.SourceNode,
-				SourceDomain: msg.SourceDomain,
-				Status:       StateFailed,
-				Timestamp:    now,
-				TimestampISO: time.Now().UTC().Format(time.RFC3339),
-				Error:        fmt.Sprintf("forged sender public key for %s: registered %s, received %s", msg.SourceNode, trustedEntry.PublicKeyHex, msg.PublicKeyHex),
-			}, nil
-		}
-		if trustedEntry.Domain != "" && msg.SourceDomain != "" && !strings.EqualFold(trustedEntry.Domain, msg.SourceDomain) {
-			return &RelayAck{
-				MessageID:    msg.MessageID,
-				TargetNode:   r.idMgr.Identity.NodeID,
-				TargetDomain: r.domain,
-				SourceNode:   msg.SourceNode,
-				SourceDomain: msg.SourceDomain,
-				Status:       StateFailed,
-				Timestamp:    now,
-				TimestampISO: time.Now().UTC().Format(time.RFC3339),
-				Error:        fmt.Sprintf("sender domain mismatch for %s: registered %s, claimed %s", msg.SourceNode, trustedEntry.Domain, msg.SourceDomain),
-			}, nil
-		}
+	if !exists {
+		return &RelayAck{
+			MessageID:    msg.MessageID,
+			TargetNode:   r.idMgr.Identity.NodeID,
+			TargetDomain: r.domain,
+			SourceNode:   msg.SourceNode,
+			SourceDomain: msg.SourceDomain,
+			Status:       StateFailed,
+			Timestamp:    now,
+			TimestampISO: time.Now().UTC().Format(time.RFC3339),
+			Error:        fmt.Sprintf("unknown peer: sender %s is not in trusted participant registry", msg.SourceNode),
+		}, nil
+	}
+	if trustedEntry.PublicKeyHex != msg.PublicKeyHex {
+		return &RelayAck{
+			MessageID:    msg.MessageID,
+			TargetNode:   r.idMgr.Identity.NodeID,
+			TargetDomain: r.domain,
+			SourceNode:   msg.SourceNode,
+			SourceDomain: msg.SourceDomain,
+			Status:       StateFailed,
+			Timestamp:    now,
+			TimestampISO: time.Now().UTC().Format(time.RFC3339),
+			Error:        fmt.Sprintf("forged sender public key for %s: registered %s, received %s", msg.SourceNode, trustedEntry.PublicKeyHex, msg.PublicKeyHex),
+		}, nil
+	}
+	if trustedEntry.Domain != "" && msg.SourceDomain != "" && !strings.EqualFold(trustedEntry.Domain, msg.SourceDomain) {
+		return &RelayAck{
+			MessageID:    msg.MessageID,
+			TargetNode:   r.idMgr.Identity.NodeID,
+			TargetDomain: r.domain,
+			SourceNode:   msg.SourceNode,
+			SourceDomain: msg.SourceDomain,
+			Status:       StateFailed,
+			Timestamp:    now,
+			TimestampISO: time.Now().UTC().Format(time.RFC3339),
+			Error:        fmt.Sprintf("sender domain mismatch for %s: registered %s, claimed %s", msg.SourceNode, trustedEntry.Domain, msg.SourceDomain),
+		}, nil
 	}
 
 	// 7. Deduplication check (Idempotent response)
@@ -578,6 +612,50 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 			TimestampISO: time.Now().UTC().Format(time.RFC3339),
 			Error:        fmt.Sprintf("wrong target node: intended for %s, received by %s", msg.TargetNode, r.idMgr.Identity.NodeID),
 		}, nil
+	}
+
+	// 8b. Decrypt Destination-Specific Authenticated Payload (Requirement 7)
+	if msg.EncryptedPayload != "" {
+		if r.idMgr.GetEncryptionPrivateKey() != nil {
+			decrypted, decErr := crypto.DecryptForDestination(r.idMgr.GetEncryptionPrivateKey(), msg.EncryptedPayload)
+			if decErr == nil {
+				msg.Payload = decrypted
+			} else {
+				// Fallback to legacy cluster decrypt or fail closed
+				decryptedLegacy, legErr := crypto.DecryptPayload(msg.EncryptedPayload)
+				if legErr == nil {
+					msg.Payload = decryptedLegacy
+				} else {
+					return &RelayAck{
+						MessageID:    msg.MessageID,
+						TargetNode:   r.idMgr.Identity.NodeID,
+						TargetDomain: r.domain,
+						SourceNode:   msg.SourceNode,
+						SourceDomain: msg.SourceDomain,
+						Status:       StateFailed,
+						Timestamp:    now,
+						TimestampISO: time.Now().UTC().Format(time.RFC3339),
+						Error:        fmt.Sprintf("destination payload decryption failed (intermediary or key mismatch): %v", decErr),
+					}, nil
+				}
+			}
+		} else {
+			decrypted, decErr := crypto.DecryptPayload(msg.EncryptedPayload)
+			if decErr != nil {
+				return &RelayAck{
+					MessageID:    msg.MessageID,
+					TargetNode:   r.idMgr.Identity.NodeID,
+					TargetDomain: r.domain,
+					SourceNode:   msg.SourceNode,
+					SourceDomain: msg.SourceDomain,
+					Status:       StateFailed,
+					Timestamp:    now,
+					TimestampISO: time.Now().UTC().Format(time.RFC3339),
+					Error:        fmt.Sprintf("payload decryption failed: %v", decErr),
+				}, nil
+			}
+			msg.Payload = decrypted
+		}
 	}
 
 	// 9. Successfully delivered to destination! Create and sign ACK

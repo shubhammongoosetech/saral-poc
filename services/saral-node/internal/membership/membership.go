@@ -18,10 +18,13 @@ type NodeConfig struct {
 }
 
 type ParticipantEntry struct {
-	NodeID       string `json:"nodeId"`
-	Domain       string `json:"domain"`
-	PublicKeyHex string `json:"publicKeyHex"`
-	Endpoint     string `json:"endpoint,omitempty"`
+	NodeID           string `json:"nodeId"`
+	Domain           string `json:"domain"`
+	PublicKeyHex     string `json:"publicKeyHex"`
+	EncryptionKeyHex string `json:"encryptionKeyHex,omitempty"`
+	Endpoint         string `json:"endpoint,omitempty"`
+	EnrolledAt       string `json:"enrolledAt,omitempty"`
+	ApprovedBy       string `json:"approvedBy,omitempty"`
 }
 
 // NormalizeNodeID converts user/test aliases into canonical "saral-foundation-1"

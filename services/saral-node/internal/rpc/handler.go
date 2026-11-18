@@ -37,16 +37,17 @@ type ProbeResponse struct {
 }
 
 type NodeStatusResponse struct {
-	NodeID         string         `json:"nodeId"`
-	Domain         string         `json:"domain"`
-	NodeIndex      int            `json:"nodeIndex"`
-	PublicKeyHex   string         `json:"publicKeyHex"`
-	ConnectedPeers int            `json:"connectedPeers"`
-	TotalPeers     int            `json:"totalPeers"`
-	Peers          []p2p.PeerInfo `json:"peers"`
-	Status         string         `json:"status"`
-	UptimeSec      int64          `json:"uptimeSec"`
-	VaultDirectory string         `json:"vaultDirectory"`
+	NodeID              string         `json:"nodeId"`
+	Domain              string         `json:"domain"`
+	NodeIndex           int            `json:"nodeIndex"`
+	PublicKeyHex        string         `json:"publicKeyHex"`
+	EncryptionPubKeyHex string         `json:"encryptionPubKeyHex,omitempty"`
+	ConnectedPeers      int            `json:"connectedPeers"`
+	TotalPeers          int            `json:"totalPeers"`
+	Peers               []p2p.PeerInfo `json:"peers"`
+	Status              string         `json:"status"`
+	UptimeSec           int64          `json:"uptimeSec"`
+	VaultDirectory      string         `json:"vaultDirectory"`
 }
 
 func RegisterRoutes(
@@ -62,16 +63,17 @@ func RegisterRoutes(
 	mux.HandleFunc("/node/status", func(w http.ResponseWriter, r *http.Request) {
 		peers := p2pMgr.GetPeers()
 		resp := NodeStatusResponse{
-			NodeID:         idMgr.Identity.NodeID,
-			Domain:         domain,
-			NodeIndex:      nodeIndex,
-			PublicKeyHex:   idMgr.Identity.PublicKeyHex,
-			ConnectedPeers: p2pMgr.ConnectedPeerCount(),
-			TotalPeers:     len(peers),
-			Peers:          peers,
-			Status:         "ACTIVE",
-			UptimeSec:      int64(time.Since(startTime).Seconds()),
-			VaultDirectory: idMgr.GetVaultPath(),
+			NodeID:              idMgr.Identity.NodeID,
+			Domain:              domain,
+			NodeIndex:           nodeIndex,
+			PublicKeyHex:        idMgr.Identity.PublicKeyHex,
+			EncryptionPubKeyHex: idMgr.GetEncryptionPublicKeyHex(),
+			ConnectedPeers:      p2pMgr.ConnectedPeerCount(),
+			TotalPeers:          len(peers),
+			Peers:               peers,
+			Status:              "ACTIVE",
+			UptimeSec:           int64(time.Since(startTime).Seconds()),
+			VaultDirectory:      idMgr.GetVaultPath(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -256,5 +258,56 @@ func RegisterRoutes(
 	mux.HandleFunc("/node/relay/stats", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(relayRouter.GetStats())
+	})
+
+	// /auth/rotate — Dynamic credential rotation (Requirement 9)
+	mux.HandleFunc("/auth/rotate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !auth.ValidateInternalAuth(r) && !auth.ValidateAdminAuth(r) {
+			http.Error(w, `{"error":"Unauthorized rotation request: valid credentials required"}`, http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			NewToken string `json:"newToken"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NewToken == "" {
+			http.Error(w, `{"error":"Invalid request payload: newToken required"}`, http.StatusBadRequest)
+			return
+		}
+		if !auth.RotateToken(req.NewToken) {
+			http.Error(w, `{"error":"Invalid or insecure token rejected"}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"status":  "ROTATED",
+			"nodeId":  idMgr.Identity.NodeID,
+		})
+	})
+
+	// /node/re-enroll — Dynamic re-enrollment without deleting persistent identity (Requirement 9)
+	mux.HandleFunc("/node/re-enroll", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !auth.ValidateInternalAuth(r) && !auth.ValidateAdminAuth(r) {
+			http.Error(w, `{"error":"Unauthorized re-enrollment request"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":             true,
+			"status":              "RE_ENROLLED",
+			"nodeId":              idMgr.Identity.NodeID,
+			"domain":              idMgr.Identity.Domain,
+			"publicKeyHex":        idMgr.Identity.PublicKeyHex,
+			"encryptionPubKeyHex": idMgr.GetEncryptionPublicKeyHex(),
+			"vaultDirectory":      idMgr.GetVaultPath(),
+		})
 	})
 }

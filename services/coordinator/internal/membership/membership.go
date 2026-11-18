@@ -7,11 +7,29 @@ import (
 	"sync"
 )
 
+type DomainType string
+
+const (
+	DomainFoundation DomainType = "FOUNDATION"
+	DomainPublic     DomainType = "PUBLIC"
+	DomainPrivate    DomainType = "PRIVATE"
+)
+
+type NodeInfo struct {
+	NodeID    string     `json:"nodeId"`
+	NodeIndex int        `json:"nodeIndex"`
+	Domain    DomainType `json:"domain"`
+	Endpoint  string     `json:"endpoint"`
+}
+
 type ParticipantEntry struct {
-	NodeID       string `json:"nodeId"`
-	Domain       string `json:"domain"`
-	PublicKeyHex string `json:"publicKeyHex"`
-	Endpoint     string `json:"endpoint,omitempty"`
+	NodeID           string `json:"nodeId"`
+	Domain           string `json:"domain"`
+	PublicKeyHex     string `json:"publicKeyHex"`
+	EncryptionKeyHex string `json:"encryptionKeyHex,omitempty"`
+	Endpoint         string `json:"endpoint,omitempty"`
+	EnrolledAt       string `json:"enrolledAt,omitempty"`
+	ApprovedBy       string `json:"approvedBy,omitempty"`
 }
 
 // NormalizeNodeID converts user/test aliases into canonical "saral-foundation-1"
@@ -55,21 +73,6 @@ func NormalizeNodeID(raw string) (string, string) {
 		return raw, "PRIVATE"
 	}
 	return raw, "UNKNOWN"
-}
-
-type DomainType string
-
-const (
-	DomainFoundation DomainType = "FOUNDATION"
-	DomainPublic     DomainType = "PUBLIC"
-	DomainPrivate    DomainType = "PRIVATE"
-)
-
-type NodeInfo struct {
-	NodeID    string     `json:"nodeId"`
-	NodeIndex int        `json:"nodeIndex"`
-	Domain    DomainType `json:"domain"`
-	Endpoint  string     `json:"endpoint"`
 }
 
 type NodeRegistry struct {

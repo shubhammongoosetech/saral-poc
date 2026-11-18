@@ -95,3 +95,4 @@ func DecryptPayload(cipherHex string) (map[string]interface{}, error) {
 
 	return payload, nil
 }
+

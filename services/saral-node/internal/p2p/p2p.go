@@ -236,17 +236,15 @@ func (m *P2PManager) pingPeer(endpoint string) {
 	// 2. Strict Enrollment Check: Verify receiver identity against pre-enrolled registry
 	canonicalReceiver, _ := membership.NormalizeNodeID(ack.ReceiverID)
 	trusted, hasKey := m.trustedParticipants[canonicalReceiver]
-	if len(m.trustedParticipants) > 0 {
-		if !hasKey {
-			info.Connected = false
-			info.Status = "UNTRUSTED_UNKNOWN_PEER"
-			return
-		}
-		if trusted.PublicKeyHex != ack.PublicKeyHex {
-			info.Connected = false
-			info.Status = "UNTRUSTED_KEY_MISMATCH"
-			return
-		}
+	if !hasKey {
+		info.Connected = false
+		info.Status = "UNTRUSTED_UNKNOWN_PEER"
+		return
+	}
+	if trusted.PublicKeyHex != ack.PublicKeyHex {
+		info.Connected = false
+		info.Status = "UNTRUSTED_KEY_MISMATCH"
+		return
 	}
 
 	// Update peer status
@@ -290,24 +288,22 @@ func (m *P2PManager) HandleIncomingPing(ping PingMessage) (*PingAck, error) {
 	}
 	m.seenNonces[ping.Nonce] = now + (60 * 1000) // keep for 60 seconds
 
-	// 5. Trusted participant registry verification (NO auto-enrollment!)
+	// 5. Strict Mandatory participant registry verification (NO empty-registry bypass, NO auto-enrollment!)
 	canonicalSender, _ := membership.NormalizeNodeID(ping.SenderID)
 	trusted, exists := m.trustedParticipants[canonicalSender]
-	if len(m.trustedParticipants) > 0 {
-		if !exists {
-			m.mu.Unlock()
-			return nil, fmt.Errorf("unknown peer: sender %s is not in trusted participant registry", ping.SenderID)
-		}
-		if trusted.PublicKeyHex != ping.PublicKeyHex {
-			m.mu.Unlock()
-			return nil, fmt.Errorf("participant key mismatch for %s: registered %s, received %s",
-				ping.SenderID, trusted.PublicKeyHex, ping.PublicKeyHex)
-		}
-		if trusted.Domain != "" && ping.Domain != "" && !strings.EqualFold(trusted.Domain, ping.Domain) {
-			m.mu.Unlock()
-			return nil, fmt.Errorf("participant domain mismatch for %s: registered %s, received %s",
-				ping.SenderID, trusted.Domain, ping.Domain)
-		}
+	if !exists {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("unknown peer: sender %s is not in trusted participant registry", ping.SenderID)
+	}
+	if trusted.PublicKeyHex != ping.PublicKeyHex {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("participant key mismatch for %s: registered %s, received %s",
+			ping.SenderID, trusted.PublicKeyHex, ping.PublicKeyHex)
+	}
+	if trusted.Domain != "" && ping.Domain != "" && !strings.EqualFold(trusted.Domain, ping.Domain) {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("participant domain mismatch for %s: registered %s, received %s",
+			ping.SenderID, trusted.Domain, ping.Domain)
 	}
 	m.mu.Unlock()
 

@@ -97,6 +97,56 @@ func (rc *RelayCoordinator) ForwardRelay(msg *RelayMessage) (*RelayAck, error) {
 		}
 	}
 
+	// 2b. Mandatory participant registry verification (Requirement 4)
+	canonicalSource, _ := NormalizeNodeID(msg.SourceNode)
+	authParts := rc.monitor.GetAuthorizedParticipants()
+	if len(authParts) == 0 {
+		errAck := &RelayAck{
+			MessageID:    msg.MessageID,
+			TargetNode:   msg.TargetNode,
+			TargetDomain: msg.TargetDomain,
+			SourceNode:   msg.SourceNode,
+			SourceDomain: msg.SourceDomain,
+			Status:       StateFailed,
+			Timestamp:    now,
+			TimestampISO: time.Now().UTC().Format(time.RFC3339),
+			Error:        "trusted participant registry is empty: peer rejection mandatory",
+		}
+		rc.recordAudit(msg, errAck)
+		return errAck, nil
+	}
+	srcEntry, srcOk := authParts[canonicalSource]
+	if !srcOk {
+		errAck := &RelayAck{
+			MessageID:    msg.MessageID,
+			TargetNode:   msg.TargetNode,
+			TargetDomain: msg.TargetDomain,
+			SourceNode:   msg.SourceNode,
+			SourceDomain: msg.SourceDomain,
+			Status:       StateFailed,
+			Timestamp:    now,
+			TimestampISO: time.Now().UTC().Format(time.RFC3339),
+			Error:        fmt.Sprintf("unknown peer: source %s is not in authorized participant registry", msg.SourceNode),
+		}
+		rc.recordAudit(msg, errAck)
+		return errAck, nil
+	}
+	if msg.PublicKeyHex != "" && srcEntry.PublicKeyHex != msg.PublicKeyHex {
+		errAck := &RelayAck{
+			MessageID:    msg.MessageID,
+			TargetNode:   msg.TargetNode,
+			TargetDomain: msg.TargetDomain,
+			SourceNode:   msg.SourceNode,
+			SourceDomain: msg.SourceDomain,
+			Status:       StateFailed,
+			Timestamp:    now,
+			TimestampISO: time.Now().UTC().Format(time.RFC3339),
+			Error:        fmt.Sprintf("forged sender public key for %s: registered %s, received %s", msg.SourceNode, srcEntry.PublicKeyHex, msg.PublicKeyHex),
+		}
+		rc.recordAudit(msg, errAck)
+		return errAck, nil
+	}
+
 	msg.HopLimit--
 	msg.Hops = append(msg.Hops, coordID)
 	msg.RoutingTrace = append(msg.RoutingTrace, HopTraceRecord{

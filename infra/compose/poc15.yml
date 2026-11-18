@@ -11,6 +11,7 @@ services:
       PORT: 3001
       NODE_ENV: development
       ENABLE_DEV_AUTH: "true"
+    secrets: [saral_admin_key]
     ports:
       - '3001:3001'
     networks:
@@ -95,11 +96,10 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 1
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f2:8001,http://node-p1:8001,http://node-r1:8001
     volumes: ['node_f1_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -116,11 +116,10 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 2
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f1:8001,http://node-f3:8001
     volumes: ['node_f2_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -137,11 +136,10 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 3
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f2:8001,http://node-f4:8001
     volumes: ['node_f3_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -158,11 +156,10 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 4
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f3:8001,http://node-f5:8001
     volumes: ['node_f4_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -179,11 +176,10 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 5
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f4:8001,http://node-f1:8001
     volumes: ['node_f5_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -201,11 +197,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 1
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-f1:8001,http://node-p2:8001,http://node-r1:8001
     volumes: ['node_p1_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -222,11 +217,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 2
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p1:8001,http://node-p3:8001
     volumes: ['node_p2_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -243,11 +237,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 3
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p2:8001,http://node-p4:8001
     volumes: ['node_p3_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -264,11 +257,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 4
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p3:8001,http://node-p5:8001
     volumes: ['node_p4_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -285,11 +277,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 5
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p4:8001,http://node-p1:8001
     volumes: ['node_p5_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -307,11 +298,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 1
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-f1:8001,http://node-p1:8001,http://node-r2:8001
     volumes: ['node_r1_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -328,11 +318,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 2
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r1:8001,http://node-r3:8001
     volumes: ['node_r2_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -349,11 +338,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 3
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r2:8001,http://node-r4:8001
     volumes: ['node_r3_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -370,11 +358,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 4
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r3:8001,http://node-r5:8001
     volumes: ['node_r4_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -391,11 +378,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 5
       PORT: 8001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r4:8001,http://node-r1:8001
     volumes: ['node_r5_vault:/vault']
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -411,10 +397,9 @@ services:
     image: saral-coordinator:v3
     container_name: saral-coord-foundation
     restart: unless-stopped
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     environment:
       PORT: 9001
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       DOMAIN: FOUNDATION
       VERIFIER_URL: http://verifier-foundation:9101
       PEER_COORDINATORS: http://coordinator-public:9002,http://coordinator-private:9003
@@ -438,10 +423,9 @@ services:
     image: saral-coordinator:v3
     container_name: saral-coord-public
     restart: unless-stopped
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     environment:
       PORT: 9002
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       DOMAIN: PUBLIC
       VERIFIER_URL: http://verifier-public:9102
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-private:9003
@@ -465,10 +449,9 @@ services:
     image: saral-coordinator:v3
     container_name: saral-coord-private
     restart: unless-stopped
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
     environment:
       PORT: 9003
-      SARAL_INTERNAL_TOKEN: "saral-mesh-secure-internal-token-v3"
-      SARAL_ENCRYPTION_KEY: "saral-mesh-aes-encryption-key-v3"
       DOMAIN: PRIVATE
       VERIFIER_URL: http://verifier-private:9103
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-public:9002
@@ -531,3 +514,11 @@ volumes:
   node_r3_vault:
   node_r4_vault:
   node_r5_vault:
+
+secrets:
+  saral_internal_token:
+    file: ../secrets/internal_token.secret
+  saral_admin_key:
+    file: ../secrets/admin_key.secret
+  saral_genesis_participants:
+    file: ../config/genesis_participants.json
