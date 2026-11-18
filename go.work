@@ -1,0 +1,8 @@
+go 1.27.4
+
+use (
+	./services/coordinator
+	./services/saral-node
+	./services/verifier
+	./tests/architecture
+)

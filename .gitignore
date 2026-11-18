@@ -2,51 +2,35 @@
 node_modules/
 */node_modules/
 
-# Environment variable files
+# Environment files
 .env
 .env.*
 !.env.example
-backend/.env
-frontend/.env
 
-# Build outputs
+# Build outputs & binaries
 dist/
 */dist/
 build/
-*/build/
+bin/
+*/bin/
+main
+*/main
+services/**/main
 
-# Logs & Debugging
+# Logs & temp
 *.log
-npm-debug.log*
-yarn-debug.log*
 .DS_Store
 
-# Scratch & IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
-*.swo
 
-# SARAL node runtime data (secrets and vault data - never commit)
+# Runtime vault & sensitive secrets (Never commit!)
 .saral*
-data/
-*.vault
-*.sock
-
-# Key material
+vault/
+*.vault/
 *.key
-
-# Coverage reports
-coverage/
-
-# Documentation (Do not push to Git)
-docs/
-*/docs/
-
-# Tests (Do not push to Git)
-tests/
-*/tests/
-test/
-*/test/
-!packages/**/tests/**
-!packages/**/tests
+*.pem
+*.sock
+data/

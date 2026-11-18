@@ -1,39 +1,36 @@
 {
   "name": "saral",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "SARAL — Separation-of-Powers Cryptographic Key Management System",
+  "description": "SARAL Protocol V3 — Separation-of-Powers Cryptographic Key Infrastructure",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "engines": {
-    "node": ">=26.0.0",
-    "npm": ">=11.0.0"
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
   },
   "scripts": {
-    "setup": "npm --prefix backend run db:generate && npm run build",
-    "dev": "concurrently -n BACKEND,FRONTEND -c \"blue,green\" \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
-    "build": "npm run build:sdk && npm --prefix backend run build && npm --prefix frontend run build",
-    "build:sdk": "npm run --workspaces --if-present build",
-    "start": "npm --prefix backend run start:prod",
-    "backend": "npm --prefix backend run dev",
-    "frontend": "npm --prefix frontend run dev",
-    "nodes:start": "npm --prefix backend run nodes:start",
-    "topology:apply": "npm --prefix backend run topology:apply",
-    "test": "npm --prefix backend test && npm run test:sdk",
+    "clean": "rm -rf services/coordinator/bin services/saral-node/bin services/verifier/bin packages/*/dist apps/*/dist",
+    "build:go": "go build -o services/coordinator/bin/coordinator ./services/coordinator/cmd/main.go && go build -o services/verifier/bin/verifier ./services/verifier/cmd/main.go && go build -o services/saral-node/bin/saral-node ./services/saral-node/cmd/main.go",
+    "build:sdk": "npm --prefix packages/saral-sdk run build",
+    "build:apps": "npm --prefix apps/auth-server run build && npm --prefix apps/web run build",
+    "build": "npm run build:go && npm run build:sdk && npm run build:apps",
+    "dev": "concurrently -n AUTH,WEB -c \"blue,green\" \"npm --prefix apps/auth-server run dev\" \"npm --prefix apps/web run dev\"",
+    "test": "npm run test:sdk && npm run test:go",
     "test:sdk": "vitest run",
-    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run build && npm run typecheck:sdk",
-    "typecheck:sdk": "npm run --workspaces --if-present typecheck",
-    "lint": "echo 'Linting complete.'",
-    "db:clear": "npm --prefix backend run db:clear",
-    "changeset": "changeset",
-    "version-packages": "changeset version",
-    "release": "npm run build:sdk && changeset publish"
+    "test:go": "cd tests/architecture && go test -v -timeout 30s ./...",
+    "verify:architecture": "cd tests/architecture && go test -v -timeout 30s ./...",
+    "docker:poc": "docker compose -f infra/compose/poc15.yml up --build -d",
+    "docker:full": "docker compose -f infra/compose/full24.yml up --build -d",
+    "docker:down": "docker compose -f infra/compose/poc15.yml down && docker compose -f infra/compose/full24.yml down",
+    "docker:status": "docker compose -f infra/compose/poc15.yml ps",
+    "typecheck": "npm --prefix apps/auth-server run typecheck && npm --prefix apps/web run typecheck && npx tsc -p packages/saral-sdk/tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "@changesets/cli": "^3.0.3",
     "concurrently": "^9.1.2",
-    "tsup": "^9.0.0",
-    "vitest": "^5.1.0"
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0"
   }
 }

@@ -1,0 +1,352 @@
+services:
+  # ─── Auth Server ─────────────────────────────────────────────────────────
+  auth-server:
+    build:
+      context: ../../apps/auth-server
+      dockerfile: Dockerfile
+    container_name: saral-auth-server
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+    ports:
+      - '3001:3001'
+    networks:
+      - saral-mesh
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:3001/health']
+      interval: 4s
+      timeout: 3s
+      retries: 5
+
+  # ─── Verifiers (Foundation, Public, Private) ───────────────────────────
+  verifier-foundation:
+    build:
+      context: ../../services/verifier
+      dockerfile: Dockerfile
+    container_name: saral-verifier-foundation
+    restart: unless-stopped
+    environment:
+      PORT: 9101
+      DOMAIN: FOUNDATION
+      AUTH_SERVER_URL: http://auth-server:3001
+    ports:
+      - '9101:9101'
+    depends_on:
+      auth-server:
+        condition: service_healthy
+    networks:
+      - saral-mesh
+
+  verifier-public:
+    build:
+      context: ../../services/verifier
+      dockerfile: Dockerfile
+    container_name: saral-verifier-public
+    restart: unless-stopped
+    environment:
+      PORT: 9102
+      DOMAIN: PUBLIC
+      AUTH_SERVER_URL: http://auth-server:3001
+    ports:
+      - '9102:9102'
+    depends_on:
+      auth-server:
+        condition: service_healthy
+    networks:
+      - saral-mesh
+
+  verifier-private:
+    build:
+      context: ../../services/verifier
+      dockerfile: Dockerfile
+    container_name: saral-verifier-private
+    restart: unless-stopped
+    environment:
+      PORT: 9103
+      DOMAIN: PRIVATE
+      AUTH_SERVER_URL: http://auth-server:3001
+    ports:
+      - '9103:9103'
+    depends_on:
+      auth-server:
+        condition: service_healthy
+    networks:
+      - saral-mesh
+
+  # ─── Foundation SARAL Nodes (1 - 5) ──────────────────────────────────
+  node-f1:
+    build: { context: ../../services/saral-node, dockerfile: Dockerfile }
+    image: saral-node:v3
+    container_name: saral-node-f1
+    environment:
+      NODE_ID: saral-foundation-1
+      DOMAIN: FOUNDATION
+      NODE_INDEX: 1
+      PORT: 8001
+      PEER_NODES: http://node-f2:8001,http://node-p1:8001,http://node-r1:8001
+    volumes: ['node_f1_vault:/vault']
+    networks: [saral-mesh]
+
+  node-f2:
+    image: saral-node:v3
+    container_name: saral-node-f2
+    environment:
+      NODE_ID: saral-foundation-2
+      DOMAIN: FOUNDATION
+      NODE_INDEX: 2
+      PORT: 8001
+      PEER_NODES: http://node-f1:8001,http://node-f3:8001
+    volumes: ['node_f2_vault:/vault']
+    networks: [saral-mesh]
+
+  node-f3:
+    image: saral-node:v3
+    container_name: saral-node-f3
+    environment:
+      NODE_ID: saral-foundation-3
+      DOMAIN: FOUNDATION
+      NODE_INDEX: 3
+      PORT: 8001
+      PEER_NODES: http://node-f2:8001,http://node-f4:8001
+    volumes: ['node_f3_vault:/vault']
+    networks: [saral-mesh]
+
+  node-f4:
+    image: saral-node:v3
+    container_name: saral-node-f4
+    environment:
+      NODE_ID: saral-foundation-4
+      DOMAIN: FOUNDATION
+      NODE_INDEX: 4
+      PORT: 8001
+      PEER_NODES: http://node-f3:8001,http://node-f5:8001
+    volumes: ['node_f4_vault:/vault']
+    networks: [saral-mesh]
+
+  node-f5:
+    image: saral-node:v3
+    container_name: saral-node-f5
+    environment:
+      NODE_ID: saral-foundation-5
+      DOMAIN: FOUNDATION
+      NODE_INDEX: 5
+      PORT: 8001
+      PEER_NODES: http://node-f4:8001,http://node-f1:8001
+    volumes: ['node_f5_vault:/vault']
+    networks: [saral-mesh]
+
+  # ─── Public SARAL Nodes (1 - 5) ──────────────────────────────────────
+  node-p1:
+    image: saral-node:v3
+    container_name: saral-node-p1
+    environment:
+      NODE_ID: saral-public-1
+      DOMAIN: PUBLIC
+      NODE_INDEX: 1
+      PORT: 8001
+      PEER_NODES: http://node-f1:8001,http://node-p2:8001,http://node-r1:8001
+    volumes: ['node_p1_vault:/vault']
+    networks: [saral-mesh]
+
+  node-p2:
+    image: saral-node:v3
+    container_name: saral-node-p2
+    environment:
+      NODE_ID: saral-public-2
+      DOMAIN: PUBLIC
+      NODE_INDEX: 2
+      PORT: 8001
+      PEER_NODES: http://node-p1:8001,http://node-p3:8001
+    volumes: ['node_p2_vault:/vault']
+    networks: [saral-mesh]
+
+  node-p3:
+    image: saral-node:v3
+    container_name: saral-node-p3
+    environment:
+      NODE_ID: saral-public-3
+      DOMAIN: PUBLIC
+      NODE_INDEX: 3
+      PORT: 8001
+      PEER_NODES: http://node-p2:8001,http://node-p4:8001
+    volumes: ['node_p3_vault:/vault']
+    networks: [saral-mesh]
+
+  node-p4:
+    image: saral-node:v3
+    container_name: saral-node-p4
+    environment:
+      NODE_ID: saral-public-4
+      DOMAIN: PUBLIC
+      NODE_INDEX: 4
+      PORT: 8001
+      PEER_NODES: http://node-p3:8001,http://node-p5:8001
+    volumes: ['node_p4_vault:/vault']
+    networks: [saral-mesh]
+
+  node-p5:
+    image: saral-node:v3
+    container_name: saral-node-p5
+    environment:
+      NODE_ID: saral-public-5
+      DOMAIN: PUBLIC
+      NODE_INDEX: 5
+      PORT: 8001
+      PEER_NODES: http://node-p4:8001,http://node-p1:8001
+    volumes: ['node_p5_vault:/vault']
+    networks: [saral-mesh]
+
+  # ─── Private SARAL Nodes (1 - 5) ─────────────────────────────────────
+  node-r1:
+    image: saral-node:v3
+    container_name: saral-node-r1
+    environment:
+      NODE_ID: saral-private-1
+      DOMAIN: PRIVATE
+      NODE_INDEX: 1
+      PORT: 8001
+      PEER_NODES: http://node-f1:8001,http://node-p1:8001,http://node-r2:8001
+    volumes: ['node_r1_vault:/vault']
+    networks: [saral-mesh]
+
+  node-r2:
+    image: saral-node:v3
+    container_name: saral-node-r2
+    environment:
+      NODE_ID: saral-private-2
+      DOMAIN: PRIVATE
+      NODE_INDEX: 2
+      PORT: 8001
+      PEER_NODES: http://node-r1:8001,http://node-r3:8001
+    volumes: ['node_r2_vault:/vault']
+    networks: [saral-mesh]
+
+  node-r3:
+    image: saral-node:v3
+    container_name: saral-node-r3
+    environment:
+      NODE_ID: saral-private-3
+      DOMAIN: PRIVATE
+      NODE_INDEX: 3
+      PORT: 8001
+      PEER_NODES: http://node-r2:8001,http://node-r4:8001
+    volumes: ['node_r3_vault:/vault']
+    networks: [saral-mesh]
+
+  node-r4:
+    image: saral-node:v3
+    container_name: saral-node-r4
+    environment:
+      NODE_ID: saral-private-4
+      DOMAIN: PRIVATE
+      NODE_INDEX: 4
+      PORT: 8001
+      PEER_NODES: http://node-r3:8001,http://node-r5:8001
+    volumes: ['node_r4_vault:/vault']
+    networks: [saral-mesh]
+
+  node-r5:
+    image: saral-node:v3
+    container_name: saral-node-r5
+    environment:
+      NODE_ID: saral-private-5
+      DOMAIN: PRIVATE
+      NODE_INDEX: 5
+      PORT: 8001
+      PEER_NODES: http://node-r4:8001,http://node-r1:8001
+    volumes: ['node_r5_vault:/vault']
+    networks: [saral-mesh]
+
+  # ─── Coordinators (Foundation, Public, Private) ────────────────────────
+  coordinator-foundation:
+    build:
+      context: ../../services/coordinator
+      dockerfile: Dockerfile
+    container_name: saral-coord-foundation
+    restart: unless-stopped
+    environment:
+      PORT: 9001
+      DOMAIN: FOUNDATION
+      VERIFIER_URL: http://verifier-foundation:9101
+      PEER_COORDINATORS: http://coordinator-public:9002,http://coordinator-private:9003
+      NODE_ADDRS: http://node-f1:8001,http://node-f2:8001,http://node-f3:8001,http://node-f4:8001,http://node-f5:8001
+    ports:
+      - '9001:9001'
+    depends_on:
+      - verifier-foundation
+    networks:
+      - saral-mesh
+
+  coordinator-public:
+    build:
+      context: ../../services/coordinator
+      dockerfile: Dockerfile
+    container_name: saral-coord-public
+    restart: unless-stopped
+    environment:
+      PORT: 9002
+      DOMAIN: PUBLIC
+      VERIFIER_URL: http://verifier-public:9102
+      PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-private:9003
+      NODE_ADDRS: http://node-p1:8001,http://node-p2:8001,http://node-p3:8001,http://node-p4:8001,http://node-p5:8001
+    ports:
+      - '9002:9002'
+    depends_on:
+      - verifier-public
+    networks:
+      - saral-mesh
+
+  coordinator-private:
+    build:
+      context: ../../services/coordinator
+      dockerfile: Dockerfile
+    container_name: saral-coord-private
+    restart: unless-stopped
+    environment:
+      PORT: 9003
+      DOMAIN: PRIVATE
+      VERIFIER_URL: http://verifier-private:9103
+      PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-public:9002
+      NODE_ADDRS: http://node-r1:8001,http://node-r2:8001,http://node-r3:8001,http://node-r4:8001,http://node-r5:8001
+    ports:
+      - '9003:9003'
+    depends_on:
+      - verifier-private
+    networks:
+      - saral-mesh
+
+  # ─── Web Frontend ──────────────────────────────────────────────────────
+  web:
+    build:
+      context: ../../apps/web
+      dockerfile: Dockerfile
+    container_name: saral-web
+    restart: unless-stopped
+    ports:
+      - '3000:80'
+    depends_on:
+      - auth-server
+      - coordinator-foundation
+    networks:
+      - saral-mesh
+
+networks:
+  saral-mesh:
+    driver: bridge
+
+volumes:
+  node_f1_vault:
+  node_f2_vault:
+  node_f3_vault:
+  node_f4_vault:
+  node_f5_vault:
+  node_p1_vault:
+  node_p2_vault:
+  node_p3_vault:
+  node_p4_vault:
+  node_p5_vault:
+  node_r1_vault:
+  node_r2_vault:
+  node_r3_vault:
+  node_r4_vault:
+  node_r5_vault:
