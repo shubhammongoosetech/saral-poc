@@ -42,7 +42,7 @@ export const BACKEND_CHAINS: Record<string, BackendChainConfig> = {
     type: 'solana',
     curve: 'ed25519',
     signatureScheme: 'eddsa',
-    rpcUrl: 'https://api.devnet.solana.com',
+    rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
     symbol: 'SOL',
     explorerUrl: 'https://explorer.solana.com',
   },

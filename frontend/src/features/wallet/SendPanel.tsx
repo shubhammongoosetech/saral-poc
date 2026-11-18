@@ -197,8 +197,8 @@ export const SendPanel: React.FC<SendPanelProps> = ({
               {network === 'solana-devnet'
                 ? 'Solana Devnet'
                 : network === 'polygon-amoy'
-                ? 'Polygon Amoy'
-                : 'MST Testnet'}
+                  ? 'Polygon Amoy'
+                  : 'MST Testnet'}
             </span>
           </div>
 
@@ -269,7 +269,7 @@ export const SendPanel: React.FC<SendPanelProps> = ({
             options={[
               { value: 'mst-testnet', label: 'MST Testnet (MSTC)' },
               { value: 'solana-devnet', label: 'Solana Devnet (SOL)' },
-              { value: 'polygon-amoy', label: 'Polygon Amoy (MATIC)' },
+              // { value: 'polygon-amoy', label: 'Polygon Amoy (MATIC)' },
             ]}
           />
         </Field>

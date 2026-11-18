@@ -71,27 +71,47 @@ export async function getBalance(address: string, chainOrId?: string): Promise<s
   return balanceWei !== null ? ethers.formatEther(balanceWei) : '0.0000';
 }
 
-export async function getSolanaBalance(address: string): Promise<string> {
-  try {
-    const res = await fetch('https://api.devnet.solana.com', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'getBalance',
-        params: [address.trim()],
-      }),
-    });
-    const data = (await res.json()) as any;
-    const lamports = data?.result?.value;
-    if (typeof lamports === 'number') {
-      return (lamports / 1e9).toFixed(4);
-    }
-    return '0.0000';
-  } catch {
-    return '0.0000';
+let solanaConnection: Connection | null = null;
+
+export function getSolanaConnection(): Connection {
+  if (!solanaConnection) {
+    const chainConfig = getBackendChainConfig('solana-devnet');
+    solanaConnection = new Connection(chainConfig.rpcUrl, 'confirmed');
   }
+  return solanaConnection;
+}
+
+const solanaBalanceCache = new Map<string, string>();
+
+export function updateCachedSolanaBalance(address: string, balance: string): void {
+  solanaBalanceCache.set(address.trim(), balance);
+}
+
+export async function getSolanaBalance(address: string): Promise<string> {
+  const clean = address.trim();
+  if (!clean) return '0.0000';
+
+  try {
+    const connection = getSolanaConnection();
+    const pubkey = new PublicKey(clean);
+    const lamports = await connection.getBalance(pubkey);
+    if (typeof lamports === 'number' && !isNaN(lamports)) {
+      const formatted = (lamports / 1e9).toFixed(4);
+      solanaBalanceCache.set(clean, formatted);
+      return formatted;
+    }
+  } catch (err: any) {
+    console.warn(`[chainService] Live Solana balance lookup for ${clean}:`, err?.message || err);
+  }
+
+  // Fallback: If live fetch failed (e.g. temporary 429 rate limit or timeout),
+  // return last known cached balance if available rather than wiping to '0.0000'
+  const cached = solanaBalanceCache.get(clean);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  return '0.0000';
 }
 
 export async function getAccountNonce(address: string, chainOrId?: string): Promise<number> {
@@ -163,9 +183,8 @@ export async function broadcastSolanaTransaction(
   message: string;
   explorerUrl: string;
 }> {
-  const chainConfig = getBackendChainConfig('solana-devnet');
   const cleanToAddress = toAddress.trim();
-  const connection = new Connection(chainConfig.rpcUrl, 'confirmed');
+  const connection = getSolanaConnection();
 
   try {
     const fromPubkey = keypair.publicKey;
@@ -221,6 +240,14 @@ export async function broadcastSolanaTransaction(
         chain: 'solana-devnet',
       },
     });
+
+    // Update cached balance for the sender
+    const fromPubkeyStr = fromPubkey.toBase58();
+    const prevCached = solanaBalanceCache.get(fromPubkeyStr);
+    if (prevCached) {
+      const remaining = Math.max(0, parseFloat(prevCached) - parseFloat(amount) - 0.000005);
+      solanaBalanceCache.set(fromPubkeyStr, remaining.toFixed(4));
+    }
 
     return {
       txHash: signature,
@@ -417,7 +444,8 @@ export async function fetchIncomingTransactions(
   if ((!chainFilter || chainFilter === 'solana-devnet') && solanaAddress) {
     try {
       const solClean = solanaAddress.trim();
-      const res = await fetch('https://api.devnet.solana.com', {
+      const solRpc = getBackendChainConfig('solana-devnet').rpcUrl;
+      const res = await fetch(solRpc, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(6000),
@@ -433,7 +461,7 @@ export async function fetchIncomingTransactions(
 
       for (const sig of sigs.slice(0, 5)) {
         try {
-          const txRes = await fetch('https://api.devnet.solana.com', {
+          const txRes = await fetch(solRpc, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             signal: AbortSignal.timeout(4000),
