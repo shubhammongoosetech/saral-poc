@@ -9,21 +9,32 @@ import {
   MultiChainAddresses,
 } from '../types/auth';
 
-const AUTH_URL = import.meta.env.VITE_AUTH_SERVER_URL || 'http://localhost:3001';
+function resolveAuthBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    if (import.meta.env.VITE_AUTH_SERVER_URL) {
+      return import.meta.env.VITE_AUTH_SERVER_URL;
+    }
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:3001`;
+  }
+  return import.meta.env.VITE_AUTH_SERVER_URL || 'http://localhost:3001';
+}
 
 class AuthApiClient {
   private token: string | null = null;
 
   constructor() {
-    this.token = localStorage.getItem('saral_session_token');
+    this.token = typeof localStorage !== 'undefined' ? localStorage.getItem('saral_session_token') : null;
   }
 
   public setToken(token: string | null): void {
     this.token = token;
-    if (token) {
-      localStorage.setItem('saral_session_token', token);
-    } else {
-      localStorage.removeItem('saral_session_token');
+    if (typeof localStorage !== 'undefined') {
+      if (token) {
+        localStorage.setItem('saral_session_token', token);
+      } else {
+        localStorage.removeItem('saral_session_token');
+      }
     }
   }
 
@@ -32,7 +43,8 @@ class AuthApiClient {
   }
 
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const url = `${AUTH_URL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+    const baseUrl = resolveAuthBaseUrl();
+    const url = `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...((options.headers as Record<string, string>) || {}),
@@ -43,7 +55,19 @@ class AuthApiClient {
     }
 
     try {
-      const res = await fetch(url, { ...options, headers });
+      let res: Response;
+      try {
+        res = await fetch(url, { ...options, headers });
+      } catch (directErr) {
+        // Automatic resilient fallback to reverse proxy on web host
+        const fallbackUrl = `/${path.replace(/^\/+/, '')}`;
+        if (url !== fallbackUrl && typeof window !== 'undefined') {
+          res = await fetch(fallbackUrl, { ...options, headers });
+        } else {
+          throw directErr;
+        }
+      }
+
       const json = await res.json();
       if (!res.ok || json.success === false) {
         const error: any = new Error(json.error || `HTTP ${res.status}: ${res.statusText}`);

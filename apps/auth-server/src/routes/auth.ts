@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
+import crypto from 'crypto';
 import { KeyManager } from '../auth/token';
 import { DataStore } from '../storage/store';
 import {
@@ -66,7 +67,7 @@ function getAdminSecret(): string | null {
 }
 
 // Health endpoint
-router.get('/health', (_req: Request, res: Response) => {
+const handleHealth = (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
     service: 'saral-auth-server',
@@ -74,7 +75,10 @@ router.get('/health', (_req: Request, res: Response) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
   });
-});
+};
+
+router.get('/health', handleHealth);
+router.get('/auth/health', handleHealth);
 
 const handleTokenIssuance = (req: Request, res: Response) => {
   const isLocalDevEnv =
@@ -194,6 +198,82 @@ router.post('/auth/google', (req: Request, res: Response) => {
     res.status(401).json({ success: false, error: err.message || 'Google authentication failed' });
   }
 });
+
+// GET /auth/google/url
+router.get('/auth/google/url', (_req: Request, res: Response) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID || '558208753253-gr5lji587t11l5m63d5udea4msbvbcds.apps.googleusercontent.com';
+  const callbackUrl = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3001/api/auth/google/callback';
+  const state = crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(16).toString('hex');
+
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
+    clientId
+  )}&redirect_uri=${encodeURIComponent(
+    callbackUrl
+  )}&response_type=code&scope=openid%20email%20profile&state=${state}&nonce=${nonce}`;
+
+  res.json({
+    success: true,
+    authUrl,
+    state,
+    clientIdConfigured: !!process.env.GOOGLE_CLIENT_ID,
+  });
+});
+
+// GET /api/auth/google/callback and /auth/google/callback
+const handleGoogleCallback = async (req: Request, res: Response) => {
+  const code = req.query.code as string;
+  const error = req.query.error as string;
+
+  if (error) {
+    res.redirect(`http://localhost:3000/?error=${encodeURIComponent(error)}`);
+    return;
+  }
+
+  if (!code) {
+    res.status(400).json({ success: false, error: 'Authorization code missing in Google callback' });
+    return;
+  }
+
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientSecret) {
+    // Report missing configuration explicitly
+    res.status(503).json({
+      success: false,
+      error: 'Google OAuth configuration missing: GOOGLE_CLIENT_SECRET is not configured on auth-server.',
+      codeReceived: true,
+    });
+    return;
+  }
+
+  // If secret configured, exchange code for tokens
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID || '558208753253-gr5lji587t11l5m63d5udea4msbvbcds.apps.googleusercontent.com';
+    const callbackUrl = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3001/api/auth/google/callback';
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: callbackUrl,
+        grant_type: 'authorization_code',
+      }),
+    });
+    const tokenData = (await tokenRes.json()) as any;
+    if (!tokenRes.ok || !tokenData.id_token) {
+      throw new Error(tokenData.error_description || 'Failed to exchange authorization code');
+    }
+    const result = verifyGoogleToken(tokenData.id_token);
+    res.redirect(`http://localhost:3000/?token=${encodeURIComponent(result.token)}`);
+  } catch (err: any) {
+    res.redirect(`http://localhost:3000/?error=${encodeURIComponent(err.message)}`);
+  }
+};
+
+router.get('/auth/google/callback', handleGoogleCallback);
+router.get('/api/auth/google/callback', handleGoogleCallback);
 
 // POST /auth/phone/request-otp
 router.post('/auth/phone/request-otp', (req: Request, res: Response) => {

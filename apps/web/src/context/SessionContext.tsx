@@ -126,6 +126,16 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   );
 
   const refreshSession = useCallback(async () => {
+    // Check if redirected from OAuth callback with token
+    if (typeof window !== 'undefined' && window.location.search) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const incomingToken = urlParams.get('token');
+      if (incomingToken) {
+        authApi.setToken(incomingToken);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+
     const token = authApi.getToken();
     if (!token) {
       setGate('anonymous');
@@ -199,21 +209,31 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (user) {
       await evaluateAndResolveGate(user, mfaVerified, true, hasWallet);
+    } else {
+      await refreshSession();
     }
   };
 
   const startWalletCreation = async () => {
-    setGate('loading');
-    const coords = await getCoordinates();
-    const res = await authApi.createWallet(coords.lat, coords.lng);
-    setHasWallet(true);
-    setWallet({
-      walletId: res.walletId,
-      userId: user?.id || '',
-      status: 'READY',
-      addresses: res.addresses,
-    });
-    setGate('ready');
+    // Keep gate as 'creating-wallet' so the animated progress bar stays visible to the user
+    try {
+      const coords = await getCoordinates();
+      const res = await authApi.createWallet(coords.lat, coords.lng);
+      setHasWallet(true);
+      setWallet({
+        walletId: res.walletId,
+        userId: user?.id || '',
+        status: 'READY',
+        addresses: res.addresses,
+      });
+      setGate('ready');
+    } catch (err: any) {
+      if (err.statusCode === 403) {
+        setAccessRestrictionReason(err.message || 'Access denied by Working Policy');
+        setGate('access-restricted');
+      }
+      throw err;
+    }
   };
 
   const retryAccessCheck = async () => {

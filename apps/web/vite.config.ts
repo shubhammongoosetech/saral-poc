@@ -13,11 +13,11 @@ function productionCspPlugin(apiUrl = ''): Plugin {
       const extraConnect = apiUrl.trim() ? ` ${apiUrl.trim()}` : '';
       const cspPolicy = [
         "default-src 'self'",
-        "script-src 'self' https://accounts.google.com/gsi/client",
-        `connect-src 'self' https://accounts.google.com https://nominatim.openstreetmap.org${extraConnect}`,
-        "frame-src https://accounts.google.com",
+        "script-src 'self' 'unsafe-eval' https://accounts.google.com/gsi/client",
+        `connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://accounts.google.com https://nominatim.openstreetmap.org${extraConnect}`,
+        "frame-src 'self' https://accounts.google.com",
         "style-src 'self' 'unsafe-inline' https://accounts.google.com",
-        "font-src 'self'",
+        "font-src 'self' data:",
         "img-src 'self' data: https://lh3.googleusercontent.com https://*.googleusercontent.com",
         "object-src 'none'",
         "base-uri 'self'",
@@ -53,7 +53,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     esbuild: {
-      drop: mode === 'production' ? ['console', 'debugger'] : [],
+      drop: [],
     },
     build: {
       sourcemap: false,

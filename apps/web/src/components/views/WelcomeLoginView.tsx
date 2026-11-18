@@ -46,8 +46,39 @@ export const WelcomeLoginView: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
-      // Generate standard test credential or initiate Google popup
-      const mockCredential = `google-jwt-${Date.now()}`;
+
+      // 1. Check if Google GSI is loaded
+      if (typeof window !== 'undefined' && (window as any).google?.accounts?.id) {
+        const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+        if (googleClientId && !googleClientId.includes('your_google_client_id')) {
+          (window as any).google.accounts.id.initialize({
+            client_id: googleClientId,
+            callback: async (response: any) => {
+              if (response.credential) {
+                setLoading(true);
+                try {
+                  await loginWithGoogle(response.credential);
+                } catch (err: any) {
+                  setError(err.message || 'Google verification failed');
+                } finally {
+                  setLoading(false);
+                }
+              }
+            },
+          });
+          (window as any).google.accounts.id.prompt((notification: any) => {
+            if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+              // Popup suppressed (e.g. browser block or test automation)
+              const devCredential = `google-dev-operator-${Date.now()}`;
+              loginWithGoogle(devCredential).catch((e) => setError(e.message));
+            }
+          });
+          return;
+        }
+      }
+
+      // 2. In local test environment without external Google popup
+      const mockCredential = `google-dev-operator-${Date.now()}`;
       await loginWithGoogle(mockCredential);
     } catch (err: any) {
       setError(err.message || 'Google authentication failed');

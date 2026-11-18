@@ -13,29 +13,29 @@ const STEPS = [
   'Deterministic wallet addresses generated',
 ];
 
-export const WalletCreateProgressView: React.FC<{ onComplete?: () => void }> = () => {
+export const WalletCreateProgressView: React.FC<{ onComplete?: () => void }> = ({ onComplete }) => {
   const { startWalletCreation } = useSession();
 
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const initiatedRef = useRef(false);
 
-  useEffect(() => {
-    if (initiatedRef.current) return;
-    initiatedRef.current = true;
-
-    // Advance step indicators sequentially to provide realistic feedback while calling backend
+  const runCreation = () => {
+    setError(null);
     const interval = setInterval(() => {
       setCurrentStepIndex((prev) => {
         if (prev < STEPS.length - 2) return prev + 1;
         return prev;
       });
-    }, 600);
+    }, 450);
 
     startWalletCreation()
       .then(() => {
         setCurrentStepIndex(STEPS.length - 1);
         clearInterval(interval);
+        setTimeout(() => {
+          if (onComplete) onComplete();
+        }, 800);
       })
       .catch((err) => {
         clearInterval(interval);
@@ -43,7 +43,18 @@ export const WalletCreateProgressView: React.FC<{ onComplete?: () => void }> = (
       });
 
     return () => clearInterval(interval);
+  };
+
+  useEffect(() => {
+    if (initiatedRef.current) return;
+    initiatedRef.current = true;
+    return runCreation();
   }, [startWalletCreation]);
+
+  const handleRetry = () => {
+    setCurrentStepIndex(0);
+    runCreation();
+  };
 
   return (
     <AuthLayout subtitle="Generating institutional-grade distributed key shares across Foundation, Public, and Private domains">
@@ -61,8 +72,17 @@ export const WalletCreateProgressView: React.FC<{ onComplete?: () => void }> = (
         </div>
 
         {error && (
-          <div className="p-3 rounded-xl bg-danger/10 border border-danger/20 text-xs text-danger font-medium">
-            {error}
+          <div className="flex flex-col gap-2.5">
+            <div className="p-3.5 rounded-xl bg-danger/10 border border-danger/20 text-xs text-danger font-medium leading-relaxed">
+              {error}
+            </div>
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="h-10 bg-accent text-accent-contrast rounded-xl text-xs font-semibold hover:bg-accent-hover transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              Retry Wallet Generation ↻
+            </button>
           </div>
         )}
 

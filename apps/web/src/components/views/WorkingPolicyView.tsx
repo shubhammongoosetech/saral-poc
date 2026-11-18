@@ -133,6 +133,33 @@ export const WorkingPolicyView: React.FC = () => {
 
             {timeEnabled && (
               <div className="flex flex-col gap-3 pt-2 border-t border-border/60">
+                {/* Quick Presets */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-muted">Presets:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStartTime('00:00');
+                      setEndTime('23:59');
+                      setDays(['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']);
+                    }}
+                    className="text-[10px] px-2 py-0.5 rounded bg-surface border border-border text-accent font-semibold hover:bg-surface-2 transition-colors cursor-pointer"
+                  >
+                    24/7 Access (Testing)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStartTime('09:00');
+                      setEndTime('18:00');
+                      setDays(['MON', 'TUE', 'WED', 'THU', 'FRI']);
+                    }}
+                    className="text-[10px] px-2 py-0.5 rounded bg-surface border border-border text-muted font-medium hover:text-text transition-colors cursor-pointer"
+                  >
+                    Standard Office
+                  </button>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1">
                     <label className="text-[11px] font-semibold text-muted">Start Time</label>

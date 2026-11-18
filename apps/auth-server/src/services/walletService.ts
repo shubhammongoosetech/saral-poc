@@ -184,7 +184,7 @@ export function deriveMultiChainAddresses(
     .digest();
   const solAddress = encodeBase58(solSeed);
 
-  // 3. Bitcoin Taproot (BIP-340 / BIP-341 / BIP-350 Bech32m)
+  // 3. Bitcoin Taproot (BIP-340 / BIP-341 / BIP-350 Bech32m bc1p...)
   const btcSeed = crypto
     .createHmac('sha256', keyRefs.bitcoin || walletId)
     .update(`${walletId}:bitcoin-taproot:secp256k1`)
@@ -214,7 +214,7 @@ export function deriveMultiChainAddresses(
     },
     bitcoin: {
       blockchain: 'bitcoin',
-      network: 'bitcoin-mainnet',
+      network: 'bitcoin-testnet',
       curve: 'secp256k1',
       address: btcAddress,
       status: 'ACTIVE_VERIFIED',

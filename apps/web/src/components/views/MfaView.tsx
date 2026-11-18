@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSession } from '../../context/SessionContext';
 import { authApi } from '../../services/authApi';
 import { AuthLayout } from '../layout/AuthLayout';
@@ -17,18 +17,32 @@ export const MfaView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [useRecovery, setUseRecovery] = useState(false);
   const [copiedCodes, setCopiedCodes] = useState(false);
+  const enrollInitiatedRef = useRef(false);
 
-  // If not enrolled, initiate enrollment immediately
+  // If not enrolled, initiate enrollment once
   useEffect(() => {
-    if (!mfaEnrolled && !enrollData) {
+    if (!mfaEnrolled && !enrollData && !enrollInitiatedRef.current) {
+      enrollInitiatedRef.current = true;
       setLoading(true);
       authApi
         .enrollMfa()
-        .then((data) => setEnrollData(data))
-        .catch((err) => setError(err.message || 'Failed to initiate MFA enrollment'))
+        .then((data) => {
+          setEnrollData(data);
+          setError(null);
+        })
+        .catch((err) => {
+          setError(err.message || 'Failed to initiate MFA enrollment');
+          enrollInitiatedRef.current = false;
+        })
         .finally(() => setLoading(false));
     }
   }, [mfaEnrolled, enrollData]);
+
+  const selectRecoveryCode = (recoveryCode: string) => {
+    setUseRecovery(true);
+    setCode(recoveryCode);
+    setError(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -116,7 +130,15 @@ export const MfaView: React.FC = () => {
               </div>
               <div className="grid grid-cols-2 gap-1.5 p-2 rounded-lg bg-surface border border-border font-mono text-[11px] text-text text-center select-all">
                 {enrollData.recoveryCodes.map((c, i) => (
-                  <span key={i}>{c}</span>
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => selectRecoveryCode(c)}
+                    title="Click to use this recovery code"
+                    className="p-1 rounded hover:bg-accent/10 hover:text-accent transition-colors cursor-pointer text-center font-mono"
+                  >
+                    {c}
+                  </button>
                 ))}
               </div>
             </div>

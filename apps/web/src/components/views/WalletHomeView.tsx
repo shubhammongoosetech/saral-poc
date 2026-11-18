@@ -44,14 +44,14 @@ export const WalletHomeView: React.FC<{ onNavigateToSettings: () => void }> = ({
     },
     {
       key: 'bitcoin',
-      name: 'Bitcoin Taproot',
-      network: 'bitcoin-mainnet',
+      name: 'Bitcoin Testnet',
+      network: 'bitcoin-testnet',
       badge: 'BIP-340/350',
       curve: 'secp256k1',
-      description: 'BIP-340 even-Y x-only key with BIP-341 output tweak and BIP-350 Bech32m prefix (bc1p...)',
+      description: 'BIP-340 even-Y x-only key with BIP-341 output tweak and BIP-350 Bech32m prefix (tb1p...)',
       address:
         wallet?.addresses?.bitcoin?.address ||
-        'bc1p5d7rjq7g6rd22kyveejm9cfr0nvyt0d47lqwh8crds3w6pdcqugq8nxq0v',
+        'tb1p5d7rjq7g6rd22kyveejm9cfr0nvyt0d47lqwh8crds3w6pdcqugqnx0u7g',
       status: wallet?.addresses?.bitcoin?.status || 'ACTIVE_VERIFIED',
     },
   ];
@@ -73,9 +73,9 @@ export const WalletHomeView: React.FC<{ onNavigateToSettings: () => void }> = ({
                 </span>
               </div>
               <div className="flex items-center gap-3 text-xs text-muted font-mono mt-0.5">
-                <span>User: {user?.id.slice(0, 12)}...</span>
+                <span>User: {(user?.id || 'anonymous').slice(0, 12)}...</span>
                 <span>•</span>
-                <span>Method: {user?.loginMethod}</span>
+                <span>Method: {user?.loginMethod || 'authenticated'}</span>
               </div>
             </div>
           </div>
@@ -98,11 +98,11 @@ export const WalletHomeView: React.FC<{ onNavigateToSettings: () => void }> = ({
               <span className="w-2.5 h-2.5 rounded-full bg-success animate-pulse" />
               <div className="flex flex-col">
                 <span className="text-xs font-bold text-text">
-                  Working Policy Active: {policy.startTime} - {policy.endTime} ({policy.timezone})
+                  Working Policy Active: {policy.startTime} - {policy.endTime} ({policy.timezone || 'Asia/Kolkata'})
                 </span>
                 <span className="text-[11px] text-muted">
-                  Allowed Days: {policy.days.join(', ')}
-                  {policy.locationRestrictionEnabled ? ` • Geofence: ${policy.allowedRegion}` : ''}
+                  Allowed Days: {(Array.isArray(policy?.days) ? policy.days : ['MON', 'TUE', 'WED', 'THU', 'FRI']).join(', ')}
+                  {policy.locationRestrictionEnabled ? ` • Geofence: ${policy.allowedRegion || 'Primary Office'}` : ''}
                 </span>
               </div>
             </div>
