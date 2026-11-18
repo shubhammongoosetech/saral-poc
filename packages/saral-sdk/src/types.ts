@@ -106,3 +106,55 @@ export interface TopologyInfo {
   peerCoordinators: string[];
 }
 
+export type DeliveryState =
+  | 'CREATED'
+  | 'QUEUED'
+  | 'SENT'
+  | 'FORWARDED'
+  | 'DELIVERED'
+  | 'ACKNOWLEDGED'
+  | 'FAILED'
+  | 'EXPIRED';
+
+export interface RelaySendRequest {
+  sourceNode?: string;
+  sourceDomain?: string;
+  targetNode: string;
+  targetDomain?: string;
+  type?: string;
+  payload: Record<string, unknown>;
+  timeoutMs?: number;
+  messageId?: string;
+}
+
+export interface RelayAck {
+  messageId: string;
+  targetNode: string;
+  targetDomain: string;
+  sourceNode: string;
+  sourceDomain: string;
+  status: DeliveryState;
+  timestamp: number;
+  timestampIso?: string;
+  latencyMs: number;
+  recipientSigHex: string;
+  recipientPubKey: string;
+  forwardedBy?: string[];
+  error?: string;
+}
+
+export interface DeliveryRecord {
+  messageId: string;
+  sourceNode: string;
+  sourceDomain: string;
+  targetNode: string;
+  targetDomain: string;
+  state: DeliveryState;
+  createdAt: number;
+  updatedAt: number;
+  hops: string[];
+  ack?: RelayAck;
+  error?: string;
+  retryCount?: number;
+}
+

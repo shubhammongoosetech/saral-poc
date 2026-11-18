@@ -13,6 +13,7 @@ import (
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/identity"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/membership"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/p2p"
+	"github.com/saral-protocol/saral-poc/services/saral-node/internal/relay"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/rpc"
 )
 
@@ -24,6 +25,7 @@ func main() {
 	p2pPortFlag := flag.Int("p2p-port", getEnvInt("P2P_PORT", 28001), "P2P port for peer communications")
 	peersFlag := flag.String("peers", getEnv("PEER_NODES", ""), "Comma-separated peer endpoints")
 	vaultDirFlag := flag.String("vault-dir", getEnv("VAULT_DIR", ""), "Vault directory for persistent identity")
+	coordinatorURLFlag := flag.String("coordinator-url", getEnv("COORDINATOR_URL", ""), "Domain Coordinator URL")
 	flag.Parse()
 
 	domain := strings.ToUpper(*domainFlag)
@@ -56,16 +58,32 @@ func main() {
 	p2pMgr.Start()
 	defer p2pMgr.Stop()
 
-	// 4. Setup HTTP Routes
+	// 4. Initialize Relay Router
+	coordURL := *coordinatorURLFlag
+	if coordURL == "" {
+		domainOffset := 0
+		switch domain {
+		case "PUBLIC":
+			domainOffset = 1
+		case "PRIVATE":
+			domainOffset = 2
+		}
+		coordURL = fmt.Sprintf("http://coordinator-%s:%d", strings.ToLower(domain), 9001+domainOffset)
+	}
+
+	relayRouter := relay.NewRelayRouter(idMgr, domain, p2pMgr, coordURL)
+	defer relayRouter.Stop()
+
+	// 5. Setup HTTP Routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/node/health", health.NewHandler(idMgr.Identity.NodeID, domain, startTime))
 	mux.HandleFunc("/health", health.NewHandler(idMgr.Identity.NodeID, domain, startTime))
 
-	rpc.RegisterRoutes(mux, idMgr, domain, *nodeIndexFlag, p2pMgr, startTime)
+	rpc.RegisterRoutes(mux, idMgr, domain, *nodeIndexFlag, p2pMgr, relayRouter, startTime)
 
 	addr := fmt.Sprintf(":%d", *portFlag)
-	log.Printf("[SARAL Node - %s] Listening at http://localhost%s (P2P Mesh with %d configured peers)",
-		domain, addr, len(cleanedPeers))
+	log.Printf("[SARAL Node - %s] Listening at http://localhost%s (P2P Mesh with %d configured peers, Coordinator: %s)",
+		domain, addr, len(cleanedPeers), *coordinatorURLFlag)
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("SARAL Node server fatal error: %v", err)

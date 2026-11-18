@@ -9,6 +9,7 @@ import (
 
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/identity"
 	"github.com/saral-protocol/saral-poc/services/saral-node/internal/p2p"
+	"github.com/saral-protocol/saral-poc/services/saral-node/internal/relay"
 )
 
 type ProbeRequest struct {
@@ -52,6 +53,7 @@ func RegisterRoutes(
 	domain string,
 	nodeIndex int,
 	p2pMgr *p2p.P2PManager,
+	relayRouter *relay.RelayRouter,
 	startTime time.Time,
 ) {
 	// Status endpoint
@@ -166,5 +168,58 @@ func RegisterRoutes(
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ack)
+	})
+
+	// ─── RELAY ENDPOINTS ───────────────────────────────────────────────────
+
+	// /node/relay/send — Node initiates and sends an authenticated relay message
+	mux.HandleFunc("/node/relay/send", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+
+		var sendReq relay.RelaySendRequest
+		if err := json.NewDecoder(r.Body).Decode(&sendReq); err != nil {
+			http.Error(w, `{"error":"Invalid relay request JSON payload"}`, http.StatusBadRequest)
+			return
+		}
+
+		record, _ := relayRouter.Send(sendReq)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(record)
+	})
+
+	// /node/relay and /p2p/relay — Receives incoming relay messages
+	handleRelayIncoming := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+
+		var msg relay.RelayMessage
+		if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+			http.Error(w, `{"error":"Invalid relay message payload"}`, http.StatusBadRequest)
+			return
+		}
+
+		ack, _ := relayRouter.HandleIncomingRelay(msg)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ack)
+	}
+
+	mux.HandleFunc("/node/relay", handleRelayIncoming)
+	mux.HandleFunc("/p2p/relay", handleRelayIncoming)
+
+	// /node/relay/history — Delivery ledger history
+	mux.HandleFunc("/node/relay/history", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(relayRouter.GetHistory())
+	})
+
+	// /node/relay/stats — Delivery statistics
+	mux.HandleFunc("/node/relay/stats", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(relayRouter.GetStats())
 	})
 }

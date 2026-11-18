@@ -43,6 +43,35 @@ interface NetworkProbeData {
   timestamp: string;
 }
 
+interface RelayAckItem {
+  messageId: string;
+  targetNode: string;
+  targetDomain: string;
+  sourceNode: string;
+  sourceDomain: string;
+  status: string;
+  timestamp: number;
+  latencyMs: number;
+  recipientSigHex?: string;
+  recipientPubKey?: string;
+  forwardedBy?: string[];
+  error?: string;
+}
+
+interface DeliveryRecordItem {
+  messageId: string;
+  sourceNode: string;
+  sourceDomain: string;
+  targetNode: string;
+  targetDomain: string;
+  state: string;
+  createdAt: number;
+  updatedAt: number;
+  hops: string[];
+  ack?: RelayAckItem;
+  error?: string;
+}
+
 interface ProtocolEvent {
   id: string;
   time: string;
@@ -65,6 +94,14 @@ export const App: React.FC = () => {
   const [probing, setProbing] = useState<boolean>(false);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string>('');
+
+  // Relay State
+  const [relaySource, setRelaySource] = useState<string>('saral-foundation-1');
+  const [relayTarget, setRelayTarget] = useState<string>('saral-public-2');
+  const [relayPayloadText, setRelayPayloadText] = useState<string>('{"message":"Hello cross-domain from Foundation to Public"}');
+  const [relaySending, setRelaySending] = useState<boolean>(false);
+  const [lastRelayRecord, setLastRelayRecord] = useState<DeliveryRecordItem | null>(null);
+  const [relayAuditLog, setRelayAuditLog] = useState<DeliveryRecordItem[]>([]);
 
   const addEvent = useCallback((type: ProtocolEvent['type'], message: string) => {
     setEvents((prev) => [
@@ -183,6 +220,73 @@ export const App: React.FC = () => {
       addEvent('ERROR', `Probe error: ${msg}`);
     } finally {
       setProbing(false);
+    }
+  };
+
+  // Dispatch Authenticated Relay Message
+  const handleSendRelay = async () => {
+    setRelaySending(true);
+    addEvent('INFO', `Dispatching relay message: ${relaySource} -> ${relayTarget}...`);
+    try {
+      let token = '';
+      try {
+        const tokenRes = await fetch(`${authUrl}/auth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subject: 'dashboard-relay-operator', role: 'operator' }),
+        });
+        if (tokenRes.ok) {
+          const tData = await tokenRes.json();
+          token = tData.token;
+        }
+      } catch {}
+
+      let parsedPayload: Record<string, unknown> = { message: 'Hello SARAL Relay' };
+      try {
+        parsedPayload = JSON.parse(relayPayloadText);
+      } catch {
+        parsedPayload = { text: relayPayloadText };
+      }
+
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const rpcRes = await fetch(`${coordUrl}/rpc`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'saral_sendRelayMessage',
+          params: {
+            sourceNode: relaySource,
+            targetNode: relayTarget,
+            type: 'RELAY_MESSAGE',
+            payload: parsedPayload,
+            timeoutMs: 10000,
+          },
+        }),
+      });
+
+      const json = await rpcRes.json();
+      if (json.error) {
+        throw new Error(json.error.message);
+      }
+
+      setLastRelayRecord(json.result);
+      setRelayAuditLog((prev) => [json.result, ...prev.slice(0, 49)]);
+
+      const state = json.result.state;
+      const isOk = state === 'ACKNOWLEDGED' || state === 'DELIVERED';
+      addEvent(
+        isOk ? 'INFO' : 'ERROR',
+        `Relay ${json.result.messageId} [${state}]: ${relaySource} -> ${relayTarget} (${json.result.ack?.latencyMs ?? 0}ms latency)`
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addEvent('ERROR', `Relay failed: ${msg}`);
+    } finally {
+      setRelaySending(false);
     }
   };
 
@@ -505,6 +609,250 @@ export const App: React.FC = () => {
               )}
             </div>
           </div>
+        </div>
+
+        {/* ─── DEVELOPER-ONLY RELAY TESTING INTERFACE ─────────────────────────── */}
+        <div style={{ marginTop: '20px', backgroundColor: '#111827', border: '1px solid #1f2937', borderRadius: '8px', padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <div>
+              <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#f3f4f6' }}>
+                ⚡ Authenticated Bidirectional Relay Testing Interface
+              </h2>
+              <p style={{ color: '#94a3b8', fontSize: '12px', margin: '4px 0 0 0' }}>
+                Dispatches cross-domain cryptographically signed messages and validates recipient Ed25519 ACKs
+              </p>
+            </div>
+            {lastRelayRecord && (
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  borderRadius: '9999px',
+                  backgroundColor:
+                    lastRelayRecord.state === 'ACKNOWLEDGED' || lastRelayRecord.state === 'DELIVERED'
+                      ? 'rgba(16, 185, 129, 0.2)'
+                      : 'rgba(239, 68, 68, 0.2)',
+                  color:
+                    lastRelayRecord.state === 'ACKNOWLEDGED' || lastRelayRecord.state === 'DELIVERED'
+                      ? '#34d399'
+                      : '#f87171',
+                  border: `1px solid ${
+                    lastRelayRecord.state === 'ACKNOWLEDGED' || lastRelayRecord.state === 'DELIVERED'
+                      ? '#10b981'
+                      : '#ef4444'
+                  }`,
+                }}
+              >
+                ● {lastRelayRecord.state}
+              </span>
+            )}
+          </div>
+
+          {/* Controls */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr auto', gap: '12px', alignItems: 'flex-end', marginBottom: '16px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px', fontWeight: 500 }}>
+                Source Node
+              </label>
+              <select
+                value={relaySource}
+                onChange={(e) => setRelaySource(e.target.value)}
+                style={{
+                  width: '100%',
+                  backgroundColor: '#182234',
+                  border: '1px solid #334155',
+                  color: '#f8fafc',
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                }}
+              >
+                <optgroup label="Foundation Domain">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <option key={`f-${i}`} value={`saral-foundation-${i}`}>saral-foundation-{i}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Public Domain">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <option key={`p-${i}`} value={`saral-public-${i}`}>saral-public-{i}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Private Domain">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <option key={`r-${i}`} value={`saral-private-${i}`}>saral-private-{i}</option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px', fontWeight: 500 }}>
+                Target Destination Node
+              </label>
+              <select
+                value={relayTarget}
+                onChange={(e) => setRelayTarget(e.target.value)}
+                style={{
+                  width: '100%',
+                  backgroundColor: '#182234',
+                  border: '1px solid #334155',
+                  color: '#f8fafc',
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                }}
+              >
+                <optgroup label="Public Domain">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <option key={`p-${i}`} value={`saral-public-${i}`}>saral-public-{i}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Private Domain">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <option key={`r-${i}`} value={`saral-private-${i}`}>saral-private-{i}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Foundation Domain">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <option key={`f-${i}`} value={`saral-foundation-${i}`}>saral-foundation-{i}</option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '4px', fontWeight: 500 }}>
+                Message Payload (JSON)
+              </label>
+              <input
+                type="text"
+                value={relayPayloadText}
+                onChange={(e) => setRelayPayloadText(e.target.value)}
+                style={{
+                  width: '100%',
+                  backgroundColor: '#182234',
+                  border: '1px solid #334155',
+                  color: '#f8fafc',
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontFamily: 'monospace',
+                }}
+              />
+            </div>
+
+            <div>
+              <button
+                onClick={handleSendRelay}
+                disabled={relaySending}
+                style={{
+                  backgroundColor: '#6366f1',
+                  color: '#ffffff',
+                  border: 'none',
+                  padding: '8px 16px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: relaySending ? 'not-allowed' : 'pointer',
+                  opacity: relaySending ? 0.6 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  height: '34px',
+                }}
+              >
+                {relaySending ? 'Relaying...' : '🚀 Dispatch Message'}
+              </button>
+            </div>
+          </div>
+
+          {/* Active Delivery Result Details */}
+          {lastRelayRecord && (
+            <div style={{ backgroundColor: '#182234', borderRadius: '6px', padding: '12px 14px', marginBottom: '16px', border: '1px solid #2d3748' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                  Message ID: <strong style={{ color: '#38bdf8', fontFamily: 'monospace' }}>{lastRelayRecord.messageId}</strong>
+                </span>
+                <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                  Round-trip Latency: <strong style={{ color: '#fbbf24' }}>{lastRelayRecord.ack?.latencyMs ?? 0} ms</strong>
+                </span>
+              </div>
+
+              {/* Hops Flow */}
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '6px' }}>
+                Verified Routing Hops:
+                <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                  {lastRelayRecord.hops?.map((hop, idx) => (
+                    <span key={idx} style={{ backgroundColor: '#0f172a', padding: '2px 8px', borderRadius: '4px', fontFamily: 'monospace', color: '#cbd5e1' }}>
+                      {idx > 0 && '➔ '}
+                      {hop}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Recipient ACK Evidence */}
+              {lastRelayRecord.ack?.recipientSigHex && (
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '6px', fontFamily: 'monospace' }}>
+                  Recipient Signature (Ed25519 Verified):{' '}
+                  <span style={{ color: '#34d399' }}>{lastRelayRecord.ack.recipientSigHex.substring(0, 32)}...</span>
+                </div>
+              )}
+
+              {lastRelayRecord.error && (
+                <div style={{ color: '#f87171', fontSize: '11px', marginTop: '6px', fontWeight: 600 }}>
+                  Error: {lastRelayRecord.error}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Recent Relay Deliveries Table */}
+          {relayAuditLog.length > 0 && (
+            <div>
+              <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 8px 0', color: '#cbd5e1' }}>
+                Recent Relay Message Ledger
+              </h4>
+              <div style={{ maxHeight: '180px', overflowY: 'auto' }}>
+                <table style={{ width: '100%', fontSize: '11px', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ color: '#9ca3af', borderBottom: '1px solid #1f2937' }}>
+                      <th style={{ padding: '6px 8px' }}>Msg ID</th>
+                      <th style={{ padding: '6px 8px' }}>Source</th>
+                      <th style={{ padding: '6px 8px' }}>Target</th>
+                      <th style={{ padding: '6px 8px' }}>State</th>
+                      <th style={{ padding: '6px 8px' }}>Latency</th>
+                      <th style={{ padding: '6px 8px' }}>Hops</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {relayAuditLog.map((rec, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid #1e293b' }}>
+                        <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#38bdf8' }}>{rec.messageId}</td>
+                        <td style={{ padding: '6px 8px' }}>{rec.sourceNode}</td>
+                        <td style={{ padding: '6px 8px' }}>{rec.targetNode}</td>
+                        <td style={{ padding: '6px 8px' }}>
+                          <span
+                            style={{
+                              color: rec.state === 'ACKNOWLEDGED' || rec.state === 'DELIVERED' ? '#34d399' : '#f87171',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {rec.state}
+                          </span>
+                        </td>
+                        <td style={{ padding: '6px 8px', color: '#fbbf24' }}>{rec.ack?.latencyMs ?? 0} ms</td>
+                        <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#64748b' }}>
+                          {rec.hops?.join(' ➔ ') || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </main>
     </div>

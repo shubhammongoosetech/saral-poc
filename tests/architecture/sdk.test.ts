@@ -36,6 +36,9 @@ describe('SARAL Protocol V3 — Architecture SDK Client', () => {
     expect(typeof client.getPeers).toBe('function');
     expect(typeof client.getTopology).toBe('function');
     expect(typeof client.probeNetwork).toBe('function');
+    expect(typeof client.sendRelayMessage).toBe('function');
+    expect(typeof client.getRelayAuditLog).toBe('function');
+    expect(typeof client.getRelayDeliveryStatus).toBe('function');
     expect(typeof client.authenticate).toBe('function');
   });
 });

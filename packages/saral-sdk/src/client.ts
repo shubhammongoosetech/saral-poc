@@ -9,6 +9,8 @@ import {
   PeerCoordinatorState,
   TopologyInfo,
   CoordinatorStatus,
+  RelaySendRequest,
+  DeliveryRecord,
 } from './types';
 
 export interface SaralClientConfig {
@@ -171,6 +173,27 @@ export class SaralClient {
    */
   public async probeNetwork(coordUrl?: string): Promise<NetworkProbeResponse> {
     return this.rpcCall<NetworkProbeResponse>('saral_probeNetwork', {}, coordUrl);
+  }
+
+  /**
+   * Sends an authenticated bidirectional relay message from a source node to a target node.
+   */
+  public async sendRelayMessage(req: RelaySendRequest, coordUrl?: string): Promise<DeliveryRecord> {
+    return this.rpcCall<DeliveryRecord>('saral_sendRelayMessage', req, coordUrl);
+  }
+
+  /**
+   * Returns recent relay delivery records from the coordinator audit log.
+   */
+  public async getRelayAuditLog(coordUrl?: string): Promise<DeliveryRecord[]> {
+    return this.rpcCall<DeliveryRecord[]>('saral_getRelayAuditLog', {}, coordUrl);
+  }
+
+  /**
+   * Returns the delivery status of a specific relay message by ID.
+   */
+  public async getRelayDeliveryStatus(messageId: string, coordUrl?: string): Promise<DeliveryRecord> {
+    return this.rpcCall<DeliveryRecord>('saral_getRelayDeliveryStatus', { messageId }, coordUrl);
   }
 }
 

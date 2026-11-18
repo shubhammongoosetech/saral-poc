@@ -57,8 +57,11 @@ func main() {
 	verifierClient := relay.NewVerifierClient(*verifierFlag)
 	log.Printf("[SARAL Coordinator - %s] Verifier attached at %s", domain, *verifierFlag)
 
-	// 5. Mount JSON-RPC and Health endpoints
-	rpcServer := rpc.NewServer(domain, registry, monitor, verifierClient, peers)
+	// 5. Initialize Relay Coordinator
+	relayCoord := relay.NewRelayCoordinator(domain, registry, monitor, peers)
+
+	// 6. Mount JSON-RPC and Health endpoints
+	rpcServer := rpc.NewServer(domain, registry, monitor, verifierClient, peers, relayCoord)
 	http.Handle("/", rpcServer)
 	http.Handle("/rpc", rpcServer)
 

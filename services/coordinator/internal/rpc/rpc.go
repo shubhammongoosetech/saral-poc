@@ -45,6 +45,7 @@ type Server struct {
 	nodeClient     *relay.NodeClient
 	peerClient     *relay.PeerCoordinatorClient
 	peerCoords     []string
+	relayCoord     *relay.RelayCoordinator
 }
 
 func NewServer(
@@ -53,6 +54,7 @@ func NewServer(
 	monitor *discovery.Monitor,
 	verifierClient *relay.VerifierClient,
 	peerCoordinatorURLs []string,
+	relayCoord *relay.RelayCoordinator,
 ) *Server {
 	return &Server{
 		domain:         domain,
@@ -62,6 +64,7 @@ func NewServer(
 		nodeClient:     relay.NewNodeClient(),
 		peerClient:     relay.NewPeerCoordinatorClient(),
 		peerCoords:     peerCoordinatorURLs,
+		relayCoord:     relayCoord,
 	}
 }
 
@@ -73,6 +76,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Handle internal coordinator-to-coordinator and node-to-coordinator relay forwarding
+	if r.URL.Path == "/relay/forward" {
+		s.handleRelayForward(w, r)
 		return
 	}
 
@@ -130,6 +139,12 @@ func (s *Server) dispatch(method string, params json.RawMessage, token string) (
 		return s.handleProbeNetwork(params, token)
 	case "saral_probeDomain":
 		return s.handleProbeDomain(params, token)
+	case "saral_sendRelayMessage":
+		return s.handleSendRelayMessage(params, token)
+	case "saral_getRelayAuditLog":
+		return s.handleGetRelayAuditLog(token)
+	case "saral_getRelayDeliveryStatus":
+		return s.handleGetRelayDeliveryStatus(params, token)
 	// Cryptographic Stubs - Explicitly NOT_IMPLEMENTED as per Section 8
 	case "saral_signTransaction", "saral_createWallet", "saral_startDkg", "saral_getPublicKey":
 		return nil, &JsonRpcErr{
@@ -405,6 +420,95 @@ func (s *Server) handleProbeNetwork(params json.RawMessage, token string) (inter
 		"probes":             allProbes,
 		"timestamp":          time.Now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func (s *Server) handleRelayForward(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	internalToken := r.Header.Get("X-Saral-Internal-Token")
+	if authHeader == "" && internalToken == "" {
+		http.Error(w, `{"error":"Unauthorized internal relay RPC"}`, http.StatusUnauthorized)
+		return
+	}
+
+	var msg relay.RelayMessage
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		http.Error(w, `{"error":"Invalid relay payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	ack, _ := s.relayCoord.ForwardRelay(&msg)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(ack)
+}
+
+func (s *Server) handleSendRelayMessage(params json.RawMessage, token string) (interface{}, *JsonRpcErr) {
+	if s.verifierClient != nil {
+		_, err := s.verifierClient.VerifyTokenWithRole(token, "operator")
+		if err != nil {
+			return nil, &JsonRpcErr{
+				Code:    -32001,
+				Message: fmt.Sprintf("Authorization rejected by Verifier: %s", err.Error()),
+			}
+		}
+	}
+
+	var req relay.RelaySendRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, &JsonRpcErr{Code: -32602, Message: "Invalid send relay params"}
+	}
+
+	record, err := s.relayCoord.SendRelay(req)
+	if err != nil && record == nil {
+		return nil, &JsonRpcErr{Code: -32603, Message: err.Error()}
+	}
+
+	return record, nil
+}
+
+func (s *Server) handleGetRelayAuditLog(token string) (interface{}, *JsonRpcErr) {
+	if s.verifierClient != nil {
+		_, err := s.verifierClient.VerifyTokenWithRole(token, "operator")
+		if err != nil {
+			return nil, &JsonRpcErr{
+				Code:    -32001,
+				Message: fmt.Sprintf("Authorization rejected by Verifier: %s", err.Error()),
+			}
+		}
+	}
+
+	return s.relayCoord.GetAuditLog(), nil
+}
+
+func (s *Server) handleGetRelayDeliveryStatus(params json.RawMessage, token string) (interface{}, *JsonRpcErr) {
+	if s.verifierClient != nil {
+		_, err := s.verifierClient.VerifyTokenWithRole(token, "operator")
+		if err != nil {
+			return nil, &JsonRpcErr{
+				Code:    -32001,
+				Message: fmt.Sprintf("Authorization rejected by Verifier: %s", err.Error()),
+			}
+		}
+	}
+
+	var p struct {
+		MessageID string `json:"messageId"`
+	}
+	_ = json.Unmarshal(params, &p)
+	if p.MessageID == "" {
+		return nil, &JsonRpcErr{Code: -32602, Message: "Missing messageId param"}
+	}
+
+	rec := s.relayCoord.GetDeliveryStatus(p.MessageID)
+	if rec == nil {
+		return nil, &JsonRpcErr{Code: -32602, Message: fmt.Sprintf("Message %s not found in audit log", p.MessageID)}
+	}
+
+	return rec, nil
 }
 
 func (s *Server) writeError(w http.ResponseWriter, id interface{}, code int, message string) {
