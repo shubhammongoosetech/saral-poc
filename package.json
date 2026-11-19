@@ -2,7 +2,7 @@
   "name": "saral",
   "version": "3.0.0",
   "private": true,
-  "description": "SARAL Protocol V3 — Separation-of-Powers Cryptographic Key Infrastructure",
+  "description": "SARAL Protocol — Separation-of-Powers Cryptographic Key Infrastructure",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -29,11 +29,11 @@
     "test:crypto-integration": "cd tests/integration && go test -v -timeout 120s ./...",
     "test:all-crypto": "npm run test:crypto && npm run test:avss && npm run test:proactive && npm run test:dkg && npm run test:crypto-integration",
     "verify:architecture": "cd tests/architecture && go test -v -timeout 30s ./...",
-    "docker:build": "docker build -t saral-coordinator:v3 services/coordinator && docker build -t saral-verifier:v3 services/verifier && docker build -t saral-node:v3 services/saral-node && docker build -t saral-auth-server:v3 apps/auth-server && docker build -t saral-web:v3 apps/web",
+    "docker:build": "docker compose -f infra/compose/full24.yml build",
     "docker:poc": "docker compose -f infra/compose/poc15.yml up -d",
     "docker:full": "docker compose -f infra/compose/full24.yml up --build -d",
     "docker:down": "docker compose -f infra/compose/poc15.yml down && docker compose -f infra/compose/full24.yml down",
-    "docker:status": "docker compose -f infra/compose/poc15.yml ps",
+    "docker:status": "docker compose -f infra/compose/full24.yml ps",
     "typecheck": "npm --prefix apps/auth-server run typecheck && npm --prefix apps/web run typecheck && npx tsc -p packages/saral-sdk/tsconfig.json --noEmit"
   },
   "devDependencies": {

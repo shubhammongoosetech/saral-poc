@@ -263,7 +263,7 @@ describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', ()
       // Standards formatting
       expect(run1.mst.address).toMatch(/^0x[a-fA-F0-9]{40}$/);
       expect(run1.solana.address).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
-      expect(run1.bitcoin.address).toMatch(/^bc1p[0-9a-z]{58}$/);
+      expect(run1.bitcoin.address).toMatch(/^tb1p[0-9a-z]{58}$/);
     });
   });
 });

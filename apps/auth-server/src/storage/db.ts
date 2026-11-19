@@ -48,10 +48,15 @@ export async function initPostgres(): Promise<boolean> {
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         type VARCHAR(50) NOT NULL DEFAULT 'totp',
         secret TEXT,
+        totp_secret_encrypted TEXT,
         recovery_codes TEXT[],
+        recovery_codes_hashed TEXT[],
         verified_at TIMESTAMP WITH TIME ZONE,
         CONSTRAINT unique_user_mfa UNIQUE (user_id)
       );
+
+      ALTER TABLE mfa ADD COLUMN IF NOT EXISTS totp_secret_encrypted TEXT;
+      ALTER TABLE mfa ADD COLUMN IF NOT EXISTS recovery_codes_hashed TEXT[];
 
       CREATE TABLE IF NOT EXISTS work_policy (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -63,9 +68,16 @@ export async function initPostgres(): Promise<boolean> {
         lat DOUBLE PRECISION NOT NULL,
         lng DOUBLE PRECISION NOT NULL,
         radius_km DOUBLE PRECISION NOT NULL DEFAULT 25.0,
+        time_restriction_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        location_restriction_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        geofence_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         set_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT unique_user_work_policy UNIQUE (user_id)
       );
+
+      ALTER TABLE work_policy ADD COLUMN IF NOT EXISTS time_restriction_enabled BOOLEAN DEFAULT TRUE;
+      ALTER TABLE work_policy ADD COLUMN IF NOT EXISTS location_restriction_enabled BOOLEAN DEFAULT FALSE;
+      ALTER TABLE work_policy ADD COLUMN IF NOT EXISTS geofence_enabled BOOLEAN DEFAULT FALSE;
 
       CREATE TABLE IF NOT EXISTS otps (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

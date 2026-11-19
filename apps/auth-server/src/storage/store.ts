@@ -241,8 +241,8 @@ export class DataStore {
         this.data.mfa[r.user_id] = {
           userId: r.user_id,
           type: r.type || 'totp',
-          totpSecretEncrypted: r.secret,
-          recoveryCodesHashed: r.recovery_codes || [],
+          totpSecretEncrypted: r.totp_secret_encrypted || r.secret || undefined,
+          recoveryCodesHashed: r.recovery_codes_hashed || r.recovery_codes || [],
           verifiedAt: r.verified_at ? new Date(r.verified_at).toISOString() : undefined,
           updatedAt: new Date().toISOString(),
         };
@@ -253,14 +253,14 @@ export class DataStore {
       for (const r of pRes.rows) {
         this.data.policies[r.user_id] = {
           userId: r.user_id,
-          timeRestrictionEnabled: true,
-          startTime: r.start_time || '09:00',
-          endTime: r.end_time || '18:00',
+          timeRestrictionEnabled: r.time_restriction_enabled !== undefined && r.time_restriction_enabled !== null ? r.time_restriction_enabled : true,
+          startTime: r.start_time || '00:00',
+          endTime: r.end_time || '23:59',
           days: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'],
           timezone: r.timezone || 'Asia/Kolkata',
-          locationRestrictionEnabled: true,
+          locationRestrictionEnabled: r.location_restriction_enabled !== undefined && r.location_restriction_enabled !== null ? r.location_restriction_enabled : (r.geofence_enabled ?? false),
           allowedRegion: r.city,
-          geofenceEnabled: true,
+          geofenceEnabled: r.geofence_enabled !== undefined && r.geofence_enabled !== null ? r.geofence_enabled : false,
           lat: r.lat,
           lng: r.lng,
           radiusMeters: (r.radius_km || 25) * 1000,
@@ -315,14 +315,24 @@ export class DataStore {
     this.persist();
     if (getIsPgConnected()) {
       pgPool.query(
-        `INSERT INTO mfa (user_id, type, secret, recovery_codes, verified_at)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO mfa (user_id, type, secret, totp_secret_encrypted, recovery_codes, recovery_codes_hashed, verified_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (user_id) DO UPDATE SET
            type = EXCLUDED.type,
            secret = EXCLUDED.secret,
+           totp_secret_encrypted = EXCLUDED.totp_secret_encrypted,
            recovery_codes = EXCLUDED.recovery_codes,
+           recovery_codes_hashed = EXCLUDED.recovery_codes_hashed,
            verified_at = EXCLUDED.verified_at;`,
-        [record.userId, record.type, record.totpSecretEncrypted || null, record.recoveryCodesHashed || [], record.verifiedAt || null]
+        [
+          record.userId,
+          record.type,
+          record.totpSecretEncrypted || null,
+          record.totpSecretEncrypted || null,
+          record.recoveryCodesHashed || [],
+          record.recoveryCodesHashed || [],
+          record.verifiedAt || null,
+        ]
       ).catch((e) => console.warn('[PostgreSQL] saveMfa warning:', e.message));
     }
   }
@@ -338,8 +348,8 @@ export class DataStore {
     if (getIsPgConnected()) {
       const radiusKm = policy.radiusMeters ? policy.radiusMeters / 1000 : 25;
       pgPool.query(
-        `INSERT INTO work_policy (user_id, start_time, end_time, timezone, city, lat, lng, radius_km, set_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        `INSERT INTO work_policy (user_id, start_time, end_time, timezone, city, lat, lng, radius_km, time_restriction_enabled, location_restriction_enabled, geofence_enabled, set_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
          ON CONFLICT (user_id) DO UPDATE SET
            start_time = EXCLUDED.start_time,
            end_time = EXCLUDED.end_time,
@@ -348,16 +358,22 @@ export class DataStore {
            lat = EXCLUDED.lat,
            lng = EXCLUDED.lng,
            radius_km = EXCLUDED.radius_km,
+           time_restriction_enabled = EXCLUDED.time_restriction_enabled,
+           location_restriction_enabled = EXCLUDED.location_restriction_enabled,
+           geofence_enabled = EXCLUDED.geofence_enabled,
            set_at = NOW();`,
         [
           policy.userId,
-          policy.startTime || '09:00',
-          policy.endTime || '18:00',
+          policy.startTime || '00:00',
+          policy.endTime || '23:59',
           policy.timezone || 'Asia/Kolkata',
           policy.allowedRegion || 'Indore',
           policy.lat || 22.7196,
           policy.lng || 75.8577,
-          radiusKm
+          radiusKm,
+          policy.timeRestrictionEnabled ?? true,
+          policy.locationRestrictionEnabled ?? false,
+          policy.geofenceEnabled ?? false,
         ]
       ).catch((e) => console.warn('[PostgreSQL] savePolicy warning:', e.message));
     }

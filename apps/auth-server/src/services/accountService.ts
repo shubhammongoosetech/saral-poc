@@ -176,7 +176,7 @@ export function verifyPhoneOtp(
   const wallet = store.getWalletByUserId(user.id);
 
   // Issue temporary primary auth token (mfaVerified: false until MFA completes)
-  const token = keyManager.issueToken(user.id, 'operator');
+  const token = keyManager.issueToken(user.id, 'operator', false);
 
   store.logSecurity({
     id: crypto.randomUUID(),
@@ -261,7 +261,7 @@ export function verifyGoogleToken(idToken: string): {
   const policy = store.getPolicy(user.id);
   const wallet = store.getWalletByUserId(user.id);
 
-  const token = keyManager.issueToken(user.id, 'operator');
+  const token = keyManager.issueToken(user.id, 'operator', false);
 
   store.logSecurity({
     id: crypto.randomUUID(),

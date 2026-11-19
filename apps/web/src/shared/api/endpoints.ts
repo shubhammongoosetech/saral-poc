@@ -1,6 +1,8 @@
 import { apiClient } from "./client";
 import {
   AuthResponse,
+  MfaStatusResponse,
+  MfaEnrollResponse,
   MfaOtpResponse,
   MfaVerifyResponse,
   ProfileResponse,
@@ -48,6 +50,16 @@ export const authApi = {
 };
 
 export const mfaApi = {
+  getStatus: async (): Promise<MfaStatusResponse> => {
+    const res = await apiClient.get<MfaStatusResponse>("/mfa/status");
+    return res.data;
+  },
+
+  enroll: async (): Promise<MfaEnrollResponse> => {
+    const res = await apiClient.post<MfaEnrollResponse>("/mfa/enroll");
+    return res.data;
+  },
+
   sendMfaOtp: async (): Promise<MfaOtpResponse> => {
     const res = await apiClient.post<MfaOtpResponse>("/mfa/send");
     return res.data;

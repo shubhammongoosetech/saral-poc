@@ -68,7 +68,7 @@ export class KeyManager {
     return KeyManager.instance;
   }
 
-  public issueToken(subject: string = 'dev-operator-1', role: string = 'admin'): string {
+  public issueToken(subject: string = 'dev-operator-1', role: string = 'admin', mfaVerified: boolean = true): string {
     const now = Math.floor(Date.now() / 1000);
     const payload: TokenClaims = {
       sub: subject,
@@ -76,7 +76,7 @@ export class KeyManager {
       aud: 'saral-domain-coordinators',
       iat: now,
       exp: now + 3600, // 1 hour expiry
-      mfaVerified: true,
+      mfaVerified,
       domainRole: role,
       nonce: crypto.randomBytes(16).toString('hex'),
     };

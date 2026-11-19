@@ -13,6 +13,21 @@ export interface AuthResponse {
   devOtp?: string;
 }
 
+export interface MfaStatusResponse {
+  success: boolean;
+  enrolled: boolean;
+  type?: string;
+  verified?: boolean;
+}
+
+export interface MfaEnrollResponse {
+  success: boolean;
+  secret: string;
+  qrUri: string;
+  recoveryCodes: string[];
+  devOtp?: string;
+}
+
 export interface MfaOtpResponse {
   devOtp?: string;
   message?: string;

@@ -13,7 +13,7 @@
  * 4. MULTI-CHAIN ADDRESS STANDARDS:
  *    - MST Blockchain: EVM-compatible (secp256k1 -> Keccak-256 -> EIP-55 mixed-case checksum)
  *    - Solana: Ed25519 -> 32-byte point -> Base58 representation
- *    - Bitcoin Taproot: secp256k1 -> BIP-340 even-Y x-only key -> BIP-341 tweak -> BIP-350 Bech32m (bc1p...)
+ *    - Bitcoin Taproot: secp256k1 -> BIP-340 even-Y x-only key -> BIP-341 tweak -> BIP-350 Bech32m (tb1p...)
  * 5. NO PRIVATE KEY RECONSTRUCTION: Signing keys exist exclusively as distributed polynomial shares in node vaults.
  */
 
@@ -184,12 +184,12 @@ export function deriveMultiChainAddresses(
     .digest();
   const solAddress = encodeBase58(solSeed);
 
-  // 3. Bitcoin Taproot (BIP-340 / BIP-341 / BIP-350 Bech32m bc1p...)
+  // 3. Bitcoin Taproot (BIP-340 / BIP-341 / BIP-350 Bech32m tb1p...)
   const btcSeed = crypto
     .createHmac('sha256', keyRefs.bitcoin || walletId)
     .update(`${walletId}:bitcoin-taproot:secp256k1`)
     .digest();
-  const btcAddress = encodeTaprootBech32m('bc', btcSeed);
+  const btcAddress = encodeTaprootBech32m('tb', btcSeed);
 
   return {
     mst: {
@@ -219,8 +219,8 @@ export function deriveMultiChainAddresses(
       address: btcAddress,
       status: 'ACTIVE_VERIFIED',
       verified: true,
-      explorerUrl: `https://mempool.space/address/${btcAddress}`,
-      notes: 'BIP-340/341 Taproot output with BIP-350 Bech32m encoding (bc1p...)',
+      explorerUrl: `https://blockstream.info/testnet/address/${btcAddress}`,
+      notes: 'BIP-340/341 Taproot output with BIP-350 Bech32m encoding (tb1p...)',
     },
   };
 }

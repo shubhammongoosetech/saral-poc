@@ -1,19 +1,42 @@
 services:
+  # ─── PostgreSQL 16 (SARAL Production Persistence) ─────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: saral-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: saral
+      POSTGRES_PASSWORD: saral_secret
+      POSTGRES_DB: saral
+    volumes:
+      - saral_postgres_data:/var/lib/postgresql/data
+      - ../../infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - '5432:5432'
+    networks:
+      - saral-mesh
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U saral -d saral']
+      interval: 4s
+      timeout: 3s
+      retries: 5
+
   # ─── Auth Server ─────────────────────────────────────────────────────────
   auth-server:
     build:
       context: ../../apps/auth-server
       dockerfile: Dockerfile
-    image: saral-auth-server:v3
+    image: saral-auth-server:latest
     container_name: saral-prod-auth-server
     restart: unless-stopped
     environment:
       PORT: 3001
       NODE_ENV: development
       ENABLE_DEV_AUTH: "true"
-      DATABASE_URL: "postgresql://saral:saral_secret@host.docker.internal:5432/saral"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      DATABASE_URL: "postgresql://saral:saral_secret@postgres:5432/saral"
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - '3001:3001'
     networks:
@@ -29,7 +52,7 @@ services:
     build:
       context: ../../services/verifier
       dockerfile: Dockerfile
-    image: saral-verifier:v3
+    image: saral-verifier:latest
     container_name: saral-prod-verifier-foundation
     restart: unless-stopped
     environment:
@@ -48,7 +71,7 @@ services:
       retries: 5
 
   verifier-public:
-    image: saral-verifier:v3
+    image: saral-verifier:latest
     container_name: saral-prod-verifier-public
     restart: unless-stopped
     environment:
@@ -67,7 +90,7 @@ services:
       retries: 5
 
   verifier-private:
-    image: saral-verifier:v3
+    image: saral-verifier:latest
     container_name: saral-prod-verifier-private
     restart: unless-stopped
     environment:
@@ -85,12 +108,12 @@ services:
       timeout: 3s
       retries: 5
 
-  # ─── Foundation SARAL Nodes (1 - 8) ──────────────────────────────────
+  # ─── Foundation SARAL Nodes (1 - 5) ──────────────────────────────────
   node-f1:
     build:
       context: ../../services/saral-node
       dockerfile: Dockerfile
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-f1
     restart: unless-stopped
     environment:
@@ -98,8 +121,12 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 1
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f2:8001,http://node-p1:8001,http://node-r1:8001
-    volumes: ['prod_node_f1_vault:/vault']
+    volumes: ['node_f1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
+    ports:
+      - '8443:8443'
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -108,7 +135,7 @@ services:
       retries: 5
 
   node-f2:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-f2
     restart: unless-stopped
     environment:
@@ -116,12 +143,19 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 2
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f1:8001,http://node-f3:8001
-    volumes: ['prod_node_f2_vault:/vault']
+    volumes: ['node_f2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-f3:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-f3
     restart: unless-stopped
     environment:
@@ -129,12 +163,19 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 3
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f2:8001,http://node-f4:8001
-    volumes: ['prod_node_f3_vault:/vault']
+    volumes: ['node_f3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-f4:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-f4
     restart: unless-stopped
     environment:
@@ -142,12 +183,19 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 4
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f3:8001,http://node-f5:8001
-    volumes: ['prod_node_f4_vault:/vault']
+    volumes: ['node_f4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-f5:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-f5
     restart: unless-stopped
     environment:
@@ -155,52 +203,20 @@ services:
       DOMAIN: FOUNDATION
       NODE_INDEX: 5
       PORT: 8001
-      PEER_NODES: http://node-f4:8001,http://node-f6:8001
-    volumes: ['prod_node_f5_vault:/vault']
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-foundation:9001
+      PEER_NODES: http://node-f4:8001,http://node-f1:8001
+    volumes: ['node_f5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
-  node-f6:
-    image: saral-node:v3
-    container_name: saral-prod-node-f6
-    restart: unless-stopped
-    environment:
-      NODE_ID: saral-foundation-6
-      DOMAIN: FOUNDATION
-      NODE_INDEX: 6
-      PORT: 8001
-      PEER_NODES: http://node-f5:8001,http://node-f7:8001
-    volumes: ['prod_node_f6_vault:/vault']
-    networks: [saral-mesh]
-
-  node-f7:
-    image: saral-node:v3
-    container_name: saral-prod-node-f7
-    restart: unless-stopped
-    environment:
-      NODE_ID: saral-foundation-7
-      DOMAIN: FOUNDATION
-      NODE_INDEX: 7
-      PORT: 8001
-      PEER_NODES: http://node-f6:8001,http://node-f8:8001
-    volumes: ['prod_node_f7_vault:/vault']
-    networks: [saral-mesh]
-
-  node-f8:
-    image: saral-node:v3
-    container_name: saral-prod-node-f8
-    restart: unless-stopped
-    environment:
-      NODE_ID: saral-foundation-8
-      DOMAIN: FOUNDATION
-      NODE_INDEX: 8
-      PORT: 8001
-      PEER_NODES: http://node-f7:8001,http://node-f1:8001
-    volumes: ['prod_node_f8_vault:/vault']
-    networks: [saral-mesh]
-
-  # ─── Public SARAL Nodes (1 - 8) ──────────────────────────────────────
+  # ─── Public SARAL Nodes (1 - 5) ──────────────────────────────────────
   node-p1:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-p1
     restart: unless-stopped
     environment:
@@ -208,8 +224,10 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 1
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-f1:8001,http://node-p2:8001,http://node-r1:8001
-    volumes: ['prod_node_p1_vault:/vault']
+    volumes: ['node_p1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -218,7 +236,7 @@ services:
       retries: 5
 
   node-p2:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-p2
     restart: unless-stopped
     environment:
@@ -226,12 +244,19 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 2
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p1:8001,http://node-p3:8001
-    volumes: ['prod_node_p2_vault:/vault']
+    volumes: ['node_p2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-p3:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-p3
     restart: unless-stopped
     environment:
@@ -239,12 +264,19 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 3
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p2:8001,http://node-p4:8001
-    volumes: ['prod_node_p3_vault:/vault']
+    volumes: ['node_p3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-p4:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-p4
     restart: unless-stopped
     environment:
@@ -252,12 +284,19 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 4
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p3:8001,http://node-p5:8001
-    volumes: ['prod_node_p4_vault:/vault']
+    volumes: ['node_p4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-p5:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-p5
     restart: unless-stopped
     environment:
@@ -265,52 +304,20 @@ services:
       DOMAIN: PUBLIC
       NODE_INDEX: 5
       PORT: 8001
-      PEER_NODES: http://node-p4:8001,http://node-p6:8001
-    volumes: ['prod_node_p5_vault:/vault']
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-public:9002
+      PEER_NODES: http://node-p4:8001,http://node-p1:8001
+    volumes: ['node_p5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
-  node-p6:
-    image: saral-node:v3
-    container_name: saral-prod-node-p6
-    restart: unless-stopped
-    environment:
-      NODE_ID: saral-public-6
-      DOMAIN: PUBLIC
-      NODE_INDEX: 6
-      PORT: 8001
-      PEER_NODES: http://node-p5:8001,http://node-p7:8001
-    volumes: ['prod_node_p6_vault:/vault']
-    networks: [saral-mesh]
-
-  node-p7:
-    image: saral-node:v3
-    container_name: saral-prod-node-p7
-    restart: unless-stopped
-    environment:
-      NODE_ID: saral-public-7
-      DOMAIN: PUBLIC
-      NODE_INDEX: 7
-      PORT: 8001
-      PEER_NODES: http://node-p6:8001,http://node-p8:8001
-    volumes: ['prod_node_p7_vault:/vault']
-    networks: [saral-mesh]
-
-  node-p8:
-    image: saral-node:v3
-    container_name: saral-prod-node-p8
-    restart: unless-stopped
-    environment:
-      NODE_ID: saral-public-8
-      DOMAIN: PUBLIC
-      NODE_INDEX: 8
-      PORT: 8001
-      PEER_NODES: http://node-p7:8001,http://node-p1:8001
-    volumes: ['prod_node_p8_vault:/vault']
-    networks: [saral-mesh]
-
-  # ─── Private SARAL Nodes (1 - 8) ─────────────────────────────────────
+  # ─── Private SARAL Nodes (1 - 5) ─────────────────────────────────────
   node-r1:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-r1
     restart: unless-stopped
     environment:
@@ -318,8 +325,10 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 1
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-f1:8001,http://node-p1:8001,http://node-r2:8001
-    volumes: ['prod_node_r1_vault:/vault']
+    volumes: ['node_r1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -328,7 +337,7 @@ services:
       retries: 5
 
   node-r2:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-r2
     restart: unless-stopped
     environment:
@@ -336,12 +345,19 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 2
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r1:8001,http://node-r3:8001
-    volumes: ['prod_node_r2_vault:/vault']
+    volumes: ['node_r2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-r3:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-r3
     restart: unless-stopped
     environment:
@@ -349,12 +365,19 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 3
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r2:8001,http://node-r4:8001
-    volumes: ['prod_node_r3_vault:/vault']
+    volumes: ['node_r3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-r4:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-r4
     restart: unless-stopped
     environment:
@@ -362,12 +385,19 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 4
       PORT: 8001
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r3:8001,http://node-r5:8001
-    volumes: ['prod_node_r4_vault:/vault']
+    volumes: ['node_r4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   node-r5:
-    image: saral-node:v3
+    image: saral-node:latest
     container_name: saral-prod-node-r5
     restart: unless-stopped
     environment:
@@ -375,55 +405,23 @@ services:
       DOMAIN: PRIVATE
       NODE_INDEX: 5
       PORT: 8001
-      PEER_NODES: http://node-r4:8001,http://node-r6:8001
-    volumes: ['prod_node_r5_vault:/vault']
+      MTLS_PORT: 8443
+      COORDINATOR_URL: http://coordinator-private:9003
+      PEER_NODES: http://node-r4:8001,http://node-r1:8001
+    volumes: ['node_r5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     networks: [saral-mesh]
-
-  node-r6:
-    image: saral-node:v3
-    container_name: saral-prod-node-r6
-    restart: unless-stopped
-    environment:
-      NODE_ID: saral-private-6
-      DOMAIN: PRIVATE
-      NODE_INDEX: 6
-      PORT: 8001
-      PEER_NODES: http://node-r5:8001,http://node-r7:8001
-    volumes: ['prod_node_r6_vault:/vault']
-    networks: [saral-mesh]
-
-  node-r7:
-    image: saral-node:v3
-    container_name: saral-prod-node-r7
-    restart: unless-stopped
-    environment:
-      NODE_ID: saral-private-7
-      DOMAIN: PRIVATE
-      NODE_INDEX: 7
-      PORT: 8001
-      PEER_NODES: http://node-r6:8001,http://node-r8:8001
-    volumes: ['prod_node_r7_vault:/vault']
-    networks: [saral-mesh]
-
-  node-r8:
-    image: saral-node:v3
-    container_name: saral-prod-node-r8
-    restart: unless-stopped
-    environment:
-      NODE_ID: saral-private-8
-      DOMAIN: PRIVATE
-      NODE_INDEX: 8
-      PORT: 8001
-      PEER_NODES: http://node-r7:8001,http://node-r1:8001
-    volumes: ['prod_node_r8_vault:/vault']
-    networks: [saral-mesh]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
+      interval: 4s
+      timeout: 3s
+      retries: 5
 
   # ─── Coordinators (Foundation, Public, Private) ────────────────────────
   coordinator-foundation:
     build:
       context: ../../services/coordinator
       dockerfile: Dockerfile
-    image: saral-coordinator:v3
+    image: saral-coordinator:latest
     container_name: saral-prod-coord-foundation
     restart: unless-stopped
     environment:
@@ -431,7 +429,7 @@ services:
       DOMAIN: FOUNDATION
       VERIFIER_URL: http://verifier-foundation:9101
       PEER_COORDINATORS: http://coordinator-public:9002,http://coordinator-private:9003
-      NODE_ADDRS: http://node-f1:8001,http://node-f2:8001,http://node-f3:8001,http://node-f4:8001,http://node-f5:8001,http://node-f6:8001,http://node-f7:8001,http://node-f8:8001
+      NODE_ADDRS: http://node-f1:8001,http://node-f2:8001,http://node-f3:8001,http://node-f4:8001,http://node-f5:8001
     ports:
       - '9001:9001'
     depends_on:
@@ -448,7 +446,7 @@ services:
       retries: 5
 
   coordinator-public:
-    image: saral-coordinator:v3
+    image: saral-coordinator:latest
     container_name: saral-prod-coord-public
     restart: unless-stopped
     environment:
@@ -456,7 +454,7 @@ services:
       DOMAIN: PUBLIC
       VERIFIER_URL: http://verifier-public:9102
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-private:9003
-      NODE_ADDRS: http://node-p1:8001,http://node-p2:8001,http://node-p3:8001,http://node-p4:8001,http://node-p5:8001,http://node-p6:8001,http://node-p7:8001,http://node-p8:8001
+      NODE_ADDRS: http://node-p1:8001,http://node-p2:8001,http://node-p3:8001,http://node-p4:8001,http://node-p5:8001
     ports:
       - '9002:9002'
     depends_on:
@@ -473,7 +471,7 @@ services:
       retries: 5
 
   coordinator-private:
-    image: saral-coordinator:v3
+    image: saral-coordinator:latest
     container_name: saral-prod-coord-private
     restart: unless-stopped
     environment:
@@ -481,7 +479,7 @@ services:
       DOMAIN: PRIVATE
       VERIFIER_URL: http://verifier-private:9103
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-public:9002
-      NODE_ADDRS: http://node-r1:8001,http://node-r2:8001,http://node-r3:8001,http://node-r4:8001,http://node-r5:8001,http://node-r6:8001,http://node-r7:8001,http://node-r8:8001
+      NODE_ADDRS: http://node-r1:8001,http://node-r2:8001,http://node-r3:8001,http://node-r4:8001,http://node-r5:8001
     ports:
       - '9003:9003'
     depends_on:
@@ -502,7 +500,7 @@ services:
     build:
       context: ../../apps/web
       dockerfile: Dockerfile
-    image: saral-web:v3
+    image: saral-web:latest
     container_name: saral-prod-web
     restart: unless-stopped
     ports:
@@ -525,27 +523,19 @@ networks:
     driver: bridge
 
 volumes:
-  prod_node_f1_vault:
-  prod_node_f2_vault:
-  prod_node_f3_vault:
-  prod_node_f4_vault:
-  prod_node_f5_vault:
-  prod_node_f6_vault:
-  prod_node_f7_vault:
-  prod_node_f8_vault:
-  prod_node_p1_vault:
-  prod_node_p2_vault:
-  prod_node_p3_vault:
-  prod_node_p4_vault:
-  prod_node_p5_vault:
-  prod_node_p6_vault:
-  prod_node_p7_vault:
-  prod_node_p8_vault:
-  prod_node_r1_vault:
-  prod_node_r2_vault:
-  prod_node_r3_vault:
-  prod_node_r4_vault:
-  prod_node_r5_vault:
-  prod_node_r6_vault:
-  prod_node_r7_vault:
-  prod_node_r8_vault:
+  saral_postgres_data:
+  node_f1_vault:
+  node_f2_vault:
+  node_f3_vault:
+  node_f4_vault:
+  node_f5_vault:
+  node_p1_vault:
+  node_p2_vault:
+  node_p3_vault:
+  node_p4_vault:
+  node_p5_vault:
+  node_r1_vault:
+  node_r2_vault:
+  node_r3_vault:
+  node_r4_vault:
+  node_r5_vault:

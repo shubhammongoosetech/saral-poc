@@ -12,6 +12,8 @@ import {
 import {
   enrollTotp,
   verifyMfaChallenge,
+  decryptTotpSecret,
+  computeTotpToken,
 } from '../services/mfaService';
 import { requireAuth } from '../middleware/authGuard';
 
@@ -318,6 +320,75 @@ const handleVerifyOtp = (req: Request, res: Response) => {
 router.post('/auth/phone/verify-otp', handleVerifyOtp);
 router.post('/auth/otp/verify', handleVerifyOtp);
 
+// GET /mfa/status & /auth/mfa/status
+const handleMfaStatus = (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      res.status(401).json({ success: false, error: 'Authorization token required' });
+      return;
+    }
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    const decoded = keyManager.verifyToken(token);
+    const userId = decoded.sub;
+    const mfa = store.getMfa(userId);
+
+    const enrolled = !!(mfa && mfa.totpSecretEncrypted && mfa.verifiedAt);
+    res.json({
+      success: true,
+      enrolled,
+      type: mfa?.type || 'totp',
+      verified: !!mfa?.verifiedAt,
+    });
+  } catch (err: any) {
+    res.status(401).json({ success: false, error: err.message || 'Unauthorized' });
+  }
+};
+
+router.get('/mfa/status', handleMfaStatus);
+router.get('/auth/mfa/status', handleMfaStatus);
+
+// POST /mfa/enroll & /auth/mfa/enroll (Initial TOTP enrollment for new users)
+const handleMfaEnroll = (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      res.status(401).json({ success: false, error: 'Authorization token required' });
+      return;
+    }
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    const decoded = keyManager.verifyToken(token);
+    const userId = decoded.sub;
+    const user = store.findUserById(userId);
+
+    const emailOrPhone = user?.email || user?.mobile || 'saral-user';
+    const enrollment = enrollTotp(userId, emailOrPhone);
+
+    const isDev =
+      process.env.ENABLE_DEV_AUTH === 'true' ||
+      process.env.NODE_ENV === 'development' ||
+      process.env.NODE_ENV === 'test' ||
+      !process.env.NODE_ENV ||
+      process.env.AUTH_DEV_OTP_DISPLAY === 'true';
+
+    const currentStep = Math.floor(Date.now() / 1000 / 30);
+    const devOtp = isDev ? computeTotpToken(enrollment.secret, currentStep) : undefined;
+
+    res.json({
+      success: true,
+      secret: enrollment.secret,
+      qrUri: enrollment.qrUri,
+      recoveryCodes: enrollment.recoveryCodes,
+      devOtp,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'MFA enrollment failed' });
+  }
+};
+
+router.post('/mfa/enroll', handleMfaEnroll);
+router.post('/auth/mfa/enroll', handleMfaEnroll);
+
 // POST /mfa/send & /auth/mfa/send (MFA OTP dispatch for returning / phone users)
 const handleMfaSend = (req: Request, res: Response) => {
   try {
@@ -347,17 +418,33 @@ const handleMfaSend = (req: Request, res: Response) => {
     });
 
     const isDev =
+      process.env.ENABLE_DEV_AUTH === 'true' ||
       process.env.NODE_ENV === 'development' ||
       process.env.NODE_ENV === 'test' ||
       !process.env.NODE_ENV ||
       process.env.AUTH_DEV_OTP_DISPLAY === 'true';
 
-    console.log(`[MFA SEND] User ${userId} OTP: ${mfaOtpCode}`);
+    let devOtp: string | undefined = undefined;
+    if (isDev) {
+      const existingMfa = store.getMfa(userId);
+      if (existingMfa?.totpSecretEncrypted) {
+        try {
+          const secret = decryptTotpSecret(existingMfa.totpSecretEncrypted);
+          const currentStep = Math.floor(Date.now() / 1000 / 30);
+          devOtp = computeTotpToken(secret, currentStep);
+        } catch (_) {}
+      }
+      if (!devOtp) {
+        devOtp = mfaOtpCode;
+      }
+    }
+
+    console.log(`[MFA SEND] User ${userId} OTP: ${devOtp || mfaOtpCode}`);
 
     res.json({
       success: true,
-      message: 'MFA code sent',
-      devOtp: isDev ? mfaOtpCode : undefined,
+      message: 'MFA challenge initiated',
+      devOtp,
     });
   } catch (err: any) {
     res.status(401).json({ success: false, error: err.message || 'Failed to dispatch MFA code' });
@@ -402,8 +489,8 @@ const handleMfaVerifyEndpoint = (req: Request, res: Response) => {
       verified = true;
     }
 
-    // Issue upgraded token
-    const upgradedToken = keyManager.issueToken(userId, 'operator');
+    // Issue upgraded token with mfaVerified: true
+    const upgradedToken = keyManager.issueToken(userId, 'operator', true);
     const policy = store.getPolicy(userId);
     const wallet = store.getWalletByUserId(userId);
 
@@ -430,6 +517,7 @@ const handleMfaVerifyEndpoint = (req: Request, res: Response) => {
 };
 
 router.post('/mfa/verify', handleMfaVerifyEndpoint);
+router.post('/auth/mfa/verify', handleMfaVerifyEndpoint);
 
 // POST /auth/link-account (Requires Auth)
 router.post('/auth/link-account', requireAuth, (req: Request, res: Response) => {

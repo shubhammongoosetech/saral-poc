@@ -38,11 +38,11 @@ export const WalletCreatedSuccessView: React.FC<{ onComplete: () => void }> = ({
     },
     {
       key: 'bitcoin',
-      name: 'Bitcoin Taproot',
-      network: 'bitcoin-mainnet',
+      name: 'Bitcoin Testnet',
+      network: 'bitcoin-testnet',
       badge: 'BIP-340/350',
       curve: 'secp256k1',
-      address: wallet?.addresses?.bitcoin?.address || 'bc1p...',
+      address: wallet?.addresses?.bitcoin?.address || 'tb1p...',
       explorerUrl: wallet?.addresses?.bitcoin?.explorerUrl,
     },
   ];
