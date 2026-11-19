@@ -1,4 +1,4 @@
-.PHONY: all build clean test dev docker-poc docker-full docker-down docker-status verify
+.PHONY: all build clean test dev docker-poc docker-full docker-down docker-status verify prisma-generate prisma-migrate
 
 all: build
 
@@ -7,6 +7,12 @@ build:
 
 clean:
 	npm run clean
+
+prisma-generate:
+	npm run prisma:generate
+
+prisma-migrate:
+	npm run prisma:migrate
 
 test:
 	npm run test

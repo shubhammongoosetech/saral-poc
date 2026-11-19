@@ -17,6 +17,8 @@
     "build:sdk": "npm --prefix packages/saral-sdk run build",
     "build:apps": "npm --prefix apps/auth-server run build && npm --prefix apps/web run build",
     "build": "npm run build:go && npm run build:sdk && npm run build:apps",
+    "prisma:generate": "npm --prefix apps/auth-server run prisma:generate",
+    "prisma:migrate": "npm --prefix apps/auth-server run prisma:migrate",
     "dev": "concurrently -n AUTH,WEB -c \"blue,green\" \"npm --prefix apps/auth-server run dev\" \"npm --prefix apps/web run dev\"",
     "test": "npm run test:sdk && npm run test:go && npm run test:all-crypto",
     "test:sdk": "vitest run",

@@ -95,6 +95,64 @@ CREATE TABLE IF NOT EXISTS transactions (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Additional models for Prisma ORM integration
+CREATE TABLE IF NOT EXISTS auth_identities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider VARCHAR(50) NOT NULL,
+  provider_id VARCHAR(255) NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT unique_provider_identity UNIQUE (provider, provider_id)
+);
+
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  mfa_id UUID NOT NULL REFERENCES mfa(id) ON DELETE CASCADE,
+  code_hash VARCHAR(64) NOT NULL,
+  used BOOLEAN NOT NULL DEFAULT FALSE,
+  used_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_jti VARCHAR(255) NOT NULL UNIQUE,
+  mfa_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  ip_address VARCHAR(100),
+  user_agent VARCHAR(255),
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  revoked BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wallet_key_references (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  wallet_id VARCHAR(100) NOT NULL REFERENCES wallets(wallet_id) ON DELETE CASCADE,
+  chain VARCHAR(50) NOT NULL,
+  key_ref VARCHAR(100) NOT NULL,
+  status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT unique_wallet_chain UNIQUE (wallet_id, chain)
+);
+
+CREATE TABLE IF NOT EXISTS wallet_creation_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+  error TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Seed key references for pre-seeded wallet
+INSERT INTO wallet_key_references (wallet_id, chain, key_ref, status)
+VALUES
+  ('wal-aa583bf2-9e66-415b-90c6-d8eda93bd540', 'mst', 'key-mst-7d57a501e008f36f', 'ACTIVE'),
+  ('wal-aa583bf2-9e66-415b-90c6-d8eda93bd540', 'solana', 'key-sol-b06a5d5b49696a4f', 'ACTIVE'),
+  ('wal-aa583bf2-9e66-415b-90c6-d8eda93bd540', 'bitcoin', 'key-btc-48ea9f6ba5a7de2a', 'ACTIVE')
+ON CONFLICT (wallet_id, chain) DO NOTHING;
+
 -- Preserve existing user and wallet metadata
 INSERT INTO users (id, name, google_id, email, mobile, login_method, created_at)
 VALUES (
