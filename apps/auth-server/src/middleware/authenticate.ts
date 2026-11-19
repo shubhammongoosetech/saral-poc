@@ -41,3 +41,4 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
     res.status(401).json({ success: false, error: 'Unauthorized: Invalid or expired token' });
   }
 }
+

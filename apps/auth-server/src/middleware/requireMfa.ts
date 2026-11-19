@@ -17,3 +17,4 @@ export function requireMfa(req: Request, res: Response, next: NextFunction): voi
 
   next();
 }
+

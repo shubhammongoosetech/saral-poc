@@ -145,14 +145,6 @@ CREATE TABLE IF NOT EXISTS wallet_creation_jobs (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Seed key references for pre-seeded wallet
-INSERT INTO wallet_key_references (wallet_id, chain, key_ref, status)
-VALUES
-  ('wal-aa583bf2-9e66-415b-90c6-d8eda93bd540', 'mst', 'key-mst-7d57a501e008f36f', 'ACTIVE'),
-  ('wal-aa583bf2-9e66-415b-90c6-d8eda93bd540', 'solana', 'key-sol-b06a5d5b49696a4f', 'ACTIVE'),
-  ('wal-aa583bf2-9e66-415b-90c6-d8eda93bd540', 'bitcoin', 'key-btc-48ea9f6ba5a7de2a', 'ACTIVE')
-ON CONFLICT (wallet_id, chain) DO NOTHING;
-
 -- Preserve existing user and wallet metadata
 INSERT INTO users (id, name, google_id, email, mobile, login_method, created_at)
 VALUES (
@@ -175,6 +167,14 @@ VALUES (
   '2026-11-18T21:12:58.294Z',
   '2026-11-18T21:12:58.294Z'
 ) ON CONFLICT (user_id) DO NOTHING;
+
+-- Seed key references for pre-seeded wallet
+INSERT INTO wallet_key_references (wallet_id, chain, key_ref, status)
+VALUES
+  ('wal-aa583bf2-9e66-415b-90c6-d8eda93bd540', 'mst', 'key-mst-7d57a501e008f36f', 'ACTIVE'),
+  ('wal-aa583bf2-9e66-415b-90c6-d8eda93bd540', 'solana', 'key-sol-b06a5d5b49696a4f', 'ACTIVE'),
+  ('wal-aa583bf2-9e66-415b-90c6-d8eda93bd540', 'bitcoin', 'key-btc-48ea9f6ba5a7de2a', 'ACTIVE')
+ON CONFLICT (wallet_id, chain) DO NOTHING;
 
 INSERT INTO work_policy (id, user_id, start_time, end_time, timezone, city, lat, lng, radius_km, time_restriction_enabled, location_restriction_enabled, geofence_enabled, set_at)
 VALUES (

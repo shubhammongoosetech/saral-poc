@@ -100,3 +100,4 @@ BEGIN
         ALTER TABLE "wallet_creation_jobs" ADD CONSTRAINT "wallet_creation_jobs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
     END IF;
 END $$;
+

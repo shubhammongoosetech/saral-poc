@@ -32,3 +32,4 @@ export async function connectPrisma(): Promise<boolean> {
 export async function disconnectPrisma(): Promise<void> {
   await prisma.$disconnect();
 }
+

@@ -57,3 +57,4 @@ export function encodeTaprootAddress(hrp: string, outputKey32: Buffer): string {
   const combined = [...payload, ...checksum];
   return hrp + '1' + combined.map((d) => BECH32_CHARSET[d]).join('');
 }
+

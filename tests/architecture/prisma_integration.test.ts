@@ -183,3 +183,4 @@ describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
     await prisma.user.delete({ where: { id: tempUser.id } });
   });
 });
+

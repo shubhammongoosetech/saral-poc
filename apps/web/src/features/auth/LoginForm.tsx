@@ -35,7 +35,7 @@ export const LoginForm: React.FC = () => {
   useEffect(() => {
     const clientId =
       import.meta.env.VITE_GOOGLE_CLIENT_ID ||
-      'your-google-client-id.apps.googleusercontent.com';
+      '558208753253-gr5lji587t11l5m63d5udea4msbvbcds.apps.googleusercontent.com';
 
     const handleGoogleCredential = async (response: { credential: string }) => {
       try {

@@ -21,3 +21,4 @@ export function encodeBase58(buffer: Buffer): string {
   }
   return digits.reverse().map((d) => BASE58_ALPHABET[d]).join('');
 }
+

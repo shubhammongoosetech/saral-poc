@@ -17,3 +17,4 @@ export function toEip55Checksum(addrLower: string): string {
   }
   return ret;
 }
+

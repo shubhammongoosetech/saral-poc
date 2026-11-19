@@ -32,3 +32,4 @@ export const env = {
   SOLANA_RPC_URL: process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
   BITCOIN_API_URL: process.env.BITCOIN_API_URL || 'https://blockstream.info/testnet/api',
 };
+

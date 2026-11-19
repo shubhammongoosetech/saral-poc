@@ -118,3 +118,4 @@ export function generateRecoveryCodes(count = 8): string[] {
 export function hashRecoveryCode(code: string): string {
   return crypto.createHash('sha256').update(code.trim().toUpperCase()).digest('hex');
 }
+

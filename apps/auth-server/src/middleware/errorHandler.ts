@@ -9,3 +9,4 @@ export function errorHandler(err: any, req: Request, res: Response, _next: NextF
     error: err.message || 'Internal Server Error',
   });
 }
+
