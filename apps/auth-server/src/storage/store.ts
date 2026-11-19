@@ -1,18 +1,18 @@
 /**
- * SARAL Protocol V3 — Hardened Atomic File-Backed Application Store
+ * SARAL Protocol — Hardened Application Store & In-Memory Cache
+ * Backed by Prisma ORM and PostgreSQL
  *
- * PATENT & SPECIFICATION MANDATES:
+ * MANDATES:
  * 1. Zero-Address Storage: Central database stores ZERO wallet addresses and ZERO public keys.
  *    Only opaque key references are persisted.
- * 2. Atomic Writes: Temp file creation, fsync, atomic rename. Prevents corruption.
- * 3. Strict 0600 file permissions and 0700 directory permissions.
- * 4. Transactional integrity across users, MFA, policies, and wallet metadata.
+ * 2. Prisma ORM: All database persistence operations are executed through Prisma Client.
+ * 3. Fail-Closed / High Performance In-Memory Sync for sub-millisecond route resolution.
  */
 
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { pgPool, getIsPgConnected } from './db';
+import { prisma } from '../database/prisma';
 
 export interface UserRecord {
   id: string;
@@ -29,34 +29,28 @@ export interface MfaRecord {
   userId: string;
   type: 'totp' | 'otp';
   verifiedAt?: string;
-  totpSecretEncrypted?: string; // AES-256-GCM encrypted base32 secret
-  recoveryCodesHashed?: string[]; // SHA-256 hashes of single-use recovery codes
+  totpSecretEncrypted?: string;
+  recoveryCodesHashed?: string[];
   updatedAt: string;
 }
 
 export interface WorkingPolicyRecord {
   userId: string;
   timeRestrictionEnabled: boolean;
-  startTime: string; // "09:00"
-  endTime: string;   // "18:00"
-  days: string[];    // ["MON", "TUE", "WED", "THU", "FRI"]
-  timezone: string;  // IANA timezone, e.g. "Asia/Kolkata"
+  startTime: string;
+  endTime: string;
+  days: string[];
+  timezone: string;
   expiresAt?: string;
   locationRestrictionEnabled: boolean;
   allowedRegion?: string;
   geofenceEnabled?: boolean;
   lat?: number;
   lng?: number;
-  radiusMeters?: number; // Geofence radius in meters
+  radiusMeters?: number;
   updatedAt: string;
 }
 
-/**
- * STRICT METADATA ONLY:
- * Note: Under the SARAL Zero-Address Storage Architecture,
- * wallet addresses, Ethereum addresses, Solana addresses, Bitcoin addresses,
- * and public keys MUST NEVER be stored in the database.
- */
 export interface WalletMetadataRecord {
   userId: string;
   walletId: string;
@@ -95,7 +89,7 @@ export interface OtpRecord {
   id: string;
   userId: string;
   mobile: string;
-  codeHash: string; // HMAC-SHA256 digest; never plaintext
+  codeHash: string;
   purpose: 'login' | 'mfa';
   expiresAt: number;
   used: boolean;
@@ -154,7 +148,7 @@ export class DataStore {
           securityLogs: parsed.securityLogs || [],
         };
       } catch (err) {
-        console.warn('[DataStore] Failed reading store file, initializing empty store:', err);
+        console.warn('[DataStore] Fallback read warning:', err);
       }
     }
 
@@ -218,91 +212,101 @@ export class DataStore {
   }
 
   public async syncFromPostgres(): Promise<void> {
-    if (!getIsPgConnected()) return;
     try {
-      // Sync users
-      const uRes = await pgPool.query('SELECT * FROM users;');
-      for (const r of uRes.rows) {
-        this.data.users[r.id] = {
-          id: r.id,
-          name: r.name,
-          googleId: r.google_id,
-          email: r.email,
-          mobile: r.mobile,
-          loginMethod: r.login_method,
-          createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
-          updatedAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+      // Sync users via Prisma
+      const users = await prisma.user.findMany();
+      for (const u of users) {
+        this.data.users[u.id] = {
+          id: u.id,
+          name: u.name || undefined,
+          googleId: u.googleId || undefined,
+          email: u.email || undefined,
+          mobile: u.mobile || undefined,
+          loginMethod: u.loginMethod as any,
+          createdAt: u.createdAt.toISOString(),
+          updatedAt: u.createdAt.toISOString(),
         };
       }
 
-      // Sync MFA
-      const mRes = await pgPool.query('SELECT * FROM mfa;');
-      for (const r of mRes.rows) {
-        this.data.mfa[r.user_id] = {
-          userId: r.user_id,
-          type: r.type || 'totp',
-          totpSecretEncrypted: r.totp_secret_encrypted || r.secret || undefined,
-          recoveryCodesHashed: r.recovery_codes_hashed || r.recovery_codes || [],
-          verifiedAt: r.verified_at ? new Date(r.verified_at).toISOString() : undefined,
+      // Sync MFA via Prisma
+      const mfas = await prisma.mFAEnrollment.findMany();
+      for (const m of mfas) {
+        this.data.mfa[m.userId] = {
+          userId: m.userId,
+          type: (m.type as any) || 'totp',
+          totpSecretEncrypted: m.totpSecretEncrypted || m.secret || undefined,
+          recoveryCodesHashed: m.recoveryCodesHashed || m.recoveryCodes || [],
+          verifiedAt: m.verifiedAt ? m.verifiedAt.toISOString() : undefined,
           updatedAt: new Date().toISOString(),
         };
       }
 
-      // Sync Policy
-      const pRes = await pgPool.query('SELECT * FROM work_policy;');
-      for (const r of pRes.rows) {
-        this.data.policies[r.user_id] = {
-          userId: r.user_id,
-          timeRestrictionEnabled: r.time_restriction_enabled !== undefined && r.time_restriction_enabled !== null ? r.time_restriction_enabled : true,
-          startTime: r.start_time || '00:00',
-          endTime: r.end_time || '23:59',
+      // Sync Policies via Prisma
+      const policies = await prisma.workingPolicy.findMany();
+      for (const p of policies) {
+        this.data.policies[p.userId] = {
+          userId: p.userId,
+          timeRestrictionEnabled: p.timeRestrictionEnabled,
+          startTime: p.startTime || '00:00',
+          endTime: p.endTime || '23:59',
           days: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'],
-          timezone: r.timezone || 'Asia/Kolkata',
-          locationRestrictionEnabled: r.location_restriction_enabled !== undefined && r.location_restriction_enabled !== null ? r.location_restriction_enabled : (r.geofence_enabled ?? false),
-          allowedRegion: r.city,
-          geofenceEnabled: r.geofence_enabled !== undefined && r.geofence_enabled !== null ? r.geofence_enabled : false,
-          lat: r.lat,
-          lng: r.lng,
-          radiusMeters: (r.radius_km || 25) * 1000,
-          updatedAt: new Date().toISOString(),
+          timezone: p.timezone || 'Asia/Kolkata',
+          locationRestrictionEnabled: p.locationRestrictionEnabled,
+          allowedRegion: p.city,
+          geofenceEnabled: p.geofenceEnabled,
+          lat: p.lat,
+          lng: p.lng,
+          radiusMeters: (p.radiusKm || 25) * 1000,
+          updatedAt: p.setAt.toISOString(),
         };
       }
 
-      // Sync Wallets
-      const wRes = await pgPool.query('SELECT * FROM wallets;');
-      for (const r of wRes.rows) {
-        this.data.wallets[r.user_id] = {
-          userId: r.user_id,
-          walletId: r.wallet_id,
-          status: r.status || 'READY',
-          keyReferences: r.key_references || {},
-          createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
-          updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
+      // Sync Wallets via Prisma
+      const wallets = await prisma.walletIdentity.findMany();
+      for (const w of wallets) {
+        this.data.wallets[w.userId] = {
+          userId: w.userId,
+          walletId: w.walletId,
+          status: (w.status as any) || 'READY',
+          keyReferences: (w.keyReferences as any) || {},
+          createdAt: w.createdAt.toISOString(),
+          updatedAt: w.updatedAt.toISOString(),
         };
       }
 
-      console.log(`[DataStore] Successfully synced from PostgreSQL: ${uRes.rowCount} users, ${wRes.rowCount} wallets`);
+      console.log(
+        `[DataStore] Prisma ORM synced: ${users.length} users, ${wallets.length} wallets, ${mfas.length} MFAs`
+      );
     } catch (err: any) {
-      console.warn('[DataStore] Error syncing from PostgreSQL:', err.message);
+      console.warn('[DataStore] Warning syncing from Prisma:', err.message);
     }
   }
 
   public saveUser(user: UserRecord): void {
     this.data.users[user.id] = user;
     this.persist();
-    if (getIsPgConnected()) {
-      pgPool.query(
-        `INSERT INTO users (id, name, google_id, email, mobile, login_method, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (id) DO UPDATE SET
-           name = EXCLUDED.name,
-           google_id = EXCLUDED.google_id,
-           email = EXCLUDED.email,
-           mobile = EXCLUDED.mobile,
-           login_method = EXCLUDED.login_method;`,
-        [user.id, user.name || null, user.googleId || null, user.email || null, user.mobile || null, user.loginMethod, user.createdAt]
-      ).catch((e) => console.warn('[PostgreSQL] saveUser warning:', e.message));
-    }
+
+    // Persist via Prisma asynchronously
+    prisma.user
+      .upsert({
+        where: { id: user.id },
+        create: {
+          id: user.id,
+          name: user.name,
+          googleId: user.googleId,
+          email: user.email,
+          mobile: user.mobile,
+          loginMethod: user.loginMethod,
+        },
+        update: {
+          name: user.name,
+          googleId: user.googleId,
+          email: user.email,
+          mobile: user.mobile,
+          loginMethod: user.loginMethod,
+        },
+      })
+      .catch((e) => console.warn('[Prisma] saveUser warning:', e.message));
   }
 
   // --- MFA ---
@@ -313,28 +317,25 @@ export class DataStore {
   public saveMfa(record: MfaRecord): void {
     this.data.mfa[record.userId] = record;
     this.persist();
-    if (getIsPgConnected()) {
-      pgPool.query(
-        `INSERT INTO mfa (user_id, type, secret, totp_secret_encrypted, recovery_codes, recovery_codes_hashed, verified_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (user_id) DO UPDATE SET
-           type = EXCLUDED.type,
-           secret = EXCLUDED.secret,
-           totp_secret_encrypted = EXCLUDED.totp_secret_encrypted,
-           recovery_codes = EXCLUDED.recovery_codes,
-           recovery_codes_hashed = EXCLUDED.recovery_codes_hashed,
-           verified_at = EXCLUDED.verified_at;`,
-        [
-          record.userId,
-          record.type,
-          record.totpSecretEncrypted || null,
-          record.totpSecretEncrypted || null,
-          record.recoveryCodesHashed || [],
-          record.recoveryCodesHashed || [],
-          record.verifiedAt || null,
-        ]
-      ).catch((e) => console.warn('[PostgreSQL] saveMfa warning:', e.message));
-    }
+
+    prisma.mFAEnrollment
+      .upsert({
+        where: { userId: record.userId },
+        create: {
+          userId: record.userId,
+          type: record.type,
+          totpSecretEncrypted: record.totpSecretEncrypted,
+          recoveryCodesHashed: record.recoveryCodesHashed || [],
+          verifiedAt: record.verifiedAt ? new Date(record.verifiedAt) : undefined,
+        },
+        update: {
+          type: record.type,
+          totpSecretEncrypted: record.totpSecretEncrypted,
+          recoveryCodesHashed: record.recoveryCodesHashed || [],
+          verifiedAt: record.verifiedAt ? new Date(record.verifiedAt) : undefined,
+        },
+      })
+      .catch((e) => console.warn('[Prisma] saveMfa warning:', e.message));
   }
 
   // --- Working Policy ---
@@ -345,38 +346,39 @@ export class DataStore {
   public savePolicy(policy: WorkingPolicyRecord): void {
     this.data.policies[policy.userId] = policy;
     this.persist();
-    if (getIsPgConnected()) {
-      const radiusKm = policy.radiusMeters ? policy.radiusMeters / 1000 : 25;
-      pgPool.query(
-        `INSERT INTO work_policy (user_id, start_time, end_time, timezone, city, lat, lng, radius_km, time_restriction_enabled, location_restriction_enabled, geofence_enabled, set_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-         ON CONFLICT (user_id) DO UPDATE SET
-           start_time = EXCLUDED.start_time,
-           end_time = EXCLUDED.end_time,
-           timezone = EXCLUDED.timezone,
-           city = EXCLUDED.city,
-           lat = EXCLUDED.lat,
-           lng = EXCLUDED.lng,
-           radius_km = EXCLUDED.radius_km,
-           time_restriction_enabled = EXCLUDED.time_restriction_enabled,
-           location_restriction_enabled = EXCLUDED.location_restriction_enabled,
-           geofence_enabled = EXCLUDED.geofence_enabled,
-           set_at = NOW();`,
-        [
-          policy.userId,
-          policy.startTime || '00:00',
-          policy.endTime || '23:59',
-          policy.timezone || 'Asia/Kolkata',
-          policy.allowedRegion || 'Indore',
-          policy.lat || 22.7196,
-          policy.lng || 75.8577,
+
+    const radiusKm = policy.radiusMeters ? policy.radiusMeters / 1000 : 25;
+    prisma.workingPolicy
+      .upsert({
+        where: { userId: policy.userId },
+        create: {
+          userId: policy.userId,
+          startTime: policy.startTime || '00:00',
+          endTime: policy.endTime || '23:59',
+          timezone: policy.timezone || 'Asia/Kolkata',
+          city: policy.allowedRegion || 'Indore',
+          lat: policy.lat || 22.7196,
+          lng: policy.lng || 75.8577,
           radiusKm,
-          policy.timeRestrictionEnabled ?? true,
-          policy.locationRestrictionEnabled ?? false,
-          policy.geofenceEnabled ?? false,
-        ]
-      ).catch((e) => console.warn('[PostgreSQL] savePolicy warning:', e.message));
-    }
+          timeRestrictionEnabled: policy.timeRestrictionEnabled ?? true,
+          locationRestrictionEnabled: policy.locationRestrictionEnabled ?? false,
+          geofenceEnabled: policy.geofenceEnabled ?? false,
+        },
+        update: {
+          startTime: policy.startTime || '00:00',
+          endTime: policy.endTime || '23:59',
+          timezone: policy.timezone || 'Asia/Kolkata',
+          city: policy.allowedRegion || 'Indore',
+          lat: policy.lat || 22.7196,
+          lng: policy.lng || 75.8577,
+          radiusKm,
+          timeRestrictionEnabled: policy.timeRestrictionEnabled ?? true,
+          locationRestrictionEnabled: policy.locationRestrictionEnabled ?? false,
+          geofenceEnabled: policy.geofenceEnabled ?? false,
+          setAt: new Date(),
+        },
+      })
+      .catch((e) => console.warn('[Prisma] savePolicy warning:', e.message));
   }
 
   // --- Wallet Metadata (One-User-One-Wallet) ---
@@ -387,17 +389,23 @@ export class DataStore {
   public saveWallet(record: WalletMetadataRecord): void {
     this.data.wallets[record.userId] = record;
     this.persist();
-    if (getIsPgConnected()) {
-      pgPool.query(
-        `INSERT INTO wallets (user_id, wallet_id, status, key_references, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (user_id) DO UPDATE SET
-           status = EXCLUDED.status,
-           key_references = EXCLUDED.key_references,
-           updated_at = EXCLUDED.updated_at;`,
-        [record.userId, record.walletId, record.status, JSON.stringify(record.keyReferences), record.createdAt, record.updatedAt]
-      ).catch((e) => console.warn('[PostgreSQL] saveWallet warning:', e.message));
-    }
+
+    prisma.walletIdentity
+      .upsert({
+        where: { userId: record.userId },
+        create: {
+          userId: record.userId,
+          walletId: record.walletId,
+          status: record.status,
+          keyReferences: record.keyReferences,
+        },
+        update: {
+          status: record.status,
+          keyReferences: record.keyReferences,
+          updatedAt: new Date(),
+        },
+      })
+      .catch((e) => console.warn('[Prisma] saveWallet warning:', e.message));
   }
 
   // --- OTP Management ---
@@ -414,12 +422,32 @@ export class DataStore {
   public saveOtp(record: OtpRecord): void {
     this.data.otps[record.id] = record;
     this.persist();
+
+    prisma.oTPChallenge
+      .create({
+        data: {
+          id: record.id,
+          userId: record.userId,
+          code: record.codeHash,
+          purpose: record.purpose,
+          expiresAt: new Date(record.expiresAt),
+          used: record.used,
+        },
+      })
+      .catch((e) => console.warn('[Prisma] saveOtp warning:', e.message));
   }
 
   public markOtpUsed(id: string): void {
     if (this.data.otps[id]) {
       this.data.otps[id].used = true;
       this.persist();
+
+      prisma.oTPChallenge
+        .update({
+          where: { id },
+          data: { used: true },
+        })
+        .catch((e) => console.warn('[Prisma] markOtpUsed warning:', e.message));
     }
   }
 
@@ -439,6 +467,20 @@ export class DataStore {
       this.data.accessLogs = this.data.accessLogs.slice(-1000);
     }
     this.persist();
+
+    prisma.accessLog
+      .create({
+        data: {
+          id: record.id,
+          userId: record.userId,
+          attemptedAt: new Date(record.attemptedAt),
+          lat: record.lat,
+          lng: record.lng,
+          allowed: record.allowed,
+          reason: record.reason,
+        },
+      })
+      .catch((e) => console.warn('[Prisma] logAccess warning:', e.message));
   }
 
   public logSecurity(record: SecurityLogRecord): void {
@@ -447,5 +489,20 @@ export class DataStore {
       this.data.securityLogs = this.data.securityLogs.slice(-1000);
     }
     this.persist();
+
+    prisma.securityAuditEvent
+      .create({
+        data: {
+          id: record.id,
+          userId: record.userId,
+          eventType: record.eventType,
+          severity: record.severity,
+          ipAddress: record.ip,
+          userAgent: record.userAgent,
+          details: record.details ? JSON.stringify(record.details) : undefined,
+          createdAt: new Date(record.timestamp),
+        },
+      })
+      .catch((e) => console.warn('[Prisma] logSecurity warning:', e.message));
   }
 }

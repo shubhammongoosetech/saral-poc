@@ -1,0 +1,223 @@
+// SARAL Protocol — Prisma Schema
+// Zero-Address & Zero-Key Central Persistence Mandate
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String?  @db.VarChar(255)
+  googleId    String?  @unique @map("google_id") @db.VarChar(255)
+  email       String?  @unique @db.VarChar(255)
+  mobile      String?  @unique @db.VarChar(50)
+  loginMethod String   @map("login_method") @db.VarChar(50)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  identities         AuthIdentity[]
+  mfa                MFAEnrollment?
+  workPolicy         WorkingPolicy?
+  wallet             WalletIdentity?
+  sessions           AuthSession[]
+  otps               OTPChallenge[]
+  accessLogs         AccessLog[]
+  securityEvents     SecurityAuditEvent[]
+  transactions       Transaction[]
+  walletCreationJobs WalletCreationJob[]
+
+  @@map("users")
+}
+
+model AuthIdentity {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  provider   String   @db.VarChar(50)
+  providerId String   @map("provider_id") @db.VarChar(255)
+  metadata   Json?    @default("{}")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerId])
+  @@index([userId])
+  @@map("auth_identities")
+}
+
+model MFAEnrollment {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId              String    @unique @map("user_id") @db.Uuid
+  type                String    @default("totp") @db.VarChar(50)
+  secret              String?   @db.Text
+  totpSecretEncrypted String?   @map("totp_secret_encrypted") @db.Text
+  recoveryCodes       String[]  @default([]) @map("recovery_codes")
+  recoveryCodesHashed String[]  @default([]) @map("recovery_codes_hashed")
+  verifiedAt          DateTime? @map("verified_at") @db.Timestamptz(6)
+
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recoveryCodeRecords MFARecoveryCode[]
+
+  @@map("mfa")
+}
+
+model MFARecoveryCode {
+  id       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mfaId    String    @map("mfa_id") @db.Uuid
+  codeHash String    @map("code_hash") @db.VarChar(64)
+  used     Boolean   @default(false)
+  usedAt   DateTime? @map("used_at") @db.Timestamptz(6)
+
+  mfa MFAEnrollment @relation(fields: [mfaId], references: [id], onDelete: Cascade)
+
+  @@index([mfaId])
+  @@map("mfa_recovery_codes")
+}
+
+model WorkingPolicy {
+  id                         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                     String   @unique @map("user_id") @db.Uuid
+  startTime                  String   @map("start_time") @db.VarChar(10)
+  endTime                    String   @map("end_time") @db.VarChar(10)
+  timezone                   String   @default("Asia/Kolkata") @db.VarChar(100)
+  city                       String   @db.VarChar(255)
+  lat                        Float
+  lng                        Float
+  radiusKm                   Float    @default(25.0) @map("radius_km")
+  timeRestrictionEnabled     Boolean  @default(true) @map("time_restriction_enabled")
+  locationRestrictionEnabled Boolean  @default(false) @map("location_restriction_enabled")
+  geofenceEnabled            Boolean  @default(false) @map("geofence_enabled")
+  setAt                      DateTime @default(now()) @map("set_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("work_policy")
+}
+
+model OTPChallenge {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  code      String   @db.VarChar(255)
+  purpose   String   @db.VarChar(50)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("otps")
+}
+
+model AuthSession {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  tokenJti    String   @unique @map("token_jti") @db.VarChar(255)
+  mfaVerified Boolean  @default(false) @map("mfa_verified")
+  ipAddress   String?  @map("ip_address") @db.VarChar(100)
+  userAgent   String?  @map("user_agent") @db.VarChar(255)
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(6)
+  revoked     Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model WalletIdentity {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @unique @map("user_id") @db.Uuid
+  walletId      String   @unique @map("wallet_id") @db.VarChar(100)
+  status        String   @default("CREATING") @db.VarChar(50)
+  keyReferences Json     @default("{}") @map("key_references")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  keyReferenceRecords WalletKeyReference[]
+
+  @@map("wallets")
+}
+
+model WalletKeyReference {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  walletId  String   @map("wallet_id") @db.VarChar(100)
+  chain     String   @db.VarChar(50)
+  keyRef    String   @map("key_ref") @db.VarChar(100)
+  status    String   @default("ACTIVE") @db.VarChar(50)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  wallet WalletIdentity @relation(fields: [walletId], references: [walletId], onDelete: Cascade)
+
+  @@unique([walletId, chain])
+  @@map("wallet_key_references")
+}
+
+model WalletCreationJob {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  status    String   @default("PENDING") @db.VarChar(50)
+  error     String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("wallet_creation_jobs")
+}
+
+model SecurityAuditEvent {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  eventType    String   @map("event_type") @db.VarChar(100)
+  severity     String   @default("INFO") @db.VarChar(50)
+  ipAddress    String?  @map("ip_address") @db.VarChar(100)
+  userAgent    String?  @map("user_agent") @db.VarChar(255)
+  details      String?  @db.Text
+  previousHash String?  @map("previous_hash") @db.VarChar(64)
+  entryHash    String?  @map("entry_hash") @db.VarChar(64)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("security_event_logs")
+}
+
+model AccessLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  attemptedAt DateTime @default(now()) @map("attempted_at") @db.Timestamptz(6)
+  lat         Float?
+  lng         Float?
+  allowed     Boolean
+  reason      String   @db.Text
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("access_logs")
+}
+
+model Transaction {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  chain     String   @default("mst-testnet") @db.VarChar(50)
+  txHash    String   @unique @map("tx_hash") @db.VarChar(255)
+  toAddress String   @map("to_address") @db.VarChar(255)
+  amount    String   @db.VarChar(100)
+  status    String   @default("CONFIRMED") @db.VarChar(50)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("transactions")
+}

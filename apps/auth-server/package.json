@@ -1,16 +1,19 @@
 {
   "name": "@saral/auth-server",
   "version": "1.0.0",
-  "description": "SARAL Protocol V3 — Minimal Asymmetric Authentication Server",
+  "description": "SARAL Protocol — Minimal Asymmetric Authentication Server with Prisma ORM",
   "main": "dist/main.js",
   "scripts": {
     "dev": "tsx watch src/main.ts",
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "node dist/main.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy"
   },
   "type": "commonjs",
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "cors": "^2.8.5",
     "express": "^5.0.0",
     "helmet": "^8.0.0",
@@ -23,6 +26,7 @@
     "@types/jsonwebtoken": "^9.0.8",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.23.1",
+    "prisma": "^6.19.3",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
