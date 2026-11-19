@@ -108,6 +108,28 @@ interface StoreSchema {
   securityLogs: SecurityLogRecord[];
 }
 
+function resolveDataDir(): string {
+  if (process.env.DATA_DIR) {
+    return process.env.DATA_DIR;
+  }
+  // Traverse upward to locate the project root (where root package.json has name "saral")
+  let curr = __dirname;
+  while (curr !== path.dirname(curr)) {
+    const pkgPath = path.join(curr, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        if (pkg.name === 'saral') {
+          return path.join(curr, 'data');
+        }
+      } catch {}
+    }
+    curr = path.dirname(curr);
+  }
+  // Fallback for containerized or standalone environments
+  return path.resolve(__dirname, '../../data');
+}
+
 export class DataStore {
   private static instance: DataStore;
   private filePath: string;
@@ -115,7 +137,7 @@ export class DataStore {
   private writeLock = false;
 
   private constructor() {
-    const dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+    const dataDir = resolveDataDir();
     if (!fs.existsSync(dataDir)) {
       try {
         fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
