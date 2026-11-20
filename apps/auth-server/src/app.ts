@@ -12,6 +12,11 @@ export function createApp(): express.Application {
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json());
 
+  // Request logger for visibility
+  app.use((req, _res, next) => {
+    next();
+  });
+
   // Mount routes
   app.use('/', authRoutes);
   app.use('/api', authRoutes);

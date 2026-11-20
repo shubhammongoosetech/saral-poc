@@ -167,7 +167,7 @@ export class AuthService {
       if (parts.length === 3) {
         payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
       }
-    } catch (_) {}
+    } catch (_) { }
 
     if (!payload || (!payload.sub && !payload.email)) {
       throw new Error('Invalid Google credential token.');
@@ -237,7 +237,7 @@ export class AuthService {
           if (payload.sub) googleId = payload.sub;
           if (payload.email) email = payload.email;
         }
-      } catch (_) {}
+      } catch (_) { }
 
       const existing = await authRepository.findUserByGoogleId(googleId);
       if (existing && existing.id !== userId) {
