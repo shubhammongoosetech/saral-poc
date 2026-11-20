@@ -20,7 +20,20 @@ export class KeyManager {
   public publicKeyPem: string = '';
 
   private constructor() {
-    const keyDir = process.env.KEY_DIR || '';
+    let keyDir = process.env.KEY_DIR || '';
+    if (!keyDir) {
+      const candidates = [
+        path.resolve(__dirname, '../../../infra/config'),
+        path.resolve(process.cwd(), 'infra/config'),
+        path.resolve(process.cwd(), '../../infra/config'),
+      ];
+      for (const c of candidates) {
+        if (fs.existsSync(path.join(c, 'auth_private_key.pem'))) {
+          keyDir = c;
+          break;
+        }
+      }
+    }
     let loaded = false;
 
     if (keyDir && fs.existsSync(keyDir)) {
