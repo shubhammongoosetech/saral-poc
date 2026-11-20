@@ -202,8 +202,8 @@ export function evaluateWorkingPolicy(
   const reason = !timeCheck.allowed
     ? timeCheck.reason
     : !locationCheck.allowed
-    ? locationCheck.reason
-    : undefined;
+      ? locationCheck.reason
+      : undefined;
 
   // Log access decision
   store.logAccess({

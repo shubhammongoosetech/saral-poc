@@ -18,13 +18,13 @@
  */
 
 import crypto from 'crypto';
-import { SaralClient } from '@saral/saral-sdk';
+import { CoordinatorClient } from './coordinatorClient';
 import { KeyManager } from '../auth/token';
 import { DataStore, WalletMetadataRecord } from '../storage/store';
 import { evaluateWorkingPolicy } from './policyService';
 
 // Foundation Coordinator (Port 9001) client
-const coordinatorClient = new SaralClient({ coordinatorUrl: process.env.COORDINATOR_URL || 'http://localhost:9001' });
+const coordinatorClient = new CoordinatorClient(process.env.COORDINATOR_URL || 'http://localhost:9001');
 
 const store = DataStore.getInstance();
 

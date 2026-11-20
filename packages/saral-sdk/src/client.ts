@@ -405,7 +405,7 @@ export class SaralClient {
     cooldownSeconds: number;
     devOtp?: string;
   }> {
-    return this.authHttp<any>('/auth/phone/request-otp', {
+    return this.authHttp<any>('/auth/otp/request', {
       method: 'POST',
       body: JSON.stringify({ mobile }),
     });
@@ -419,7 +419,7 @@ export class SaralClient {
     hasPolicy: boolean;
     hasWallet: boolean;
   }> {
-    const data = await this.authHttp<any>('/auth/phone/verify-otp', {
+    const data = await this.authHttp<any>('/auth/otp/verify', {
       method: 'POST',
       body: JSON.stringify({ mobile, otp }),
     });
@@ -435,11 +435,11 @@ export class SaralClient {
   }
 
   public async enrollMfa(): Promise<MfaEnrollResponse> {
-    return this.authHttp<MfaEnrollResponse>('/auth/mfa/enroll', { method: 'POST' });
+    return this.authHttp<MfaEnrollResponse>('/mfa/enroll', { method: 'POST' });
   }
 
   public async verifyMfa(code: string): Promise<MfaVerifyResponse> {
-    const data = await this.authHttp<MfaVerifyResponse>('/auth/mfa/verify', {
+    const data = await this.authHttp<MfaVerifyResponse>('/mfa/verify', {
       method: 'POST',
       body: JSON.stringify({ code }),
     });

@@ -122,7 +122,7 @@ function resolveDataDir(): string {
         if (pkg.name === 'saral') {
           return path.join(curr, 'data');
         }
-      } catch {}
+      } catch { }
     }
     curr = path.dirname(curr);
   }
@@ -141,7 +141,7 @@ export class DataStore {
     if (!fs.existsSync(dataDir)) {
       try {
         fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-      } catch (_) {}
+      } catch (_) { }
     }
     this.filePath = path.join(dataDir, 'saral_auth_store.json');
     this.data = this.loadData();

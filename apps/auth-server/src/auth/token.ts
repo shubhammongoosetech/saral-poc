@@ -83,12 +83,13 @@ export class KeyManager {
 
   public issueToken(subject: string = 'dev-operator-1', role: string = 'admin', mfaVerified: boolean = true): string {
     const now = Math.floor(Date.now() / 1000);
+    const ttl = parseInt(process.env.ACCESS_TOKEN_TTL_SECONDS || '86400', 10);
     const payload: TokenClaims = {
       sub: subject,
       iss: 'saral-auth-server',
       aud: 'saral-domain-coordinators',
       iat: now,
-      exp: now + 3600, // 1 hour expiry
+      exp: now + ttl,
       mfaVerified,
       domainRole: role,
       nonce: crypto.randomBytes(16).toString('hex'),
