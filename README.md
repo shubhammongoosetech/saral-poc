@@ -59,8 +59,10 @@ For complete cryptographic specifications, sequence diagrams, and mathematical f
 This is the recommended workflow for development: DKG nodes, coordinators, and verifiers run inside Docker, while Auth Server and Web Frontend run locally on the host for rapid live-reloading.
 
 #### Step 1: Start Background DKG Mesh (Coordinators, Nodes, Verifiers)
-Start the 21 DKG backend containers in Docker:
+Start the 21 DKG backend containers in Docker (skipping web & auth-server):
 ```bash
+npm run docker:nodes
+# ya direct command:
 docker start $(docker ps -a -q --filter "name=saral-prod-coord" --filter "name=saral-prod-node" --filter "name=saral-prod-verifier")
 ```
 *Verify containers are up and healthy:*
