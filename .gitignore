@@ -37,3 +37,4 @@ vault_data/
 *.sock
 data/
 scratch/
+scripts/
