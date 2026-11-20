@@ -1,0 +1,137 @@
+{
+    "saral-foundation-4":  {
+                               "encryptionKeyHex":  "a1b87e2bdf3811a97efc52542a400b357b9c2b0bf6b99199c6441a55df0d763a",
+                               "domain":  "FOUNDATION",
+                               "publicKeyHex":  "a54bb933a281c60bcb3c3da236a6f4c6dac37eda3158075d0eb84cccea55e14f",
+                               "enrolledAt":  "2026-11-18T16:49:08Z",
+                               "approvedBy":  "genesis-bootstrap",
+                               "nodeId":  "saral-foundation-4",
+                               "endpoint":  "http://saral-node-f4:8001"
+                           },
+    "saral-public-4":  {
+                           "encryptionKeyHex":  "cb40f18b289038d979061109288865a7b93be7bd1eaf7c9e734d9b976806ac28",
+                           "domain":  "PUBLIC",
+                           "publicKeyHex":  "519b8731307f41999a4d39da8f00f429287bcab16098bd82bcce8dc4bdce67f7",
+                           "enrolledAt":  "2026-11-18T16:49:09Z",
+                           "approvedBy":  "genesis-bootstrap",
+                           "nodeId":  "saral-public-4",
+                           "endpoint":  "http://saral-node-p4:8001"
+                       },
+    "saral-foundation-2":  {
+                               "encryptionKeyHex":  "7c6b692c089b9ab5beb9cf14b260e6e3e3ad5c500d50fa503e8eb7b967dece15",
+                               "domain":  "FOUNDATION",
+                               "publicKeyHex":  "2d89f372607abc22ad87ee61845f3285a34c505d7bb50871212d5fef57b72e72",
+                               "enrolledAt":  "2026-11-18T16:49:08Z",
+                               "approvedBy":  "genesis-bootstrap",
+                               "nodeId":  "saral-foundation-2",
+                               "endpoint":  "http://saral-node-f2:8001"
+                           },
+    "saral-foundation-5":  {
+                               "encryptionKeyHex":  "1661e02528fab5f3c7a0c3c61dc89ddae469311290902f3facb9cfd8c1d63e3f",
+                               "domain":  "FOUNDATION",
+                               "publicKeyHex":  "67e4d960e322df9627dddc73150016b05856cd91108efbdb31a63277f71be6ec",
+                               "enrolledAt":  "2026-11-18T16:49:08Z",
+                               "approvedBy":  "genesis-bootstrap",
+                               "nodeId":  "saral-foundation-5",
+                               "endpoint":  "http://saral-node-f5:8001"
+                           },
+    "saral-private-1":  {
+                            "encryptionKeyHex":  "46417ad2a0227d7c1513bf14b2a7ca4443d14b3cceb722cc601a0fc8f2fdcb12",
+                            "domain":  "PRIVATE",
+                            "publicKeyHex":  "e0628b889e6c14f300300a08f0291a6ba222ca8bebb162d3247b45a6811a70cd",
+                            "enrolledAt":  "2026-11-18T16:49:09Z",
+                            "approvedBy":  "genesis-bootstrap",
+                            "nodeId":  "saral-private-1",
+                            "endpoint":  "http://saral-node-r1:8001"
+                        },
+    "saral-public-2":  {
+                           "encryptionKeyHex":  "40d66105fbeabee38327e2479b9c3c86337d3422ce53754c2eb377f91257203d",
+                           "domain":  "PUBLIC",
+                           "publicKeyHex":  "704af2cfa7b9c75fdf7e34d09a27cd63630b08dad2ae1178411e82e4e8b52885",
+                           "enrolledAt":  "2026-11-18T16:49:09Z",
+                           "approvedBy":  "genesis-bootstrap",
+                           "nodeId":  "saral-public-2",
+                           "endpoint":  "http://saral-node-p2:8001"
+                       },
+    "saral-foundation-3":  {
+                               "encryptionKeyHex":  "736166ac0b806a4e21019f9e1a44f32db0b1389cf0b4cc656bdf8fcfeb9dfc54",
+                               "domain":  "FOUNDATION",
+                               "publicKeyHex":  "955c116ad1464b7e11a385070452d10c15671cbdfdfb71378ae9727f0a880ecd",
+                               "enrolledAt":  "2026-11-18T16:49:08Z",
+                               "approvedBy":  "genesis-bootstrap",
+                               "nodeId":  "saral-foundation-3",
+                               "endpoint":  "http://saral-node-f3:8001"
+                           },
+    "saral-public-1":  {
+                           "encryptionKeyHex":  "4f4dece74cdf984e03e13602d2692efed6942ee847135dadc14f73c6ec9b5961",
+                           "domain":  "PUBLIC",
+                           "publicKeyHex":  "1505d835b869ea46d4047a61e469c022fa986fd393b61edeb1b22c5d403e3a9e",
+                           "enrolledAt":  "2026-11-18T16:49:08Z",
+                           "approvedBy":  "genesis-bootstrap",
+                           "nodeId":  "saral-public-1",
+                           "endpoint":  "http://saral-node-p1:8001"
+                       },
+    "saral-private-2":  {
+                            "encryptionKeyHex":  "bdc59309a1da5861eb7307463c330c437f95ccd547ecbc3443c56af332e13943",
+                            "domain":  "PRIVATE",
+                            "publicKeyHex":  "2c956516fb0d3138f7c8dfb2209a3dd95f5679fd20430a722032d71612eae663",
+                            "enrolledAt":  "2026-11-18T16:49:09Z",
+                            "approvedBy":  "genesis-bootstrap",
+                            "nodeId":  "saral-private-2",
+                            "endpoint":  "http://saral-node-r2:8001"
+                        },
+    "saral-private-5":  {
+                            "encryptionKeyHex":  "b535ccc3e34c85a4822b30ade906afa1c05299fcaa5d7d59943298451ba7a04b",
+                            "domain":  "PRIVATE",
+                            "publicKeyHex":  "9b00df76a7e23e6eac07728cfa3704b8f9965fa83673a5b850b3bc8b6fd9c8f2",
+                            "enrolledAt":  "2026-11-18T16:49:09Z",
+                            "approvedBy":  "genesis-bootstrap",
+                            "nodeId":  "saral-private-5",
+                            "endpoint":  "http://saral-node-r5:8001"
+                        },
+    "saral-public-3":  {
+                           "encryptionKeyHex":  "b45bdb89e5a383b166f7b75d4254ae9f675fe67dfc002ff65e06ea10903b4c49",
+                           "domain":  "PUBLIC",
+                           "publicKeyHex":  "3f36f1b545e0c871c23986dbd49ef58db2488cf89a6f3e8147623fd2e84de240",
+                           "enrolledAt":  "2026-11-18T16:49:09Z",
+                           "approvedBy":  "genesis-bootstrap",
+                           "nodeId":  "saral-public-3",
+                           "endpoint":  "http://saral-node-p3:8001"
+                       },
+    "saral-foundation-1":  {
+                               "encryptionKeyHex":  "5fa57e40794a68c4c44033a83ed700a645057883c90b3c8560edd5fe7ad8fe55",
+                               "domain":  "FOUNDATION",
+                               "publicKeyHex":  "1d38cc517673cead0ed54b1572f3690ec77e8119b0c7a15f7db1f19cf3b53029",
+                               "enrolledAt":  "2026-11-18T16:49:08Z",
+                               "approvedBy":  "genesis-bootstrap",
+                               "nodeId":  "saral-foundation-1",
+                               "endpoint":  "http://saral-node-f1:8001"
+                           },
+    "saral-private-3":  {
+                            "encryptionKeyHex":  "8e65bb235b088c385468ca5f682102e3580e15d434999e2762eaae1940dacd61",
+                            "domain":  "PRIVATE",
+                            "publicKeyHex":  "b38f38eef41f25c2856048556304c1faebe1d032941ddea68ec8f7a60d2a47df",
+                            "enrolledAt":  "2026-11-18T16:49:09Z",
+                            "approvedBy":  "genesis-bootstrap",
+                            "nodeId":  "saral-private-3",
+                            "endpoint":  "http://saral-node-r3:8001"
+                        },
+    "saral-public-5":  {
+                           "encryptionKeyHex":  "29f79298a3f7217eae05f529d25889121c986574a316fc0f36d5091d41679471",
+                           "domain":  "PUBLIC",
+                           "publicKeyHex":  "476357bbb56fab759f7bb4f7ed675b331cfb71b6f443cf6fd2fc11819dbc3b6f",
+                           "enrolledAt":  "2026-11-18T16:49:09Z",
+                           "approvedBy":  "genesis-bootstrap",
+                           "nodeId":  "saral-public-5",
+                           "endpoint":  "http://saral-node-p5:8001"
+                       },
+    "saral-private-4":  {
+                            "encryptionKeyHex":  "a00069589a5c8dacd176cd969b3b6b555a9fbdd2339616ba257a9ef22216c54d",
+                            "domain":  "PRIVATE",
+                            "publicKeyHex":  "62fd6ca52a43901cadfb8d82f9a4cde2bcd5a1720186eeab7df17360703ce055",
+                            "enrolledAt":  "2026-11-18T16:49:09Z",
+                            "approvedBy":  "genesis-bootstrap",
+                            "nodeId":  "saral-private-4",
+                            "endpoint":  "http://saral-node-r4:8001"
+                        }
+}
