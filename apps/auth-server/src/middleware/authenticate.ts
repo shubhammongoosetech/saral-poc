@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
 import { KeyManager } from '../auth/token';
 
 const keyManager = KeyManager.getInstance();
@@ -27,12 +26,10 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
 
   const token = authHeader.substring(7).trim();
   try {
-    const decoded = jwt.verify(token, keyManager.publicKeyPem, {
-      algorithms: ['RS256'],
-    }) as any;
+    const decoded = keyManager.verifyToken(token) as any;
 
     req.user = {
-      userId: decoded.sub || decoded.userId,
+      userId: decoded.userId || decoded.sub,
       role: decoded.domainRole || decoded.role || 'operator',
       mfaVerified: !!decoded.mfaVerified,
     };
@@ -41,4 +38,3 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
     res.status(401).json({ success: false, error: 'Unauthorized: Invalid or expired token' });
   }
 }
-

@@ -4,7 +4,6 @@
   "private": true,
   "description": "SARAL Protocol — Separation-of-Powers Cryptographic Key Infrastructure",
   "workspaces": [
-    "packages/*",
     "apps/*"
   ],
   "engines": {
@@ -12,15 +11,16 @@
     "npm": ">=10.0.0"
   },
   "scripts": {
-    "clean": "rm -rf services/coordinator/bin services/saral-node/bin services/verifier/bin packages/*/dist apps/*/dist",
+    "clean": "rm -rf services/coordinator/bin services/saral-node/bin services/verifier/bin apps/*/dist",
     "build:go": "go build -o services/coordinator/bin/coordinator ./services/coordinator/cmd/main.go && go build -o services/verifier/bin/verifier ./services/verifier/cmd/main.go && go build -o services/saral-node/bin/saral-node ./services/saral-node/cmd/main.go",
-    "build:sdk": "npm --prefix packages/saral-sdk run build",
     "build:apps": "npm --prefix apps/auth-server run build && npm --prefix apps/web run build",
-    "build": "npm run build:go && npm run build:sdk && npm run build:apps",
+    "build": "npm run build:go && npm run build:apps",
     "prisma:generate": "npm --prefix apps/auth-server run prisma:generate",
     "prisma:migrate": "npm --prefix apps/auth-server run prisma:migrate",
+    "prisma:push": "npx prisma db push --schema=apps/auth-server/prisma/schema.prisma",
     "dev": "concurrently -n AUTH,WEB -c \"blue,green\" \"npm --prefix apps/auth-server run dev\" \"npm --prefix apps/web run dev\"",
-    "test": "npm run test:sdk && npm run test:go && npm run test:all-crypto",
+    "test": "npm run test:ts && npm run test:go && npm run test:all-crypto",
+    "test:ts": "vitest run",
     "test:sdk": "vitest run",
     "test:go": "cd tests/architecture && go test -v -timeout 60s ./...",
     "test:relay": "cd tests/architecture && go test -v -timeout 45s -run TestRelay ./...",
@@ -37,7 +37,7 @@
     "docker:full": "docker compose -f infra/compose/full24.yml up -d",
     "docker:down": "docker compose -f infra/compose/poc15.yml down && docker compose -f infra/compose/full24.yml down",
     "docker:status": "docker compose -f infra/compose/full24.yml ps",
-    "typecheck": "npm --prefix apps/auth-server run typecheck && npm --prefix apps/web run typecheck && npx tsc -p packages/saral-sdk/tsconfig.json --noEmit"
+    "typecheck": "npm --prefix apps/auth-server run typecheck && npm --prefix apps/web run typecheck"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

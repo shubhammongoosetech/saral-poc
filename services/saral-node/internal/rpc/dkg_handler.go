@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/saral-protocol/saral-poc/services/saral-node/dkg"
@@ -123,6 +124,55 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 			"masterPublicKey": view.MasterPublicKey,
 			"curve":           view.Curve,
 			"state":           string(view.State),
+		})
+	})
+
+	// POST /node/dkg/share-contribution — Returns public verification point Y_i = x_i * G
+	// strictly WITHOUT EVER exposing or reconstructing the private scalar share x_i.
+	mux.HandleFunc("/node/dkg/share-contribution", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost && r.Method != http.MethodGet {
+			http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !auth.ValidateInternalAuth(r) && !auth.ValidateAdminAuth(r) {
+			http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+
+		var req struct {
+			SessionID   string `json:"sessionId"`
+			CommitteeID string `json:"committeeId"`
+			Epoch       uint64 `json:"epoch"`
+			UserID      string `json:"userId"`
+			WalletID    string `json:"walletId"`
+			KeyID       string `json:"keyId"`
+		}
+
+		if r.Method == http.MethodPost {
+			_ = json.NewDecoder(r.Body).Decode(&req)
+		} else {
+			req.SessionID = r.URL.Query().Get("sessionId")
+			req.CommitteeID = r.URL.Query().Get("committeeId")
+		}
+
+		if req.SessionID == "" && req.KeyID != "" {
+			req.SessionID = req.KeyID
+		}
+
+		point, nodeIndex, actualEpoch, commit, err := dkgEngine.GetPublicShareContribution(req.SessionID, req.CommitteeID, req.Epoch)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":                true,
+			"nodeId":                 dkgEngine.NodeID,
+			"nodeIndex":              nodeIndex,
+			"epoch":                  actualEpoch,
+			"publicPoint":            point.Hex(),
+			"publicSecretCommitment": commit,
 		})
 	})
 }

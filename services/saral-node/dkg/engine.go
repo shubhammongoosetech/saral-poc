@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/saral-protocol/saral-poc/services/saral-node/avss"
+	"github.com/saral-protocol/saral-poc/services/saral-node/cryptography"
 	"github.com/saral-protocol/saral-poc/services/saral-node/proactive"
 	"github.com/saral-protocol/saral-poc/services/saral-node/vault"
 )
@@ -343,3 +344,53 @@ func (e *Engine) GetAllSessionViews() []*DKGSessionPublicView {
 	}
 	return views
 }
+
+// GetPublicShareContribution computes the node's public share point Y_i = x_i * G from its
+// existing encrypted DKG share, WITHOUT EVER exposing or reconstructing the private scalar x_i.
+func (e *Engine) GetPublicShareContribution(
+	sessionID, committeeID string,
+	epoch uint64,
+) (*cryptography.CurvePoint, int, uint64, string, error) {
+	if epoch == 0 {
+		epoch = 1
+	}
+
+	// 1. Try loading from encrypted vault
+	if e.ShareStore != nil && committeeID != "" {
+		meta, share, _, err := e.ShareStore.LoadShare(committeeID, epoch, epoch)
+		if err == nil && share != nil {
+			point := cryptography.GeneratorG.ScalarMult(share)
+			return point, meta.NodeIndex, meta.Epoch, meta.PublicSecretCommitment, nil
+		}
+	}
+
+	// 2. Try loading from active in-memory sessions
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	var matchedSession *Session
+	if sessionID != "" {
+		matchedSession = e.sessions[sessionID]
+	}
+	if matchedSession == nil && committeeID != "" {
+		for _, s := range e.sessions {
+			if s.CommitteeID == committeeID {
+				matchedSession = s
+				break
+			}
+		}
+	}
+
+	if matchedSession != nil && matchedSession.FinalShare != nil {
+		point := cryptography.GeneratorG.ScalarMult(matchedSession.FinalShare)
+		commit := ""
+		if matchedSession.MasterSecretCommitment != nil {
+			commit = matchedSession.MasterSecretCommitment.Hex()
+		}
+		return point, matchedSession.SelfIndex, matchedSession.Epoch, commit, nil
+	}
+
+	return nil, 0, 0, "", fmt.Errorf("no verified DKG share found on node %s for committee %s / session %s at epoch %d",
+		e.NodeID, committeeID, sessionID, epoch)
+}
+

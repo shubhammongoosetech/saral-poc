@@ -227,6 +227,8 @@ func (s *Server) dispatch(method string, params json.RawMessage, token string) (
 		return s.handleGetDKGParticipants(params)
 	case "saral_getDkgPublicKey", "saral_getPublicKey":
 		return s.handleGetDKGPublicKey(params)
+	case "saral_derivePublicKey", "saral_reconstructPublicKey":
+		return s.handleDerivePublicKey(params, token)
 	case "saral_getDkgVerificationStatus":
 		return s.handleGetDKGVerificationStatus(params)
 	case "saral_createWallet":

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { SESSION_STORE } from '../lib/storage';
+import { setAuthErrorHandler as setFetchAuthErrorHandler } from '../../services/httpClient';
 
 type AuthErrorHandler = {
   onUnauthorized?: () => void;
@@ -10,6 +11,7 @@ let authErrorHandler: AuthErrorHandler = {};
 
 export function setAuthErrorHandler(handler: AuthErrorHandler) {
   authErrorHandler = handler;
+  setFetchAuthErrorHandler(handler);
 }
 
 export const apiClient = axios.create({

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -83,13 +82,13 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 
 	testInternalToken := "saral-test-internal-token-2026-xyz"
 
-	// 2. Generate RSA Keypair & JWT for Auth
-	t.Log("[STEP 2] Setting up Auth Server RSA keypair and issuing RS256 JWT...")
-	authPrivKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	// 2. Generate Ed25519 Keypair & JWT for Auth
+	t.Log("[STEP 2] Setting up Auth Server Ed25519 keypair and issuing EdDSA JWT...")
+	authPubKey, authPrivKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("failed to generate RSA key: %v", err)
+		t.Fatalf("failed to generate Ed25519 key: %v", err)
 	}
-	pubBytes, err := x509.MarshalPKIXPublicKey(&authPrivKey.PublicKey)
+	pubBytes, err := x509.MarshalPKIXPublicKey(authPubKey)
 	if err != nil {
 		t.Fatalf("failed to marshal PKIX public key: %v", err)
 	}
@@ -111,7 +110,8 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 		"exp":         time.Now().Add(1 * time.Hour).Unix(),
 		"iat":         time.Now().Unix(),
 	}
-	tokenObj := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tokenObj := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenObj.Header["kid"] = "saral-auth-ed25519-2026-01"
 	validToken, err := tokenObj.SignedString(authPrivKey)
 	if err != nil {
 		t.Fatalf("failed to sign JWT: %v", err)
@@ -181,7 +181,7 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 	if vBadResult.Valid {
 		t.Fatalf("verifier accepted forged token!")
 	}
-	t.Log("  -> All 3 Verifiers active: validated genuine RS256 token and rejected forged token.")
+	t.Log("  -> All 3 Verifiers active: validated genuine EdDSA token and rejected forged token.")
 
 	// 4. Launch 15 Nodes across 3 Domains
 	t.Log("[STEP 4] Launching 15 independent SARAL Node instances (5 Foundation, 5 Public, 5 Private)...")
@@ -506,7 +506,7 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 	t.Log("  -> Unauthorized RPC rejected properly with -32001.")
 
 	// 10. Test Cross-Domain Aggregated Network Status: saral_getNetworkStatus
-	t.Log("[STEP 10] Calling saral_getNetworkStatus with RS256 JWT...")
+	t.Log("[STEP 10] Calling saral_getNetworkStatus with EdDSA JWT...")
 	netReqBody := []byte(`{"jsonrpc":"2.0","id":2,"method":"saral_getNetworkStatus","params":{}}`)
 	netReq, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/rpc", coordFPort), bytes.NewReader(netReqBody))
 	netReq.Header.Set("Content-Type", "application/json")

@@ -21,14 +21,20 @@ type VerifyRequest struct {
 func main() {
 	domainFlag := flag.String("domain", getEnv("DOMAIN", "FOUNDATION"), "Domain: FOUNDATION | PUBLIC | PRIVATE")
 	portFlag := flag.Int("port", getEnvInt("PORT", getEnvInt("HTTP_PORT", 9101)), "HTTP Port to listen on")
-	pubKeyFlag := flag.String("pubkey", getEnv("PUBLIC_KEY_PATH", "/keys/auth_public_key.pem"), "Path to auth server RSA public key PEM")
-	authServerFlag := flag.String("auth-server-url", getEnv("AUTH_SERVER_URL", "http://localhost:3001"), "Auth Server URL for public key discovery")
+	pubKeyFlag := flag.String("pubkey", getEnv("PUBLIC_KEY_PATH", "/keys/auth_public_key.pem"), "Path to auth server Ed25519 public key or JWKS file")
+	authServerFlag := flag.String("auth-server-url", getEnv("AUTH_SERVER_URL", "http://localhost:3001"), "Auth Server URL for JWKS discovery")
+	jwksURLFlag := flag.String("jwks-url", getEnv("JWKS_URL", ""), "Direct URL to JWKS endpoint")
 	flag.Parse()
 
 	domain := strings.ToUpper(*domainFlag)
-	log.Printf("[SARAL Verifier - %s] Starting on port %d...", domain, *portFlag)
+	log.Printf("[SARAL Verifier - %s] Starting on port %d with EdDSA/JWKS verification...", domain, *portFlag)
 
-	verifier := auth.NewTokenVerifier(domain, *pubKeyFlag, *authServerFlag)
+	authURL := *authServerFlag
+	if *jwksURLFlag != "" {
+		authURL = *jwksURLFlag
+	}
+
+	verifier := auth.NewTokenVerifier(domain, *pubKeyFlag, authURL)
 
 	http.HandleFunc("/health", health.Handler(domain, verifier.Ready))
 

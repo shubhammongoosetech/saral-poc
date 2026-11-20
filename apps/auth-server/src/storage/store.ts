@@ -9,9 +9,6 @@
  * 3. Fail-Closed / High Performance In-Memory Sync for sub-millisecond route resolution.
  */
 
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
 import { prisma } from '../database/prisma';
 
 export interface UserRecord {
@@ -59,6 +56,7 @@ export interface WalletMetadataRecord {
     mst?: string;
     solana?: string;
     bitcoin?: string;
+    dkgSessionId?: string;
   };
   createdAt: string;
   updatedAt: string;
@@ -108,73 +106,12 @@ interface StoreSchema {
   securityLogs: SecurityLogRecord[];
 }
 
-function resolveDataDir(): string {
-  if (process.env.DATA_DIR) {
-    return process.env.DATA_DIR;
-  }
-  // Traverse upward to locate the project root (where root package.json has name "saral")
-  let curr = __dirname;
-  while (curr !== path.dirname(curr)) {
-    const pkgPath = path.join(curr, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-        if (pkg.name === 'saral') {
-          return path.join(curr, 'data');
-        }
-      } catch {}
-    }
-    curr = path.dirname(curr);
-  }
-  // Fallback for containerized or standalone environments
-  return path.resolve(__dirname, '../../data');
-}
-
 export class DataStore {
   private static instance: DataStore;
-  private filePath: string;
   private data: StoreSchema;
-  private writeLock = false;
 
   private constructor() {
-    const dataDir = resolveDataDir();
-    if (!fs.existsSync(dataDir)) {
-      try {
-        fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-      } catch (_) {}
-    }
-    this.filePath = path.join(dataDir, 'saral_auth_store.json');
-    this.data = this.loadData();
-  }
-
-  public static getInstance(): DataStore {
-    if (!DataStore.instance) {
-      DataStore.instance = new DataStore();
-    }
-    return DataStore.instance;
-  }
-
-  private loadData(): StoreSchema {
-    if (fs.existsSync(this.filePath)) {
-      try {
-        const content = fs.readFileSync(this.filePath, 'utf8');
-        const parsed = JSON.parse(content);
-        return {
-          version: parsed.version || 1,
-          users: parsed.users || {},
-          mfa: parsed.mfa || {},
-          policies: parsed.policies || {},
-          wallets: parsed.wallets || {},
-          otps: parsed.otps || {},
-          accessLogs: parsed.accessLogs || [],
-          securityLogs: parsed.securityLogs || [],
-        };
-      } catch (err) {
-        console.warn('[DataStore] Fallback read warning:', err);
-      }
-    }
-
-    return {
+    this.data = {
       version: 1,
       users: {},
       mfa: {},
@@ -186,24 +123,16 @@ export class DataStore {
     };
   }
 
-  private persist(): void {
-    if (this.writeLock) return;
-    this.writeLock = true;
-    try {
-      const dir = path.dirname(this.filePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      }
-
-      const tempFile = `${this.filePath}.tmp.${crypto.randomBytes(6).toString('hex')}`;
-      const payload = JSON.stringify(this.data, null, 2);
-      fs.writeFileSync(tempFile, payload, { mode: 0o600 });
-      fs.renameSync(tempFile, this.filePath);
-    } catch (err) {
-      console.error('[DataStore] Atomic write failed:', err);
-    } finally {
-      this.writeLock = false;
+  public static getInstance(): DataStore {
+    if (!DataStore.instance) {
+      DataStore.instance = new DataStore();
     }
+    return DataStore.instance;
+  }
+
+  private persist(): void {
+    // In-memory cache is synchronized directly with PostgreSQL through Prisma Client.
+    // Zero filesystem writes and zero disk JSON file persistence.
   }
 
   // --- Users ---

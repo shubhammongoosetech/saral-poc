@@ -1,8 +1,10 @@
 package auth
 
 import (
-	"crypto/rsa"
+	"crypto/ed25519"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -25,11 +27,26 @@ type AuthResult struct {
 	Error  string                 `json:"error,omitempty"`
 }
 
+type JWKKey struct {
+	Kty string `json:"kty"`
+	Crv string `json:"crv"`
+	Kid string `json:"kid"`
+	Alg string `json:"alg"`
+	Use string `json:"use"`
+	X   string `json:"x"`
+}
+
+type JWKSResponse struct {
+	Keys []JWKKey `json:"keys"`
+}
+
 type TokenVerifier struct {
 	domain        string
 	pubKeyPath    string
 	authServerURL string
-	parsedPubKey  *rsa.PublicKey
+	keysByKid     map[string]ed25519.PublicKey
+	defaultKey    ed25519.PublicKey
+	lastLoaded    time.Time
 	mu            sync.RWMutex
 }
 
@@ -38,6 +55,7 @@ func NewTokenVerifier(domain, pubKeyPath, authServerURL string) *TokenVerifier {
 		domain:        strings.ToUpper(domain),
 		pubKeyPath:    pubKeyPath,
 		authServerURL: authServerURL,
+		keysByKid:     make(map[string]ed25519.PublicKey),
 	}
 
 	// Try initial key load
@@ -48,52 +66,144 @@ func NewTokenVerifier(domain, pubKeyPath, authServerURL string) *TokenVerifier {
 func (tv *TokenVerifier) Ready() bool {
 	tv.mu.RLock()
 	defer tv.mu.RUnlock()
-	return tv.parsedPubKey != nil
+	return len(tv.keysByKid) > 0 || len(tv.defaultKey) > 0
+}
+
+func parseJWKToEd25519(jwk JWKKey) (ed25519.PublicKey, error) {
+	if jwk.Kty != "OKP" || (jwk.Crv != "Ed25519" && jwk.Crv != "ed25519") {
+		return nil, fmt.Errorf("unsupported key type: kty=%s, crv=%s", jwk.Kty, jwk.Crv)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(jwk.X)
+	if err != nil {
+		raw, err = base64.URLEncoding.DecodeString(jwk.X)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode jwk x parameter: %w", err)
+		}
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid ed25519 public key length: expected %d, got %d", ed25519.PublicKeySize, len(raw))
+	}
+	return ed25519.PublicKey(raw), nil
 }
 
 func (tv *TokenVerifier) LoadPublicKey() error {
-	var pemBytes []byte
+	var keyBytes []byte
+	isJWKS := false
 
 	// 1. Try file path if specified
 	if tv.pubKeyPath != "" {
 		if b, readErr := os.ReadFile(tv.pubKeyPath); readErr == nil && len(b) > 0 {
-			pemBytes = b
+			keyBytes = b
+			trimmed := strings.TrimSpace(string(b))
+			if strings.HasPrefix(trimmed, "{") && strings.Contains(trimmed, "keys") {
+				isJWKS = true
+			}
 		}
 	}
 
-	// 2. Fall back to Auth Server URL if file not found
-	if len(pemBytes) == 0 && tv.authServerURL != "" {
+	// 2. Fetch from Auth Server JWKS endpoint if not loaded from file
+	if len(keyBytes) == 0 && tv.authServerURL != "" {
 		client := &http.Client{Timeout: 3 * time.Second}
-		resp, fetchErr := client.Get(strings.TrimRight(tv.authServerURL, "/") + "/auth/public-key")
-		if fetchErr == nil && resp.StatusCode == http.StatusOK {
-			defer resp.Body.Close()
-			pemBytes, _ = io.ReadAll(resp.Body)
+		jwksEndpoints := []string{
+			strings.TrimRight(tv.authServerURL, "/") + "/.well-known/jwks.json",
+			strings.TrimRight(tv.authServerURL, "/") + "/api/.well-known/jwks.json",
+			strings.TrimRight(tv.authServerURL, "/") + "/auth/jwks.json",
+			strings.TrimRight(tv.authServerURL, "/") + "/auth/public-key",
+		}
+
+		for _, endpoint := range jwksEndpoints {
+			resp, fetchErr := client.Get(endpoint)
+			if fetchErr == nil && resp.StatusCode == http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if len(body) > 0 {
+					keyBytes = body
+					trimmed := strings.TrimSpace(string(body))
+					if strings.HasPrefix(trimmed, "{") && strings.Contains(trimmed, "keys") {
+						isJWKS = true
+					}
+					break
+				}
+			}
 		}
 	}
 
-	if len(pemBytes) == 0 {
+	if len(keyBytes) == 0 {
 		return errors.New("no public key material available (file or auth server)")
 	}
 
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return errors.New("failed to parse PEM block from public key")
-	}
-
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return fmt.Errorf("failed to parse PKIX public key: %w", err)
-	}
-
-	rsaPub, ok := pub.(*rsa.PublicKey)
-	if !ok {
-		return errors.New("public key is not an RSA public key")
-	}
-
 	tv.mu.Lock()
-	tv.parsedPubKey = rsaPub
-	tv.mu.Unlock()
-	return nil
+	defer tv.mu.Unlock()
+
+	// Parse JWKS payload
+	if isJWKS || (strings.HasPrefix(strings.TrimSpace(string(keyBytes)), "{") && strings.Contains(string(keyBytes), "keys")) {
+		var jwks JWKSResponse
+		if err := json.Unmarshal(keyBytes, &jwks); err == nil && len(jwks.Keys) > 0 {
+			for _, k := range jwks.Keys {
+				if pub, err := parseJWKToEd25519(k); err == nil {
+					kid := k.Kid
+					if kid == "" {
+						kid = "saral-auth-ed25519-2026-01"
+					}
+					tv.keysByKid[kid] = pub
+					if len(tv.defaultKey) == 0 {
+						tv.defaultKey = pub
+					}
+				}
+			}
+			tv.lastLoaded = time.Now()
+			return nil
+		}
+	}
+
+	// Parse PEM block (SPKI or Ed25519 public key)
+	block, _ := pem.Decode(keyBytes)
+	if block != nil {
+		pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+		if err != nil {
+			return fmt.Errorf("failed to parse PKIX public key: %w", err)
+		}
+
+		edPub, ok := pub.(ed25519.PublicKey)
+		if !ok {
+			return errors.New("public key is not an Ed25519 public key (RSA and other algorithms rejected)")
+		}
+
+		defaultKid := "saral-auth-ed25519-2026-01"
+		tv.keysByKid[defaultKid] = edPub
+		tv.defaultKey = edPub
+		tv.lastLoaded = time.Now()
+		return nil
+	}
+
+	// Try parsing raw 32-byte Ed25519 public key
+	if len(keyBytes) == ed25519.PublicKeySize {
+		edPub := ed25519.PublicKey(keyBytes)
+		defaultKid := "saral-auth-ed25519-2026-01"
+		tv.keysByKid[defaultKid] = edPub
+		tv.defaultKey = edPub
+		tv.lastLoaded = time.Now()
+		return nil
+	}
+
+	return errors.New("failed to parse valid Ed25519 public key or JWKS from trust material")
+}
+
+func (tv *TokenVerifier) getKeyByKid(kid string) (ed25519.PublicKey, bool) {
+	tv.mu.RLock()
+	defer tv.mu.RUnlock()
+
+	if kid != "" {
+		if k, ok := tv.keysByKid[kid]; ok {
+			return k, true
+		}
+		// When kid is explicitly specified, fail-closed: do NOT fall back to a different key!
+		return nil, false
+	}
+	if len(tv.defaultKey) > 0 {
+		return tv.defaultKey, true
+	}
+	return nil, false
 }
 
 func (tv *TokenVerifier) VerifyToken(tokenStr string) (*AuthResult, error) {
@@ -111,29 +221,45 @@ func (tv *TokenVerifier) VerifyTokenWithRole(tokenStr string, requiredRole strin
 		}
 	}
 
-	tv.mu.RLock()
-	pubKey := tv.parsedPubKey
-	tv.mu.RUnlock()
-
-	if pubKey == nil {
-		return &AuthResult{
-			Valid: false,
-			Error: "Public key is not initialized",
-		}, errors.New("uninitialized public key")
-	}
-
 	tokenClean := strings.TrimSpace(strings.TrimPrefix(tokenStr, "Bearer "))
 	if tokenClean == "" {
 		return &AuthResult{Valid: false, Error: "Missing or empty bearer token"}, errors.New("missing token")
 	}
 
+	// Parse unverified header to extract kid and validate algorithm
+	unverifiedToken, _, err := new(jwt.Parser).ParseUnverified(tokenClean, jwt.MapClaims{})
+	if err != nil {
+		return &AuthResult{Valid: false, Error: "Malformed JWT token structure"}, fmt.Errorf("malformed token: %w", err)
+	}
+
+	// Strict EdDSA algorithm check
+	alg, ok := unverifiedToken.Header["alg"].(string)
+	if !ok || alg != "EdDSA" {
+		errMsg := fmt.Sprintf("invalid token algorithm %v: only EdDSA is permitted", unverifiedToken.Header["alg"])
+		return &AuthResult{Valid: false, Error: errMsg}, errors.New(errMsg)
+	}
+
+	kid, _ := unverifiedToken.Header["kid"].(string)
+	pubKey, found := tv.getKeyByKid(kid)
+
+	// If kid not found in cache, attempt a fresh JWKS reload (key rotation support)
+	if !found && tv.authServerURL != "" {
+		_ = tv.LoadPublicKey()
+		pubKey, found = tv.getKeyByKid(kid)
+	}
+
+	if !found || len(pubKey) == 0 {
+		errMsg := fmt.Sprintf("no trusted verification key found for kid '%s' (fail closed)", kid)
+		return &AuthResult{Valid: false, Error: errMsg}, errors.New(errMsg)
+	}
+
 	// Parse and validate signature, alg, iss, aud, exp, nbf
 	token, err := jwt.Parse(tokenClean, func(token *jwt.Token) (interface{}, error) {
-		// Strict RS256 algorithm enforcement
-		if token.Method.Alg() != "RS256" {
-			return nil, fmt.Errorf("invalid token algorithm %v: only RS256 is permitted", token.Header["alg"])
+		// Strict EdDSA algorithm enforcement
+		if token.Method.Alg() != "EdDSA" {
+			return nil, fmt.Errorf("invalid token algorithm %v: only EdDSA is permitted", token.Header["alg"])
 		}
-		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+		if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return pubKey, nil
@@ -142,28 +268,6 @@ func (tv *TokenVerifier) VerifyTokenWithRole(tokenStr string, requiredRole strin
 		jwt.WithAudience("saral-domain-coordinators"),
 		jwt.WithLeeway(10*time.Second),
 	)
-
-	if err != nil || !token.Valid {
-		// In case of auth-server restart or key rotation, attempt a fresh key reload
-		if tv.authServerURL != "" {
-			if reloadErr := tv.LoadPublicKey(); reloadErr == nil {
-				tv.mu.RLock()
-				refreshedPubKey := tv.parsedPubKey
-				tv.mu.RUnlock()
-
-				token, err = jwt.Parse(tokenClean, func(token *jwt.Token) (interface{}, error) {
-					if token.Method.Alg() != "RS256" {
-						return nil, fmt.Errorf("invalid token algorithm %v: only RS256 is permitted", token.Header["alg"])
-					}
-					return refreshedPubKey, nil
-				},
-					jwt.WithIssuer("saral-auth-server"),
-					jwt.WithAudience("saral-domain-coordinators"),
-					jwt.WithLeeway(10*time.Second),
-				)
-			}
-		}
-	}
 
 	if err != nil || !token.Valid {
 		errMsg := "invalid token signature, algorithm or claims"

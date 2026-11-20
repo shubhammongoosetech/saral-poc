@@ -7,7 +7,6 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -117,14 +116,14 @@ func TestRelayNetworkEndToEnd(t *testing.T) {
 	}
 	t.Log("  -> All 3 Go binaries compiled successfully.")
 
-	// 2. RSA Keys for Verifiers
-	rsaPrivKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	// 2. Ed25519 Keys for Verifiers
+	edPubKey, edPrivKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("failed to generate RSA key: %v", err)
+		t.Fatalf("failed to generate Ed25519 key: %v", err)
 	}
-	pubKeyBytes, err := x509.MarshalPKIXPublicKey(&rsaPrivKey.PublicKey)
+	pubKeyBytes, err := x509.MarshalPKIXPublicKey(edPubKey)
 	if err != nil {
-		t.Fatalf("failed to marshal RSA public key: %v", err)
+		t.Fatalf("failed to marshal Ed25519 public key: %v", err)
 	}
 	pubKeyPem := pem.EncodeToMemory(&pem.Block{
 		Type:  "PUBLIC KEY",
@@ -137,7 +136,7 @@ func TestRelayNetworkEndToEnd(t *testing.T) {
 
 	// Issue valid operator JWT
 	now := time.Now()
-	tokenObj := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+	tokenObj := jwt.NewWithClaims(jwt.SigningMethodEdDSA, jwt.MapClaims{
 		"sub":         "relay-operator-01",
 		"domainRole":  "operator",
 		"mfaVerified": true,
@@ -146,7 +145,8 @@ func TestRelayNetworkEndToEnd(t *testing.T) {
 		"iat":         now.Unix(),
 		"exp":         now.Add(2 * time.Hour).Unix(),
 	})
-	validToken, err := tokenObj.SignedString(rsaPrivKey)
+	tokenObj.Header["kid"] = "saral-auth-ed25519-2026-01"
+	validToken, err := tokenObj.SignedString(edPrivKey)
 	if err != nil {
 		t.Fatalf("failed to sign test JWT token: %v", err)
 	}
@@ -782,10 +782,10 @@ func TestRelayNetworkEndToEnd(t *testing.T) {
 }
 
 func TestLiveDockerRelay(t *testing.T) {
-	// Skip if Docker coordinators are not reachable
-	resp, err := http.Get("http://localhost:9001/health")
+	// Skip if Docker coordinators or auth-server are not reachable
+	resp, err := http.Get("http://localhost:3001/health")
 	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Skip("Docker POC15 cluster not running on localhost:9001, skipping live Docker relay test.")
+		t.Skip("Docker POC15 cluster (auth-server) not running on localhost:3001, skipping live Docker relay test.")
 		return
 	}
 	resp.Body.Close()

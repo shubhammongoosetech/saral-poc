@@ -135,8 +135,10 @@ const handleTokenIssuance = (req: Request, res: Response) => {
     expiresIn: 3600,
     subject,
     role,
-    issuer: 'saral-auth-server',
-    audience: 'saral-domain-coordinators',
+    algorithm: 'EdDSA',
+    kid: keyManager.activeKid,
+    issuer: keyManager.issuer,
+    audience: keyManager.audience,
   });
 };
 
@@ -166,6 +168,18 @@ router.post('/auth/rotate-admin-key', (req: Request, res: Response) => {
   });
 });
 
+// Standard JWKS endpoints returning public Ed25519 verification keys
+const handleJwks = (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.json(keyManager.getJwks());
+};
+
+router.get('/.well-known/jwks.json', handleJwks);
+router.get('/api/.well-known/jwks.json', handleJwks);
+router.get('/auth/jwks.json', handleJwks);
+router.get('/api/auth/jwks.json', handleJwks);
+
 router.get('/auth/public-key', (_req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/plain');
   res.send(keyManager.publicKeyPem);
@@ -174,9 +188,11 @@ router.get('/auth/public-key', (_req: Request, res: Response) => {
 router.get('/auth/public-key.json', (_req: Request, res: Response) => {
   res.json({
     publicKeyPem: keyManager.publicKeyPem,
-    algorithm: 'RS256',
-    issuer: 'saral-auth-server',
-    audience: 'saral-domain-coordinators',
+    algorithm: 'EdDSA',
+    kid: keyManager.activeKid,
+    issuer: keyManager.issuer,
+    audience: keyManager.audience,
+    jwks: keyManager.getJwks(),
   });
 });
 

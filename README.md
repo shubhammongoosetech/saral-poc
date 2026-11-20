@@ -221,18 +221,17 @@ npm run test:all-crypto
 saral-poc/
 ├── apps/
 │   ├── web/               # React 19 + Vite + Tailwind CSS Web3 Wallet Frontend
-│   └── auth-server/       # Node.js Auth Server (Prisma ORM, RS256 JWT, RFC 6238 MFA, Working Policy)
+│   └── auth-server/       # Node.js Auth Server (Prisma ORM, Ed25519/EdDSA JWKS JWT, RFC 6238 MFA, Working Policy)
 │       ├── prisma/        # Prisma Schema & Versioned Migrations
 │       └── src/
 │           ├── config/    # Centralized Environment & Auth Configuration
 │           ├── database/  # Singleton Prisma Client & Connection Lifecycle
-│           ├── middleware/# Authenticate (JWT RS256), RequireMfa, Policy & Error Handlers
+│           ├── middleware/# Authenticate (EdDSA JWKS), RequireMfa, Policy & Error Handlers
 │           ├── modules/   # Domain-Driven Modules (Auth, OTP, MFA, Policy, Wallet)
+│           ├── clients/   # Direct SARAL Go Backend Client (HTTP/JSON-RPC)
 │           ├── utils/     # Cryptographic Primitives (EIP-55, Base58, Bech32m, TOTP)
 │           ├── app.ts     # Express Application Config
 │           └── server.ts  # Server Startup & Graceful Shutdown
-├── packages/
-│   └── saral-sdk/         # Typed JSON-RPC 2.0 Client SDK
 ├── services/
 │   ├── coordinator/       # Go Coordinator (Foundation, Public, Private)
 │   ├── verifier/          # Go Stateless Verifier (Token validation)

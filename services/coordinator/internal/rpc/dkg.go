@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -387,5 +388,195 @@ func (s *Server) handleGetDKGVerificationStatus(params json.RawMessage) (interfa
 		"qualifiedSet":    m["qualifiedSet"],
 		"completedNodes":  m["completedNodes"],
 		"totalNodes":      m["totalNodes"],
+	}, nil
+}
+
+type DerivePublicKeyParams struct {
+	WalletID     string `json:"walletId"`
+	UserID       string `json:"userId"`
+	KeyID        string `json:"keyId"`
+	DKGSessionID string `json:"dkgSessionId"`
+	CommitteeID  string `json:"committeeId"`
+	Curve        string `json:"curve"`
+	Epoch        uint64 `json:"epoch"`
+}
+
+// handleDerivePublicKey resolves existing verified distributed DKG shares from committee nodes
+// and mathematically reconstructs the same aggregate signing public key Y = \sum \lambda_i Y_i
+// WITHOUT EVER exposing or reconstructing the master private scalar x.
+func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (interface{}, *JsonRpcErr) {
+	// 1. Authorize caller via Verifier
+	if s.verifierClient != nil && token != "" {
+		res, err := s.verifierClient.VerifyTokenWithRole(token, "operator")
+		if err != nil {
+			return nil, &JsonRpcErr{Code: -32001, Message: fmt.Sprintf("Authorization rejected: %s", err.Error())}
+		}
+		// Validate ownership bindings if provided in claims
+		if res != nil && res.Claims != nil {
+			if mfa, ok := res.Claims["mfaVerified"].(bool); !ok || !mfa {
+				return nil, &JsonRpcErr{Code: -32001, Message: "MFA verification claim required"}
+			}
+		}
+	}
+
+	var req DerivePublicKeyParams
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &req)
+	}
+
+	sessionID := req.DKGSessionID
+	if sessionID == "" {
+		sessionID = req.KeyID
+	}
+	committeeID := req.CommitteeID
+	if committeeID == "" {
+		committeeID = "committee-foundation"
+	}
+	epoch := req.Epoch
+	if epoch == 0 {
+		epoch = 1
+	}
+
+	s.avssMu.RLock()
+	var meta *DKGSessionMeta
+	if s.dkgSessions != nil {
+		if sessionID != "" {
+			meta = s.dkgSessions[sessionID]
+		}
+		if meta == nil && committeeID != "" {
+			for _, m := range s.dkgSessions {
+				if m.CommitteeID == committeeID {
+					meta = m
+					break
+				}
+			}
+		}
+	}
+	s.avssMu.RUnlock()
+
+	var committee []string
+	kThreshold := 0
+	if meta != nil && len(meta.Committee) > 0 {
+		committee = meta.Committee
+		kThreshold = meta.K
+	} else {
+		for _, n := range s.registry.GetAllNodes() {
+			committee = append(committee, n.NodeID)
+		}
+		if len(committee) == 15 {
+			kThreshold = 5
+		} else {
+			kThreshold = 2
+		}
+	}
+
+	type nodeContribution struct {
+		NodeID                 string `json:"nodeId"`
+		NodeIndex              int    `json:"nodeIndex"`
+		Epoch                  uint64 `json:"epoch"`
+		PublicPoint            string `json:"publicPoint"`
+		PublicSecretCommitment string `json:"publicSecretCommitment"`
+	}
+
+	// Query committee nodes for their public point contributions Y_i = x_i * G
+	type indexedPoint struct {
+		Index int
+		Point *CurvePoint
+	}
+	var validPoints []indexedPoint
+	var pointsMu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, memberID := range committee {
+		ep := s.getNodeEndpoint(memberID)
+		if ep == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(endpoint, mID string) {
+			defer wg.Done()
+			payload := map[string]interface{}{
+				"sessionId":   sessionID,
+				"committeeId": committeeID,
+				"epoch":       epoch,
+				"userId":      req.UserID,
+				"walletId":    req.WalletID,
+				"keyId":       req.KeyID,
+			}
+			var resp nodeContribution
+			if err := s.postNodeJSON(endpoint+"/node/dkg/share-contribution", payload, &resp); err == nil && resp.PublicPoint != "" {
+				ptBytes, decErr := hex.DecodeString(strings.TrimPrefix(resp.PublicPoint, "0x"))
+				if decErr == nil {
+					cp, parseErr := ParseCurvePointFromBytes(ptBytes)
+					if parseErr == nil && cp != nil {
+						pointsMu.Lock()
+						validPoints = append(validPoints, indexedPoint{
+							Index: resp.NodeIndex,
+							Point: cp,
+						})
+						pointsMu.Unlock()
+					}
+				}
+			}
+		}(ep, memberID)
+	}
+	wg.Wait()
+
+	// If fewer than threshold k contributions from nodes, check if metadata has completed public key
+	if len(validPoints) < kThreshold {
+		if meta != nil && meta.MasterPublicKey != "" {
+			return map[string]interface{}{
+				"success":         true,
+				"walletId":        req.WalletID,
+				"keyId":           req.KeyID,
+				"sessionId":       sessionID,
+				"committeeId":     committeeID,
+				"epoch":           epoch,
+				"curve":           meta.Curve,
+				"threshold":       meta.K,
+				"masterPublicKey": meta.MasterPublicKey,
+			}, nil
+		}
+		return nil, &JsonRpcErr{
+			Code:    -32000,
+			Message: fmt.Sprintf("insufficient verified node shares: obtained %d valid points, required threshold k=%d", len(validPoints), kThreshold),
+		}
+	}
+
+	// Sort by node index
+	sort.Slice(validPoints, func(i, j int) bool {
+		return validPoints[i].Index < validPoints[j].Index
+	})
+
+	// Pick exactly k distinct points for Lagrange interpolation at x = 0
+	kPoints := validPoints[:kThreshold]
+	indices := make([]int, kThreshold)
+	points := make([]*CurvePoint, kThreshold)
+	for i := 0; i < kThreshold; i++ {
+		indices[i] = kPoints[i].Index
+		points[i] = kPoints[i].Point
+	}
+
+	reconstructedY, err := InterpolatePublicContributionsAtZero(indices, points)
+	if err != nil {
+		return nil, &JsonRpcErr{Code: -32000, Message: fmt.Sprintf("failed computing Lagrange interpolation: %v", err)}
+	}
+
+	derivedHex := fmt.Sprintf("04%064x%064x", reconstructedY.X, reconstructedY.Y)
+	curveName := "NIST P-256"
+	if meta != nil && meta.Curve != "" {
+		curveName = meta.Curve
+	}
+
+	return map[string]interface{}{
+		"success":         true,
+		"walletId":        req.WalletID,
+		"keyId":           req.KeyID,
+		"sessionId":       sessionID,
+		"committeeId":     committeeID,
+		"epoch":           epoch,
+		"curve":           curveName,
+		"threshold":       kThreshold,
+		"masterPublicKey": derivedHex,
 	}, nil
 }

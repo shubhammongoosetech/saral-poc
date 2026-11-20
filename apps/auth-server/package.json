@@ -9,12 +9,12 @@
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy"
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:push": "prisma db push"
   },
   "type": "commonjs",
   "dependencies": {
     "@prisma/client": "^6.19.3",
-    "@saral/saral-sdk": "*",
     "cors": "^2.8.5",
     "express": "^5.0.0",
     "helmet": "^8.0.0",

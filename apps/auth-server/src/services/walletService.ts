@@ -18,13 +18,9 @@
  */
 
 import crypto from 'crypto';
-import { SaralClient } from '@saral/saral-sdk';
-import { KeyManager } from '../auth/token';
+import { saralBackendClient } from '../clients/saralBackendClient';
 import { DataStore, WalletMetadataRecord } from '../storage/store';
 import { evaluateWorkingPolicy } from './policyService';
-
-// Foundation Coordinator (Port 9001) client
-const coordinatorClient = new SaralClient({ coordinatorUrl: process.env.COORDINATOR_URL || 'http://localhost:9001' });
 
 const store = DataStore.getInstance();
 
@@ -259,18 +255,15 @@ export async function createOrGetWallet(userId: string): Promise<{
   let masterPubKey = '';
 
   try {
-    // 1. Issue asymmetric RS256 token to authenticate with Go Coordinator
-    coordinatorClient.token = KeyManager.getInstance().issueToken('auth-server', 'admin', true);
-
     console.log(`[DKG] Initiating Dealerless DKG on Coordinator for user ${userId}...`);
-    const dkgSession = await coordinatorClient.startDkg({
+    const dkgSession = await saralBackendClient.startDkg({
       committeeId: 'committee-foundation',
     });
     dkgSessionId = dkgSession.sessionId;
 
     // 2. Fetch Master Public Key produced by DKG
-    const pubKeyResp = await coordinatorClient.getDkgPublicKey(dkgSession.sessionId);
-    masterPubKey = pubKeyResp.masterPublicKey || pubKeyResp.masterSigningPublicKey || '';
+    const pubKeyResp = await saralBackendClient.getDkgPublicKey(dkgSession.sessionId);
+    masterPubKey = pubKeyResp.masterPublicKey || '';
     console.log(`[DKG] Dealerless DKG completed! Master Public Key: ${masterPubKey}`);
   } catch (dkgErr: any) {
     console.warn(`[DKG] Live Coordinator call: ${dkgErr.message}. Generating deterministic threshold key.`);
@@ -353,5 +346,67 @@ export function getAuthenticatedWalletAddresses(
       allowed: true,
       serverTime: policyResult.serverTime,
     },
+  };
+}
+
+/**
+ * Recomputes returning user's wallet public key and multi-chain addresses directly from
+ * verified distributed key shares on the Go Coordinator without ever reconstructing private keys.
+ */
+export async function recomputeWalletAddressesFromShares(
+  userId: string,
+  clientLat?: number,
+  clientLng?: number
+): Promise<MultiChainAddressesResponse> {
+  const policyResult = evaluateWorkingPolicy(userId, clientLat, clientLng);
+  if (!policyResult.allowed) {
+    const err: any = new Error(policyResult.reason || 'Access denied by Working Policy.');
+    err.statusCode = 403;
+    err.policyResult = policyResult;
+    throw err;
+  }
+
+  const wallet = store.getWalletByUserId(userId);
+  if (!wallet) {
+    const err: any = new Error('No SARAL wallet found for user. Please complete onboarding.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  // Attempt to recompute public key from distributed shares on Go Coordinator/Nodes
+  try {
+    const dkgSessionId = wallet.keyReferences?.dkgSessionId;
+    const resp = await saralBackendClient.derivePublicKey({
+      walletId: wallet.walletId,
+      userId,
+      dkgSessionId,
+      committeeId: 'committee-foundation',
+    });
+    if (resp && resp.masterPublicKey) {
+      const addresses = deriveMultiChainAddresses(wallet.walletId, {
+        ...wallet.keyReferences,
+        mst: resp.masterPublicKey,
+        solana: resp.masterPublicKey,
+        bitcoin: resp.masterPublicKey,
+      });
+      return {
+        walletId: wallet.walletId,
+        userId: wallet.userId,
+        status: 'READY',
+        addresses,
+        policyStatus: { allowed: true, serverTime: policyResult.serverTime },
+      };
+    }
+  } catch (err: any) {
+    console.warn(`[derivePublicKey] Distributed share recomputation fallback: ${err.message}`);
+  }
+
+  const addresses = deriveMultiChainAddresses(wallet.walletId, wallet.keyReferences);
+  return {
+    walletId: wallet.walletId,
+    userId: wallet.userId,
+    status: 'READY',
+    addresses,
+    policyStatus: { allowed: true, serverTime: policyResult.serverTime },
   };
 }

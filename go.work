@@ -5,9 +5,9 @@ use (
 	./services/saral-node
 	./services/verifier
 	./tests/architecture
-	./tests/cryptography
 	./tests/avss
-	./tests/proactive
-	./tests/integration
+	./tests/cryptography
 	./tests/dkg
+	./tests/integration
+	./tests/proactive
 )
