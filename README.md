@@ -55,7 +55,54 @@ For complete cryptographic specifications, sequence diagrams, and mathematical f
 
 ## 3. Quick Start Commands
 
-### Method A: Full 24-Container Docker Mesh (Production Mode)
+### 3.1 Recommended Workflow: Local Dev + Docker DKG Mesh
+This is the recommended workflow for development: DKG nodes, coordinators, and verifiers run inside Docker, while Auth Server and Web Frontend run locally on the host for rapid live-reloading.
+
+#### Step 1: Start Background DKG Mesh (Coordinators, Nodes, Verifiers)
+Start the 21 DKG backend containers in Docker (skipping web & auth-server):
+```bash
+npm run docker:nodes
+# ya direct command:
+docker start $(docker ps -a -q --filter "name=saral-prod-coord" --filter "name=saral-prod-node" --filter "name=saral-prod-verifier")
+```
+*Verify containers are up and healthy:*
+```bash
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+#### Step 2: Database Schema Sync (PostgreSQL)
+Ensure your local PostgreSQL schema is in sync with Prisma:
+```bash
+cd apps/auth-server && npx prisma db push && cd ../..
+```
+
+#### Step 3: Run Application (Auth Server + Web Frontend)
+Start both development servers concurrently:
+```bash
+npm run dev
+```
+* **Web Frontend:** [http://localhost:5173](http://localhost:5173)
+* **Auth Server:** [http://localhost:3001](http://localhost:3001) (Health: [http://localhost:3001/health](http://localhost:3001/health))
+
+---
+
+### 3.2 Running Services Individually
+If you want to run the frontend and backend in separate terminal windows:
+
+* **Terminal 1 (Auth Server):**
+  ```bash
+  npm --prefix apps/auth-server run dev
+  ```
+
+* **Terminal 2 (Web Frontend):**
+  ```bash
+  npm --prefix apps/web run dev
+  ```
+
+---
+
+### 3.3 Full 24-Container Docker Mesh (Production Mode)
+Run everything (including PostgreSQL, Auth Server, and NGINX Web) inside Docker:
 
 ```bash
 # 1. Clean build outputs
@@ -64,38 +111,75 @@ npm run clean
 # 2. Build Go binaries, Prisma Client, TypeScript SDK, and Frontend
 npm run build
 
-# 3. Start the full 24-container mesh in Docker
+# 3. Start all 24 containers in Docker
 docker compose -f infra/compose/full24.yml up -d --build
 
-# 4. Check container health status (24 containers)
+# 4. Check status of all containers
 docker compose -f infra/compose/full24.yml ps
 
-# 5. Stop Docker containers
+# 5. Stop all Docker containers
 docker compose -f infra/compose/full24.yml down
 
 # 6. Stop and wipe all database & vault volumes (Complete Reset)
 docker compose -f infra/compose/full24.yml down -v
 ```
 
-### Method B: Local Development Mode (Auth Server + Web Frontend)
+---
 
-```bash
-# 1. Install dependencies
-npm install
+## 4. Docker & Container Management Cheatsheet
 
-# 2. Generate Prisma Client
-npm run prisma:generate
+### Start & Stop SARAL Containers
+* **Start DKG Services Only (Nodes, Coordinators, Verifiers):**
+  ```bash
+  docker start $(docker ps -a -q --filter "name=saral-prod-coord" --filter "name=saral-prod-node" --filter "name=saral-prod-verifier")
+  ```
+* **Stop all SARAL containers (Safe - leaves other projects untouched):**
+  ```bash
+  docker stop $(docker ps -q --filter "name=saral")
+  ```
+* **Remove / Delete all SARAL containers (Safe):**
+  ```bash
+  docker rm $(docker ps -a -q --filter "name=saral")
+  ```
+* **Stop & Down via Docker Compose (and wipe data volumes):**
+  ```bash
+  npm run docker:down
+  # or complete reset with volumes:
+  docker compose -f infra/compose/full24.yml down -v
+  ```
 
-# 3. Start development servers concurrently (Auth: 3001, Web: 5173)
-npm run dev
-```
+### Stop & Remove ALL Containers on Machine (Complete Clean)
+> ⚠️ **Caution:** This will stop and remove containers from other projects as well (e.g., portainer, redis).
+* **Stop ALL running containers:**
+  ```bash
+  docker stop $(docker ps -q)
+  ```
+* **Remove ALL containers:**
+  ```bash
+  docker rm $(docker ps -a -q)
+  ```
+* **Force Stop & Remove ALL in one command:**
+  ```bash
+  docker rm -f $(docker ps -a -q)
+  ```
 
-* **Frontend UI:** [http://localhost:5173](http://localhost:5173) (Local Dev) or [http://localhost:3000](http://localhost:3000) (Docker)
-* **Auth Server Health:** [http://localhost:3001/health](http://localhost:3001/health)
+### Inspecting Logs & Node Vaults
+* **Follow Coordinator logs:**
+  ```bash
+  docker logs -f saral-prod-coord-foundation
+  ```
+* **Follow Node logs:**
+  ```bash
+  docker logs -f saral-prod-node-f1
+  ```
+* **Inspect Key Shares inside a Node's Vault:**
+  ```bash
+  docker exec -it saral-prod-node-f1 ls -la /vault
+  ```
 
 ---
 
-## 4. Prisma ORM & Database Migration
+## 5. Prisma ORM & Database Migration
 
 ```bash
 # Generate Prisma Client
@@ -104,13 +188,16 @@ npm run prisma:generate
 # Deploy pending migrations
 npm run prisma:migrate
 
+# Sync schema directly to database
+cd apps/auth-server && npx prisma db push
+
 # Open Prisma Studio (visual database inspector)
 cd apps/auth-server && npx prisma studio
 ```
 
 ---
 
-## 5. Running Verification & Test Suites
+## 6. Running Verification & Test Suites
 
 ```bash
 # 1. Run all unit and integration tests (SDK, Prisma, Architecture, Crypto)
@@ -128,7 +215,7 @@ npm run test:all-crypto
 
 ---
 
-## 6. Project Structure
+## 7. Project Structure
 
 ```text
 saral-poc/
@@ -169,7 +256,7 @@ saral-poc/
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 * **`failed to bind host port for 0.0.0.0:5432: address already in use`**:
   A local PostgreSQL instance is running on your host machine. Run `sudo systemctl stop postgresql` before running Docker Compose, or point `DATABASE_URL` in `.env` to your local host instance.
