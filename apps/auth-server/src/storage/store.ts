@@ -484,6 +484,30 @@ export class DataStore {
     return 0;
   }
 
+  private async ensureUserInPrisma(userId: string): Promise<string | null> {
+    const prismaUserId = toPrismaUuid(userId);
+    try {
+      const existing = await prisma.user.findUnique({ where: { id: prismaUserId } });
+      if (existing) return existing.id;
+
+      const user = this.data.users[userId];
+      const created = await prisma.user.create({
+        data: {
+          id: prismaUserId,
+          name: user?.name || `SARAL User ${userId.slice(0, 8)}`,
+          googleId: user?.googleId || `dev-${prismaUserId}`,
+          email: user?.email || `dev-${prismaUserId}@saral.network`,
+          mobile: user?.mobile || null,
+          loginMethod: user?.loginMethod || 'google',
+        },
+      });
+      return created.id;
+    } catch (_) {
+      const check = await prisma.user.findUnique({ where: { id: prismaUserId } }).catch(() => null);
+      return check ? check.id : null;
+    }
+  }
+
   // --- Access & Audit Logs ---
   public logAccess(record: AccessLogRecord): void {
     this.data.accessLogs.push(record);
@@ -493,20 +517,22 @@ export class DataStore {
     this.persist();
 
     const prismaId = toPrismaUuid(record.id);
-    const prismaUserId = toPrismaUuid(record.userId);
-    prisma.accessLog
-      .create({
-        data: {
-          id: prismaId,
-          userId: prismaUserId,
-          attemptedAt: new Date(record.attemptedAt),
-          lat: record.lat,
-          lng: record.lng,
-          allowed: record.allowed,
-          reason: record.reason,
-        },
+    this.ensureUserInPrisma(record.userId)
+      .then((prismaUserId) => {
+        if (!prismaUserId) return;
+        return prisma.accessLog.create({
+          data: {
+            id: prismaId,
+            userId: prismaUserId,
+            attemptedAt: new Date(record.attemptedAt),
+            lat: record.lat,
+            lng: record.lng,
+            allowed: record.allowed,
+            reason: record.reason,
+          },
+        });
       })
-      .catch((e) => console.warn('[Prisma] logAccess warning:', e.message));
+      .catch(() => {});
   }
 
   public logSecurity(record: SecurityLogRecord): void {
@@ -517,24 +543,10 @@ export class DataStore {
     this.persist();
 
     const prismaId = toPrismaUuid(record.id);
-    const prismaUserId = toPrismaUuid(record.userId);
-    const user = this.data.users[record.userId] || { name: 'SARAL User', loginMethod: 'google' as const };
-    const ensureUser = prisma.user.upsert({
-      where: { id: prismaUserId },
-      create: {
-        id: prismaUserId,
-        name: user.name || 'SARAL User',
-        googleId: user.googleId,
-        email: user.email,
-        mobile: user.mobile,
-        loginMethod: user.loginMethod || 'google',
-      },
-      update: {},
-    });
-
-    ensureUser
-      .then(() =>
-        prisma.securityAuditEvent.create({
+    this.ensureUserInPrisma(record.userId)
+      .then((prismaUserId) => {
+        if (!prismaUserId) return;
+        return prisma.securityAuditEvent.create({
           data: {
             id: prismaId,
             userId: prismaUserId,
@@ -545,8 +557,8 @@ export class DataStore {
             details: record.details ? JSON.stringify(record.details) : undefined,
             createdAt: new Date(record.timestamp),
           },
-        })
-      )
-      .catch((e) => console.warn('[Prisma] logSecurity warning:', e.message));
+        });
+      })
+      .catch(() => {});
   }
 }

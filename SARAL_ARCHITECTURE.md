@@ -1,314 +1,550 @@
 # SARAL PROTOCOL — COMPLETE ARCHITECTURE & SYSTEM SPECIFICATION
 
 > **Authoritative Technical Architecture & System Specification**  
-> **Repository Branch:** `saral-dkg`  
-> **Status:** Production Verified | 24-Container Mesh | Cryptographic Invariants Preserved  
+> **Repository:** `saral-poc` | **Branch:** `saral-dkg`  
+> **Topology:** 3 Domains | 15 Distributed Go Nodes | 24-Container Mesh  
+> **Status:** Production-Verified | Dealerless DKG | Zero Central Key Persistence  
 
 ---
 
-## 1. Executive Summary
+## 1. System Overview
 
-**SARAL Protocol** provides a sovereign, distributed, dealerless threshold cryptography Web3 wallet architecture. Private signing keys are never materialized in whole on any single server, database, or client device. Instead, keys are collectively generated and maintained across **15 independent Go nodes** partitioned across three trust domains (**Foundation**, **Public**, and **Private**), mediated by domain coordinators and verifiers.
+**SARAL Protocol** (Separation-of-Powers Cryptographic Key Infrastructure) is a high-assurance, dealerless threshold-cryptography protocol and multi-chain Web3 wallet architecture.
 
-The architecture strictly guarantees:
-- **Clean Minimalist Design:** Exact visual alignment on `#F5F6F8` background, `#FFFFFF` card, and `#0C7A66` green SARAL branding.
-- **Mandatory Multi-Factor Authentication (MFA):** Pure RFC 6238 Time-Based One-Time Password (TOTP) enforcement immediately following primary authentication (Google OAuth or mobile phone OTP). Single-use backup recovery codes (`XXXX-XXXX`) and encrypted secret storage at rest using AES-256-GCM.
-- **Authoritative Working Policy Engine:** Primary security gate enforced after MFA and evaluated on sensitive operations. Uses authoritative server time, weekday checks, overnight time window calculations, and Haversine distance geofencing with fail-closed security.
-- **Zero Central Address Persistence:** Neither blockchain addresses nor private signing keys are ever stored in the central PostgreSQL database or disk. Central storage persists only opaque key references (`key-mst-...`, `key-sol-...`, `key-btc-...`). Addresses are derived on-the-fly in RAM upon authenticated requests satisfying security policies.
-- **Single Logical Wallet Invariant:** Exactly one wallet per user (`UNIQUE(user_id)`). Returning users are recognized idempotently, recomputing the exact same addresses on repeat login without ever initiating duplicate DKGs (`MST_Login1 == MST_Login2`, `SOL_Login1 == SOL_Login2`, `BTC_Login1 == BTC_Login2`).
-- **Chain-Compatible Address Derivations:**
-  - **MST Testnet (EVM):** EIP-55 checksummed `0x...` hex address.
-  - **Solana Devnet:** Base58 Ed25519 public key.
-  - **Bitcoin Testnet:** BIP-340 / BIP-341 Taproot $X$-only point encoded with BIP-350 Bech32m using testnet HRP `tb1p...`.
-- **Docker-Only Persistence & 24-Container Mesh:** Complete containerized deployment defined in `infra/compose/full24.yml` containing exactly 24 services (1 PostgreSQL 16 + 1 Auth Server + 3 Verifiers + 15 Nodes + 3 Coordinators + 1 Web Frontend). Central persistence resides in named volume `saral_postgres_data`; nodes maintain isolated named volumes `node_f1_vault` through `node_r5_vault`.
+In traditional custodial wallets, private keys are stored centrally in databases or HSMs. In traditional self-custody wallets, a single seed phrase represents a single point of failure and loss. SARAL eliminates both failure modes:
+1. **No Single Entity Holds Private Keys:** Private signing keys are never created, assembled, or persisted on any server, client device, or database.
+2. **Dealerless Key Generation (DKG):** Distributed key shares are generated collaboratively across 15 independent Go microservice nodes using Kate-Huang-Goldberg Asynchronous Verifiable Secret Sharing (AVSS) and Randomized Byzantine Consensus.
+3. **Multi-Chain Native Compatibility:** Real aggregate public key points derive standard addresses for **MST Testnet (EVM)**, **Solana Devnet (Ed25519)**, and **Bitcoin Testnet (Taproot Bech32m)**.
+4. **Authoritative Access Gates:** High-security login with RFC 6238 TOTP Multi-Factor Authentication (MFA) and Authoritative Time/Location Working Policy geofencing.
 
 ---
 
-## 2. System Architecture
+## 2. Three-Domain Separation of Powers
+
+To prevent collusion, administrative overreach, and single-cloud compromise, the network topology is strictly divided into three sovereign administrative realms:
 
 ```mermaid
-flowchart TD
-    subgraph Client ["Client Browser / Mobile (Port 3000)"]
-        UI["React 19 / Vite SPA\n(Exact Reference Design)"]
-        RT["React Router v7 / TanStack Query"]
-    end
-
-    subgraph Edge ["Edge Layer (Docker)"]
-        NGINX["Nginx Reverse Proxy\n(Port 3000 / 80)"]
-    end
-
-    subgraph Auth ["Authentication & Policy Service (Port 3001)"]
-        AUTH["Node.js Auth Server\n(RS256 JWT, RFC 6238 TOTP MFA, Haversine Policy)"]
-        PG[("PostgreSQL 16 DB\n(saral_postgres_data\nOpaque Key Refs Only)")]
-    end
-
-    subgraph Mesh ["15-Node Distributed Cryptographic Mesh"]
-        subgraph F_DOM ["Foundation Domain"]
+graph TD
+    subgraph ThreeDomains ["SARAL Protocol — Three-Domain Separation of Powers"]
+        subgraph FoundationDomain ["1. Foundation Domain (Governance & Genesis)"]
             CF["Foundation Coordinator\n(Port 9001)"]
             VF["Foundation Verifier\n(Port 9101)"]
-            NF["5 Nodes (f1-f5)\nAES-256-GCM Vaults"]
+            NF["5 Foundation Nodes\n(saral-foundation-1..5)"]
         end
-        subgraph P_DOM ["Public Domain"]
+
+        subgraph PublicDomain ["2. Public Domain (Auditing & Community)"]
             CP["Public Coordinator\n(Port 9002)"]
             VP["Public Verifier\n(Port 9102)"]
-            NP["5 Nodes (p1-p5)\nAES-256-GCM Vaults"]
+            NP["5 Public Nodes\n(saral-public-1..5)"]
         end
-        subgraph R_DOM ["Private Domain"]
+
+        subgraph PrivateDomain ["3. Private Domain (Enterprise & Regulated)"]
             CR["Private Coordinator\n(Port 9003)"]
             VR["Private Verifier\n(Port 9103)"]
-            NR["5 Nodes (r1-r5)\nAES-256-GCM Vaults"]
+            NR["5 Private Nodes\n(saral-private-1..5)"]
         end
     end
 
-    subgraph Chains ["Live Blockchain RPC & API Services"]
-        MST["MST Testnet (EVM)\nhttps://testnetrpc.mstblockchain.com"]
-        SOL["Solana Devnet (Ed25519)\nhttps://api.devnet.solana.com"]
-        BTC["Bitcoin Testnet (Taproot)\nhttps://mempool.space/testnet4"]
-    end
+    CF <-->|mTLS 1.3 Mesh| CP
+    CP <-->|mTLS 1.3 Mesh| CR
+    CR <-->|mTLS 1.3 Mesh| CF
+```
 
-    UI --> NGINX
-    NGINX -->|/auth, /mfa, /wallet, /profile| AUTH
-    NGINX -->|/rpc| CF
-    AUTH <--> PG
-    AUTH --> CF
-    CF <--> CP <--> CR
-    CF --- NF
-    CP --- NP
-    CR --- NR
-    AUTH --> MST
-    AUTH --> SOL
-    AUTH --> BTC
+1. **Foundation Domain (`FOUNDATION`):** Governs committee membership, genesis participants, and core quorum sessions.
+2. **Public Domain (`PUBLIC`):** Independent nodes operating as decentralized verifiers and public relay points.
+3. **Private Domain (`PRIVATE`):** Isolated enterprise and compliance nodes ensuring cross-institutional oversight.
+
+No single domain possesses enough nodes ($k=3$) to reconstruct or sign without cross-domain consensus.
+
+---
+
+## 3. Frontend Architecture
+
+The client presentation layer is a React 18 single-page application built with Vite and Tailwind CSS (`apps/web`):
+
+```text
+apps/web/
+├── src/
+│   ├── app/                 # Routing, router guards, layouts, context providers
+│   │   ├── guards/          # RequireAuth, RequireMfa, RequirePolicy, PublicOnly
+│   │   ├── layouts/         # AppLayout, AuthLayout
+│   │   └── router.tsx       # Route tree definitions
+│   ├── features/            # Feature-sliced UI modules
+│   │   ├── auth/            # LoginForm, Mfa, useSession
+│   │   ├── wallet/          # Wallet dashboard, SendPanel, ReceivePanel, useWalletQueries
+│   │   ├── policy/          # WorkingPolicy setup, Review
+│   │   ├── activity/        # Activity transaction feeds
+│   │   └── settings/        # Security settings and identity
+│   ├── services/            # Pure HTTP API clients (httpClient, authApi, walletApi)
+│   ├── shared/              # Reusable UI primitives, hooks, formatters
+│   │   ├── ui/              # Button, Card, Badge, Modal, Amount, AddressText
+│   │   ├── hooks/           # useBreakpoint, useLocation, useTheme
+│   │   └── lib/             # JWT claims decoder, local session store, formatters
+│   └── main.tsx             # Application bootstrap
+```
+
+### Core UI Principles:
+- **Zero-Secret Client:** The browser never receives, handles, or requests raw cryptographic scalars.
+- **Fail-Closed State Machine:** Routes enforce session gates: `anonymous` $\to$ `needs-mfa` $\to$ `needs-policy` $\to$ `ready`.
+- **Responsive Multi-Chain View:** Simultaneously displays live balances and receive QR codes for MSTC, SOL, and Testnet BTC.
+
+---
+
+## 4. Auth Server Architecture
+
+The Authentication & Orchestration Server is a TypeScript service running on Node.js 20+ with Express and Prisma ORM (`apps/auth-server`):
+
+```text
+apps/auth-server/
+├── prisma/
+│   ├── schema.prisma        # PostgreSQL relational schema
+│   ├── migrations/          # Version-controlled SQL migrations
+│   └── seed.ts              # Idempotent development seed
+├── src/
+│   ├── auth/                # Asymmetric Ed25519 token manager (KeyManager) & JWKS
+│   ├── clients/             # Typed JSON-RPC saralBackendClient for Go Coordinator
+│   ├── config/              # Centralized environment & administrative auth config
+│   ├── database/            # Singleton PrismaClient connection lifecycle
+│   ├── middleware/          # authGuard, requireMfa, policyGuard, errorHandler
+│   ├── routes/              # Express REST routes (auth.ts, wallet.ts)
+│   ├── services/            # accountService, walletService, policyService, chainService
+│   ├── storage/             # DataStore unified RAM cache with async Prisma persistence
+│   ├── utils/               # EIP-55, Base58, Bech32m, TOTP cryptography utils
+│   ├── app.ts               # Express application initialization & middleware stack
+│   └── server.ts            # Server bootstrap, port binding, graceful shutdown
 ```
 
 ---
 
-## 3. End-to-End User Journey
+## 5. Prisma / PostgreSQL Data Ownership
 
-### 3.1 First-Time User Onboarding
+Central metadata is managed through PostgreSQL 16 via Prisma ORM:
+
+```mermaid
+erDiagram
+    User ||--o{ UserAuthAccount : "has accounts"
+    User ||--o| WorkingPolicy : "has policy"
+    User ||--o| TotpMfa : "has MFA"
+    User ||--o| WalletMetadata : "owns exactly one"
+    User ||--o{ AccessLog : "generates"
+    User ||--o{ SecurityAuditEvent : "records"
+
+    User {
+        uuid id PK
+        string email
+        string mobile
+        string name
+        string loginMethod
+        timestamp createdAt
+    }
+
+    WalletMetadata {
+        uuid id PK
+        uuid userId FK
+        string walletId UK
+        string status
+        json keyReferences
+        timestamp createdAt
+        timestamp updatedAt
+    }
+
+    WorkingPolicy {
+        uuid id PK
+        uuid userId FK
+        boolean timeRestrictionEnabled
+        string startTime
+        string endTime
+        json days
+        string timezone
+        boolean locationRestrictionEnabled
+        string allowedRegion
+        boolean geofenceEnabled
+        float lat
+        float lng
+        int radiusMeters
+    }
+```
+
+### Data Ownership Rules:
+1. **User Identity:** `users` records primary identity (Google ID, email, or verified mobile).
+2. **Policy Enforcement:** `working_policies` defines geofence boundaries and working hour restrictions.
+3. **MFA State:** `totp_mfas` stores encrypted TOTP secrets (`AES-256-GCM`) and hashed backup codes.
+4. **Zero Address Guarantee:** `wallets` table persists **ONLY opaque metadata**:
+   - `wallet_id`: `wal-<uuid>`
+   - `key_references`: JSON containing opaque identifiers (`key-mst-...`, `key-sol-...`, `key-btc-...`, `dkgSessionId`).
+   - **NO private keys, NO public keys, and NO addresses are saved in PostgreSQL.**
+
+---
+
+## 6. Go Coordinator Responsibilities
+
+Implemented in `services/coordinator`:
+- **Consensus Orchestration:** Directs multi-node DKG sessions (`saral_startDkg`).
+- **Session Tracking:** Tracks node contributions, secret commitments, and committee state.
+- **Lagrange Interpolation in RAM:** Reconstructs aggregate master public points $Y = \sum \lambda_i Y_i$ upon authorized requests without handling private shares.
+- **Relay Dispatching:** Coordinates authenticated inter-domain message routing across TLS 1.3 connections.
+
+---
+
+## 7. Go Node Responsibilities
+
+Implemented in `services/saral-node`:
+- **Autonomous DKG Participation:** Generates random polynomial contributions $F_i(x,y)$ and Pedersen commitment matrices.
+- **Encrypted Share Vault:** Persists private key shares strictly within local AES-256-GCM encrypted vaults (`/vault`).
+- **P2P Relay Mesh:** Direct peer-to-peer authenticated message exchange with replay protection.
+- **Share Contribution Handlers:** Evaluates scoped operator tokens and issues authorized public contribution points $Y_i = x_i \cdot G$.
+
+---
+
+## 8. Verifier Responsibilities
+
+Implemented in `services/verifier`:
+- **Stateless Authorization Gate:** Validates operator tokens and JWT claims against Auth Server JWKS endpoints.
+- **Fail-Closed Gatekeeper:** If a Verifier goes offline or rejects a token, Coordinators immediately reject RPC requests with code `-32001`.
+- **Role Verification:** Enforces strict role boundaries (`operator`, `node`, `admin`).
+
+---
+
+## 9. Secure Internal Communication
+
+Inter-service and inter-node communication employs a multi-tiered security mesh:
+1. **Node-to-Node:** Mutual TLS (mTLS 1.3) with X.509 client and server certificates signed by a cluster Certificate Authority (`infra/tls/ca.crt`).
+2. **Auth-Server to Coordinator:** JSON-RPC over HTTP with short-lived scoped Ed25519 bearer tokens signed by the Auth Server.
+3. **Coordinator to Node:** Authenticated HTTP with internal bearer tokens (`/run/secrets/saral_internal_token`).
+
+---
+
+## 10. EdDSA / JWKS Authentication
+
+Authentication between the Node.js Auth Server and Go services uses asymmetric Ed25519 (EdDSA) cryptography:
+1. **Key Generation:** Persistent Ed25519 keypair (`auth_ed25519_private.key` / `auth_public_key.pem`).
+2. **JWKS Endpoint:** `GET /.well-known/jwks.json` exposes public keys with key rotation metadata (`kid: saral-auth-key-2026-01`, `kty: OKP`, `crv: Ed25519`).
+3. **Scoped Tokens:** Tokens bind specific user, wallet, and session identifiers to prevent replay or scope-escalation attacks:
+   ```json
+   {
+     "sub": "user-uuid",
+     "walletId": "wal-uuid",
+     "dkgSessionId": "dkg-foundation-uuid",
+     "operation": "derive_public_key",
+     "mfaVerified": true,
+     "iss": "saral-auth-server",
+     "aud": "saral-cluster-nodes",
+     "exp": 1795259900
+   }
+   ```
+
+---
+
+## 11. First-Time User Sequence
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as User Browser
-    participant Auth as Auth Server (3001)
-    participant PG as PostgreSQL DB
-    participant Mesh as 15-Node DKG Mesh
-    participant Chains as Live Blockchains
+    actor User as User (Browser)
+    participant UI as React Web UI
+    participant Auth as Auth Server (Node.js)
+    participant Coord as Go Coordinator
+    participant Nodes as 5 Foundation Nodes
+    participant DB as PostgreSQL (Prisma)
 
-    User->>Auth: POST /auth/otp/request { mobile: "+9198..." }
-    Auth-->>User: 200 OK { success: true, devOtp: "123456" }
-    
-    User->>Auth: POST /auth/otp/verify { mobile, otp }
-    Auth-->>User: 200 OK { token: "JWT (mfaVerified: false)", hasPolicy: false, hasWallet: false }
-
-    User->>Auth: POST /mfa/enroll (Bearer Token)
-    Auth-->>User: 200 OK { secret, qrUri, recoveryCodes, devOtp }
-    
-    User->>Auth: POST /mfa/verify { otp: "654321" }
-    Auth-->>User: 200 OK { token: "UpgradedJWT (mfaVerified: true)", hasPolicy: false, hasWallet: false }
-
-    User->>Auth: POST /profile/policy { startTime, endTime, city, radiusKm }
-    Auth->>PG: INSERT INTO work_policy
-    Auth-->>User: 200 OK { policy, message: "Policy saved successfully" }
-
-    User->>User: Route to /policy/review (Review & Confirm Summary Card)
-    User->>Auth: POST /wallet/check-access { lat, lng }
-    Auth-->>User: 200 OK { allowed: true }
-
-    User->>Auth: POST /wallet/generate
-    Auth->>Mesh: Trigger Kate-Huang-Goldberg AVSS & Randomized ABBA DKG
-    Mesh->>Mesh: 15 Nodes verify Pedersen Bivariate Commitments (Y = xG)
-    Mesh->>Mesh: Store encrypted share in local node vaults (AES-256-GCM)
-    Mesh-->>Auth: Return Opaque Key References (key-mst-..., key-sol-..., key-btc-...)
-    Auth->>PG: INSERT INTO wallets (user_id, wallet_id, key_references)
-    Auth->>Auth: Deterministic Address Derivation in RAM (MST 0x..., SOL base58, BTC tb1p...)
-    Auth->>Chains: Fetch Live Balances (MST, SOL, BTC)
-    Auth-->>User: 200 OK { walletId, addresses, balances }
+    User->>UI: 1. Login (Google / Phone OTP)
+    UI->>Auth: 2. POST /auth/phone/verify-otp
+    Auth-->>UI: 3. Session token (needs-mfa)
+    User->>UI: 4. Complete RFC 6238 TOTP Setup
+    UI->>Auth: 5. POST /auth/mfa/verify
+    Auth-->>UI: 6. Upgraded token (mfaVerified: true)
+    User->>UI: 7. Configure Working Policy
+    UI->>Auth: 8. PUT /wallet/policy
+    User->>UI: 9. Click "Create Wallet"
+    UI->>Auth: 10. POST /wallet/generate
+    Auth->>DB: 11. Check existing wallet (None found)
+    Auth->>DB: 12. Save wallet (status: DKG_IN_PROGRESS)
+    Auth->>Coord: 13. saral_startDkg (n=5, k=3, t=1)
+    Coord->>Nodes: 14. POST /node/dkg/init & /node/dkg/start
+    Nodes->>Nodes: 15. Kate-Huang-Goldberg AVSS + Consensus
+    Nodes-->>Coord: 16. Agreement reached (completedNodes >= 3)
+    Auth->>Coord: 17. saral_derivePublicKey (secp256k1 & ed25519)
+    Coord-->>Auth: 18. Master public points (Y = xG)
+    Auth->>Auth: 19. Derive MST, Solana, Bitcoin addresses in RAM
+    Auth->>DB: 20. Update wallet (status: READY, NO addresses saved)
+    Auth-->>UI: 21. Wallet created with live addresses
 ```
 
-### 3.2 Returning User Authentication & Idempotent Address Retrieval
+---
+
+## 12. Returning-User Sequence
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as Returning User
-    participant Auth as Auth Server (3001)
-    participant PG as PostgreSQL DB
-    participant Chains as Live Blockchains
+    actor User as User (Browser)
+    participant UI as React Web UI
+    participant Auth as Auth Server (Node.js)
+    participant Coord as Go Coordinator
+    participant Nodes as 5 Foundation Nodes
+    participant DB as PostgreSQL (Prisma)
 
-    User->>Auth: POST /auth/otp/verify { mobile, otp }
-    Auth-->>User: 200 OK { token: "JWT (mfaVerified: false)", mfaEnrolled: true, hasPolicy: true, hasWallet: true }
-
-    User->>Auth: GET /mfa/status -> { enrolled: true }
-    User->>Auth: POST /mfa/verify { otp: "TOTP_CODE" } (or recoveryCode)
-    Auth-->>User: 200 OK { token: "UpgradedJWT (mfaVerified: true)", hasPolicy: true, hasWallet: true }
-
-    User->>Auth: GET /wallet (Bearer UpgradedJWT)
-    Auth->>Auth: Evaluate Server-Side Working Policy (Time & Geofence)
-    Auth->>PG: SELECT key_references FROM wallets WHERE user_id = $1
-    Auth->>Auth: Deterministic Address Derivation in RAM from key_references
-    Auth->>Chains: Fetch Live Balances
-    Auth-->>User: 200 OK { wallet: { addresses, balances } }
-    Note over User,Auth: Exact same addresses rederived in RAM. NO new DKG triggered.
+    User->>UI: 1. Login & MFA Verification
+    UI->>Auth: 2. GET /wallet
+    Auth->>DB: 3. Fetch wallet metadata (status: READY, opaque refs)
+    Auth->>Coord: 4. saral_derivePublicKey (scoped EdDSA token)
+    Coord->>Nodes: 5. POST /node/dkg/share-contribution
+    Nodes-->>Coord: 6. Return public contribution points Y_i = x_i * G
+    Coord->>Coord: 7. Lagrange Interpolation at x = 0 (Y = sum lambda_i * Y_i)
+    Coord-->>Auth: 8. Aggregate master public key (Y = xG)
+    Auth->>Auth: 9. Compute MST, Solana, Bitcoin addresses in RAM
+    Auth->>Auth: 10. Fetch live balances from blockchain RPCs
+    Auth-->>UI: 11. Return wallet dashboard data
 ```
 
 ---
 
-## 4. Cryptographic Validation & Address Derivation
+## 13. Dealerless DKG (Distributed Key Generation)
 
-### 4.1 Unblinded Signing Public Key Derivation ($Y = xG$)
-Pedersen commitments have the form:
-$$C_{00} = xG + rH$$
-Blinded commitments are used strictly for zero-knowledge bivariate polynomial verification during AVSS sharing. The unblinded signing public key is computed as:
-$$Y = xG$$
-The node verification verifies that $C_{00}$ projects directly to $Y$ when deblinded with commitment blinding factors across participants.
-
-### 4.2 Multi-Chain Derivations
-
-| Blockchain | Curve | Public Key Encoding | Address Derivation Standard | Testnet Address Format |
-| :--- | :--- | :--- | :--- | :--- |
-| **MST Testnet** | `secp256k1` | 65-byte uncompressed `(0x04 \|\| X \|\| Y)` | $\text{Keccak-256}(pk[1..])[12..31]$ with EIP-55 checksum | `0x[a-fA-F0-9]{40}` |
-| **Solana Devnet** | `ed25519` | 32-byte compressed point | Base58 encoding of 32-byte Ed25519 public key | `[1-9A-HJ-NP-Za-km-z]{32,44}` |
-| **Bitcoin Testnet** | `secp256k1` | 32-byte $X$-only point | BIP-340 / BIP-341 Taproot output with BIP-350 Bech32m | `tb1p[0-9a-z]{58}` |
+The SARAL DKG is **dealerless**: no trusted party ever generates the master secret.
+- **Contribution Phase:** Every node $P_i$ picks a random private scalar $z_i \in \mathbb{F}_q$ and blinding factor $z'_i$.
+- **Bivariate Polynomial:** Node $P_i$ constructs a random symmetric bivariate polynomial of degree $k-1 = 2$:
+  $$F_i(x, y) = \sum_{j=0}^{k-1} \sum_{l=0}^{k-1} a_{j,l} x^j y^l$$
+- **Pedersen Commitments:** Node $P_i$ computes commitment matrix:
+  $$C_{j,l}^{(i)} = a_{j,l} \cdot G + b_{j,l} \cdot H$$
+- **Consensus on Contributors:** Nodes exchange shares and use Randomized Asynchronous Binary Byzantine Agreement (ABBA) to finalize an agreed Qualified Set of contributors $\text{QUAL}^*$.
+- **Aggregate Master Key:** The collective secret $x = \sum_{i \in \text{QUAL}^*} z_i$, and the group master signing public key:
+  $$Y = \sum_{i \in \text{QUAL}^*} C_{0,0}^{(i)} = x \cdot G$$
 
 ---
 
-## 5. Security & Privacy Guarantees
+## 14. HybridVSS / AVSS
 
-1. **Zero Address Persistence Mandate:**
-   - Neither EVM, Solana, nor Bitcoin addresses are stored in the PostgreSQL database or central disk.
-   - Central storage maintains only `user_id`, `wallet_id`, and opaque `key_references` (e.g. `key-mst-7d57a501e008f36f`).
-   - Addresses are derived deterministically in RAM upon every authenticated, policy-verified request.
-2. **Single Logical Wallet Invariant:**
-   - Enforced by PostgreSQL `UNIQUE(user_id)` constraint on the `wallets` table.
-   - Calling wallet generation multiple times returns the existing wallet reference idempotently.
-3. **Fail-Closed Working Policy Engine:**
-   - Evaluates IANA timezone-aware start and end times with overnight window support.
-   - Evaluates Haversine distance geofence against approved latitude/longitude and radius.
-   - Fails closed: requests outside permitted windows or outside approved locations return HTTP 403.
-4. **Local Node Vault Protection:**
-   - Share scalars are encrypted with AES-256-GCM using hardware-derived node vault keys before local persistence in isolated Docker volumes (`node_f1_vault` .. `node_r5_vault`).
+SARAL implements **Asynchronous Verifiable Secret Sharing (AVSS)** based on Cachin, Kursawe, Petzold, and Shoup:
+1. **Verifiability:** Dual-blinding with generators $G$ and $H$ prevents malicious dealers from distributing inconsistent shares.
+2. **Subprotocol States:** Nodes transition through `SEND` $\to$ `ECHO` $\to$ `READY` phases with Quorum Threshold verification.
+3. **Proactive Secret Sharing:** Enables rotating shares across epochs while maintaining the master public key invariant ($Y_{\text{epoch 1}} = Y_{\text{epoch 2}}$).
 
 ---
 
-## 6. Docker 24-Container Mesh (`infra/compose/full24.yml`)
+## 15. Committee and Fault Thresholds
 
-The production mesh contains exactly 24 interconnected containers on the internal `saral-mesh` bridge network:
+The protocol establishes exact mathematical parameters:
 
-| Index | Service | Container Name | Port | Role |
-| :--- | :--- | :--- | :--- | :--- |
-| 1 | `postgres` | `saral-postgres` | `5432` | PostgreSQL 16 Alpine with `saral_postgres_data` volume |
-| 2 | `auth-server` | `saral-prod-auth-server` | `3001` | Asymmetric RS256 JWT, MFA, Working Policy, RAM Address Derivation |
-| 3 | `verifier-foundation` | `saral-prod-verifier-foundation` | `9101` | Foundation Token Verification daemon |
-| 4 | `verifier-public` | `saral-prod-verifier-public` | `9102` | Public Token Verification daemon |
-| 5 | `verifier-private` | `saral-prod-verifier-private` | `9103` | Private Token Verification daemon |
-| 6-10 | `node-f1` .. `node-f5` | `saral-prod-node-f1..f5` | `8001` (f1: `8443`) | Foundation domain Go cryptographic nodes (Volumes: `node_f1..f5_vault`) |
-| 11-15 | `node-p1` .. `node-p5` | `saral-prod-node-p1..p5` | `8001` | Public domain Go cryptographic nodes (Volumes: `node_p1..p5_vault`) |
-| 16-20 | `node-r1` .. `node-r5` | `saral-prod-node-r1..r5` | `8001` | Private domain Go cryptographic nodes (Volumes: `node_r1..r5_vault`) |
-| 21 | `coordinator-foundation` | `saral-prod-coord-foundation` | `9001` | Foundation Domain Coordinator |
-| 22 | `coordinator-public` | `saral-prod-coord-public` | `9002` | Public Domain Coordinator |
-| 23 | `coordinator-private` | `saral-prod-coord-private` | `9003` | Private Domain Coordinator |
-| 24 | `web` | `saral-prod-web` | `3000` (`:80`) | Nginx Reverse Proxy & React 19 Frontend Dashboard |
+| Parameter | Meaning | Foundation Committee | 15-Node Global Mesh |
+| :--- | :--- | :--- | :--- |
+| **$n$** | Total nodes in committee | 5 | 15 |
+| **$k$** | Reconstruction & signing threshold | 3 | 5 |
+| **$t$** | Byzantine fault tolerance | 1 | 4 |
+| **Constraint 1** | Byzantine Consensus: $n > 3t$ | $5 > 3(1) \implies 5 > 3$ ✅ | $15 > 3(4) \implies 15 > 12$ ✅ |
+| **Constraint 2** | AVSS Reconstruction: $n - 2t \ge k$ | $5 - 2(1) \ge 3 \implies 3 \ge 3$ ✅ | $15 - 2(4) \ge 5 \implies 7 \ge 5$ ✅ |
+| **Constraint 3** | Fault Tolerance: $k \ge t + 1$ | $3 \ge 1 + 1 \implies 3 \ge 2$ ✅ | $5 \ge 4 + 1 \implies 5 \ge 5$ ✅ |
 
 ---
 
-## 7. PostgreSQL Database Schema
+## 16. Node-Level User Ownership Verification
 
-```sql
--- Core User Account
-CREATE TABLE IF NOT EXISTS users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name VARCHAR(255),
-  google_id VARCHAR(255) UNIQUE,
-  email VARCHAR(255) UNIQUE,
-  mobile VARCHAR(50) UNIQUE,
-  login_method VARCHAR(50) NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+Nodes do not blindly provide public contribution points. When `POST /node/dkg/share-contribution` is called:
+1. Node verifies the caller's Ed25519 token against the Auth Server public key.
+2. Node verifies that the token's `walletId` and `userId` match the authenticated binding stored during `/node/dkg/init`.
+3. Node checks the token's `mfaVerified: true` claim.
+4. If any claim fails, the node rejects the request with HTTP 403.
 
--- MFA Configuration & Status
-CREATE TABLE IF NOT EXISTS mfa (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  type VARCHAR(50) NOT NULL DEFAULT 'totp',
-  secret TEXT,
-  totp_secret_encrypted TEXT,
-  recovery_codes TEXT[],
-  recovery_codes_hashed TEXT[],
-  verified_at TIMESTAMP WITH TIME ZONE,
-  CONSTRAINT unique_user_mfa UNIQUE (user_id)
-);
+---
 
--- Working Policy (Time & Geofence Boundaries)
-CREATE TABLE IF NOT EXISTS work_policy (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  start_time VARCHAR(10) NOT NULL,
-  end_time VARCHAR(10) NOT NULL,
-  timezone VARCHAR(100) NOT NULL DEFAULT 'Asia/Kolkata',
-  city VARCHAR(255) NOT NULL,
-  lat DOUBLE PRECISION NOT NULL,
-  lng DOUBLE PRECISION NOT NULL,
-  radius_km DOUBLE PRECISION NOT NULL DEFAULT 25.0,
-  time_restriction_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-  location_restriction_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-  geofence_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-  set_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT unique_user_work_policy UNIQUE (user_id)
-);
+## 17. Encrypted Node Vaults
 
--- Distributed Wallet Metadata (NO Addresses, NO Private Keys)
-CREATE TABLE IF NOT EXISTS wallets (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  wallet_id VARCHAR(100) NOT NULL UNIQUE,
-  status VARCHAR(50) NOT NULL DEFAULT 'CREATING',
-  key_references JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT unique_user_wallet UNIQUE (user_id)
-);
+Each node maintains an independent encrypted share vault:
+- **Location:** Mounted at `/vault` in isolated Docker named volumes (`node_f1_vault` through `node_r5_vault`).
+- **Encryption:** Authenticated Encryption with Associated Data (AEAD) using **AES-256-GCM**.
+- **Isolation:** No node can access another node's storage volume.
+- **Zero Raw Key Files:** Raw scalar values are never written to unencrypted disk.
 
--- Access Evaluation Audit Log
-CREATE TABLE IF NOT EXISTS access_logs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  attempted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  lat DOUBLE PRECISION,
-  lng DOUBLE PRECISION,
-  allowed BOOLEAN NOT NULL,
-  reason TEXT NOT NULL
-);
+---
+
+## 18. Stable Key-Reference Architecture
+
+To prevent address drift while maintaining zero central storage:
+1. During initial DKG, the Auth Server generates stable, opaque identifiers:
+   - `key-mst-<16 hex chars>`
+   - `key-sol-<16 hex chars>`
+   - `key-btc-<16 hex chars>`
+2. These references are stored in the PostgreSQL `wallets.key_references` column.
+3. They are passed to Go nodes during session creation to bind encrypted shares to specific wallet lifecycles.
+4. On repeat login, passing the same `keyReferences` guarantees identical derivation without generating new random keys.
+
+---
+
+## 19. Multi-Chain Public-Key Derivation
+
+All blockchain addresses are derived dynamically in RAM from the verified threshold public point:
+
+```mermaid
+flowchart LR
+    Point["Master Public Point (Y = xG)"] --> Secp["Secp256k1 Point"]
+    Point --> Ed["Ed25519 Point"]
+
+    Secp --> Keccak["Keccak-256 Hash\n(Last 20 Bytes)"]
+    Keccak --> EIP55["EIP-55 Checksum"]
+    EIP55 --> MST["MST Testnet Address\n(0x...)"]
+
+    Ed --> Compress["32-Byte Point Compression"]
+    Compress --> Base58["Base58 Encoding"]
+    Base58 --> SOL["Solana Devnet Address\n(Base58)"]
+
+    Secp --> Taproot["BIP-341 Key Tweak\nQ = P + tagged_hash(P)*G"]
+    Taproot --> Bech32m["BIP-350 Bech32m (tb1p...)"]
+    Bech32m --> BTC["Bitcoin Testnet Address\n(tb1p...)"]
+```
+
+### 1. MST Testnet (EVM Compatible):
+- **Curve:** Secp256k1
+- **Hash:** Pure Keccak-256
+- **Encoding:** Mixed-case EIP-55 checksum
+- **Format:** `0x4b78...`
+
+### 2. Solana Devnet:
+- **Curve:** Ed25519
+- **Encoding:** 32-byte public point compressed and encoded in Base58
+- **Format:** `7dF3...`
+
+### 3. Bitcoin Testnet:
+- **Curve:** Secp256k1
+- **Tweak:** BIP-341 Taproot output-key tweak ($Q = P + \text{hash}_{\text{TapTweak}}(P) \cdot G$)
+- **Encoding:** BIP-350 Bech32m witness version 1 with human-readable prefix `tb`
+- **Format:** `tb1p...`
+
+---
+
+## 20. Wallet Address Zero-Persistence Policy
+
+The SARAL Protocol enforces a strict cryptographic architectural guarantee:
+
+| Data Item | Stored in PostgreSQL? | Stored in Coordinator? | Stored on Nodes? | Where Does It Live? |
+| :--- | :---: | :---: | :---: | :--- |
+| **Private Signing Key ($x$)** | ❌ NEVER | ❌ NEVER | ❌ NEVER | **Never exists anywhere** |
+| **Private Key Share ($x_i$)** | ❌ NEVER | ❌ NEVER | ✅ Encrypted | Local `/vault` (AES-256-GCM) |
+| **Master Public Key ($Y$)** | ❌ NEVER | ❌ NEVER | ❌ NEVER | Recomputed in RAM on demand |
+| **EVM Address (MST)** | ❌ NEVER | ❌ NEVER | ❌ NEVER | Derived in RAM on demand |
+| **Solana Address** | ❌ NEVER | ❌ NEVER | ❌ NEVER | Derived in RAM on demand |
+| **Bitcoin Address** | ❌ NEVER | ❌ NEVER | ❌ NEVER | Derived in RAM on demand |
+| **Opaque Key References** | ✅ YES | ❌ NO | ❌ NO | PostgreSQL `wallets` table |
+
+Even in the event of a total database dump or server seizure, an attacker cannot extract any blockchain addresses or private keys.
+
+---
+
+## 21. Balance and Activity Read-Only Architecture
+
+Wallet balances and transaction activity are queried live directly from decentralized blockchain networks:
+- **MST Testnet:** JSON-RPC `eth_getBalance` and `eth_getBlockByNumber` via `https://testnetrpc.mstblockchain.com`.
+- **Solana Devnet:** JSON-RPC `getBalance` and `getSignaturesForAddress` via `https://api.devnet.solana.com`.
+- **Bitcoin Testnet:** Blockstream REST API via `https://blockstream.info/testnet/api`.
+
+Balances are refreshed on page load, via the manual refresh button, and after send operations using an exponential polling schedule (1.5s, 3s, 5s, 8s, 12s).
+
+---
+
+## 22. Docker Container Topology
+
+The complete production environment is defined in `infra/compose/full24.yml` containing exactly 24 interconnected services:
+
+```text
+Container Name                        Port(s)      Service Description
+--------------------------------------------------------------------------------------
+saral-prod-postgres                   5432         PostgreSQL 16 Relational Store
+saral-prod-auth-server                3001         Auth Server (Prisma ORM & JWT)
+saral-prod-verifier-foundation        9101         Foundation Domain Verifier
+saral-prod-verifier-public            9102         Public Domain Verifier
+saral-prod-verifier-private           9103         Private Domain Verifier
+saral-prod-coord-foundation           9001, 9443   Foundation Domain Coordinator
+saral-prod-coord-public               9002, 9443   Public Domain Coordinator
+saral-prod-coord-private              9003, 9443   Private Domain Coordinator
+saral-prod-node-f1..f5                8001, 8443   5 Foundation Nodes (f1 through f5)
+saral-prod-node-p1..p5                8001, 8443   5 Public Nodes (p1 through p5)
+saral-prod-node-r1..r5                8001, 8443   5 Private Nodes (r1 through r5)
+saral-prod-web                        80           NGINX Reverse Proxy & React SPA
 ```
 
 ---
 
-## 8. Verification Commands
+## 23. API Contracts
 
-### 8.1 Docker Compose 24-Container Mesh
+### Authentication & MFA Endpoints (`/api/auth`)
+- `POST /api/auth/phone/request-otp` — Request 6-digit phone OTP (`{ mobile }`).
+- `POST /api/auth/phone/verify-otp` — Verify phone OTP (`{ mobile, otp }`).
+- `POST /api/auth/google` — Google OAuth token verification (`{ idToken }`).
+- `GET /api/auth/profile` — Fetch user profile, MFA status, and policy status.
+- `GET /api/auth/mfa/status` — Query current user's MFA enrollment.
+- `POST /api/auth/mfa/enroll` — Generate TOTP secret and QR URI.
+- `POST /api/auth/mfa/send` — Request MFA verification SMS OTP.
+- `POST /api/auth/mfa/verify` — Verify TOTP code / SMS OTP and issue upgraded token.
+- `GET /.well-known/jwks.json` — Public Ed25519 JSON Web Key Set.
 
-```bash
-# Start the full 24-container mesh in background
-docker compose -f infra/compose/full24.yml up -d --build
+### Wallet & Policy Endpoints (`/api/wallet`)
+- `POST /api/wallet/generate` — Idempotent wallet creation & multi-chain address derivation.
+- `POST /api/wallet/create` — Consolidated wallet generation endpoint with MFA validation.
+- `GET /api/wallet` — Query user's wallet metadata, multi-chain addresses, and live balances.
+- `GET /api/wallet/balances` — Read-only live balance fetch across MST, Solana, and Bitcoin.
+- `GET /api/wallet/transactions` — Query live inbound blockchain transactions.
+- `GET /api/wallet/policy` — Get active working policy.
+- `PUT /api/wallet/policy` — Update working policy schedule and geofence.
+- `POST /api/wallet/check-access` — Evaluate client coordinates against working policy.
 
-# Verify container health
-docker compose -f infra/compose/full24.yml ps
+---
 
-# Access the Web Application
-# Browser: http://localhost:3000
-# Auth Server: http://localhost:3001
-# Foundation Coordinator: http://localhost:9001
-```
+## 24. Environment Configuration
 
-### 8.2 Automated Test Execution
+All services read configuration through structured environment variables defined in `.env.example`:
+- Database connection strings (`DATABASE_URL`).
+- Asymmetric EdDSA token keys (`KEY_DIR`, `SARAL_JWT_ACTIVE_KID`).
+- Internal cluster tokens (`SARAL_INTERNAL_TOKEN`, `SARAL_ADMIN_KEY`).
+- Blockchain network RPC URLs (`MST_RPC_URL`, `SOLANA_RPC_URL`, `BITCOIN_API_URL`).
+- Committee thresholds (`SARAL_FOUNDATION_NODES=5`, `SARAL_FOUNDATION_THRESHOLD=3`).
 
-```bash
-# Run Vitest SDK and Architecture Tests
-npm test
+---
 
-# Run Go Cryptographic Architecture Tests
-go test -v ./tests/architecture/...
+## 25. Threat Model & Security Boundaries
 
-# Run End-to-End System Verification
-node scratch/test_full_v3_e2e.js
-```
+1. **Compromised Auth Server Database:**
+   - Attacker gets a full PostgreSQL dump.
+   - **Outcome:** Attacker obtains user names and opaque strings (`key-mst-1234`). Attacker obtains **ZERO private keys, ZERO seed phrases, and ZERO blockchain addresses**.
+2. **Compromised Node (Up to $t=1$ in Foundation):**
+   - Attacker compromises `saral-foundation-1` and steals its AES-256-GCM vault key.
+   - **Outcome:** Attacker obtains 1 share ($s_1$). Because the threshold $k=3$, an attacker with 1 share learns **zero information** about the secret (information-theoretically secure Shamir property).
+3. **Collusion Boundary:**
+   - To steal funds or forge a signature, an attacker must simultaneously breach at least 3 distinct nodes across separate administrative domains.
+4. **Replay & Forgery Protection:**
+   - All inter-node messages include sequence numbers, nonces, timestamps, and Ed25519 signatures. Replayed or forged messages are rejected by the P2P relay engine.
+
+---
+
+## 26. Failure Recovery
+
+- **Node Crash & Recovery:** Nodes store identity and encrypted shares in named volumes. Upon container restart, the node re-reads `/vault/identity.json` and resumes participation without state loss.
+- **Consensus Timeout:** If fewer than 3 nodes respond during DKG, the Auth Server aborts with HTTP 503 and records status `ERROR`. The system strictly fails closed and refuses fallback to mock keys.
+- **Corrupt Share Detection:** During address derivation, if a node returns a point $Y_i$ that does not lie on the curve or fails commitment verification, it is excluded from Lagrange interpolation.
+
+---
+
+## 27. Test and Validation Strategy
+
+The repository maintains an automated, multi-tiered test suite:
+1. **TypeScript Security Suite (`tests/architecture/wallet_lifecycle_security.test.ts`):** 10 tests verifying 3-of-5 DKG address derivation, zero DB persistence, fail-closed behavior, and concurrent idempotency.
+2. **Prisma Integration Suite (`tests/architecture/prisma_integration.test.ts`):** 6 tests validating relational integrity, cascade behavior, and model constraints.
+3. **Auth & Policy Suite (`tests/architecture/auth_policy_wallet.test.ts`):** 15 tests covering TOTP MFA, working policy geofencing, and session transitions.
+4. **Go Microservices Architecture Suite (`tests/architecture/architecture_test.go`):** 13 integration tests spinning up 3 Verifiers, 3 Coordinators, and 15 Nodes.
+5. **Multi-Domain Relay Suite (`tests/architecture/relay_test.go`):** Tests cross-domain message delivery, unknown peer rejection, and offline destination reporting.
+6. **Cryptographic Suite (`tests/avss`, `tests/dkg`, `tests/proactive`, `tests/cryptography`):** Verifies Kate-Huang-Goldberg AVSS, bivariate polynomial consistency, Pedersen commitments, and secret invariance.
+
+---
+
+## 28. Known Limitations
+
+1. **Threshold Transaction Signing (TSS):** The current codebase implements full dealerless DKG, share distribution, vault persistence, and on-demand address derivation. Multi-party threshold signing (CGGMP21 / FROST) is stubbed with explicit `-32000 NOT_IMPLEMENTED` responses as designed for Phase 4.
+2. **Testnet Scope:** MST Testnet, Solana Devnet, and Bitcoin Testnet are configured for development and staging. Mainnet deployment requires production chain IDs and live RPC nodes.
+
+---
+
+## 29. Future TSS Integration Boundaries
+
+When multi-party transaction signing is enabled:
+- **MST / EVM:** Will integrate CGGMP21 threshold Secp256k1 signing using the existing stored shares $x_i$ in node vaults.
+- **Solana:** Will integrate FROST Ed25519 threshold Schnorr signing.
+- **Bitcoin:** Will integrate BIP-340 Taproot threshold Schnorr signing.
+- **Separation of Concerns:** The Auth Server will only pass transaction payloads and policy evaluation proofs; signing rounds will occur strictly between the 15 Go nodes over the existing mTLS mesh.

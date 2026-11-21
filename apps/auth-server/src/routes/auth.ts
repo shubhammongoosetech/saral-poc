@@ -1,5 +1,4 @@
 import { Router, Request, Response } from 'express';
-import fs from 'fs';
 import crypto from 'crypto';
 import { KeyManager } from '../auth/token';
 import { DataStore } from '../storage/store';
@@ -16,57 +15,11 @@ import {
   computeTotpToken,
 } from '../services/mfaService';
 import { requireAuth } from '../middleware/authGuard';
+import { getAdminSecret, isKnownInsecureSecret, setDynamicAdminSecret } from '../config/auth';
 
 const router = Router();
 const keyManager = KeyManager.getInstance();
 const store = DataStore.getInstance();
-
-let dynamicAdminSecret: string | null = null;
-
-const INSECURE_DEFAULT_SECRETS = new Set([
-  'saral-mesh-admin-secret-2026',
-  'saral-internal-coordinator-secret',
-  'saral-internal-secure-token-2026-v3',
-  'saral-mesh-secure-internal-token-v3',
-  'admin',
-  'secret',
-  'password',
-  'default',
-]);
-
-function isKnownInsecureSecret(s: string): boolean {
-  return INSECURE_DEFAULT_SECRETS.has(s.trim().toLowerCase());
-}
-
-function getAdminSecret(): string | null {
-  if (dynamicAdminSecret) {
-    return dynamicAdminSecret;
-  }
-
-  // 1. Docker secret file
-  const secretPath = process.env.SARAL_ADMIN_KEY_FILE || '/run/secrets/saral_admin_key';
-  try {
-    if (fs.existsSync(secretPath)) {
-      const content = fs.readFileSync(secretPath, 'utf8').trim();
-      if (content && !isKnownInsecureSecret(content)) {
-        dynamicAdminSecret = content;
-        return content;
-      }
-    }
-  } catch (_) {}
-
-  // 2. Env variable
-  const envKey = process.env.SARAL_ADMIN_KEY || process.env.ADMIN_SECRET;
-  if (envKey) {
-    const trimmed = envKey.trim();
-    if (trimmed && !isKnownInsecureSecret(trimmed)) {
-      dynamicAdminSecret = trimmed;
-      return trimmed;
-    }
-  }
-
-  return null;
-}
 
 // Health endpoint
 const handleHealth = (_req: Request, res: Response) => {
@@ -160,7 +113,7 @@ router.post('/auth/rotate-admin-key', (req: Request, res: Response) => {
     return;
   }
 
-  dynamicAdminSecret = newSecret.trim();
+  setDynamicAdminSecret(newSecret.trim());
   res.json({
     success: true,
     message: 'Administrative secret rotated successfully',
@@ -549,52 +502,6 @@ router.post('/auth/link-account', requireAuth, (req: Request, res: Response) => 
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ success: false, error: err.message || 'Account linking failed' });
-  }
-});
-
-// POST /auth/mfa/enroll (Requires Auth)
-router.post('/auth/mfa/enroll', requireAuth, (req: Request, res: Response) => {
-  try {
-    const userId = req.user!.userId;
-    const user = store.findUserById(userId);
-    const identifier = user?.email || user?.mobile || userId;
-
-    const result = enrollTotp(userId, identifier);
-    res.json({
-      success: true,
-      ...result,
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || 'MFA enrollment failed' });
-  }
-});
-
-// POST /auth/mfa/verify (Requires Auth)
-router.post('/auth/mfa/verify', requireAuth, (req: Request, res: Response) => {
-  try {
-    const userId = req.user!.userId;
-    const code = req.body?.code || req.body?.recoveryCode;
-    if (!code) {
-      res.status(400).json({ success: false, error: 'MFA code or recovery code required' });
-      return;
-    }
-
-    const result = verifyMfaChallenge(userId, code);
-    // Issue upgraded token with mfaVerified: true
-    const upgradedToken = keyManager.issueToken(userId, 'operator');
-
-    const policy = store.getPolicy(userId);
-    const wallet = store.getWalletByUserId(userId);
-
-    res.json({
-      success: true,
-      token: upgradedToken,
-      method: result.method,
-      hasPolicy: !!policy,
-      hasWallet: !!wallet && wallet.status === 'READY',
-    });
-  } catch (err: any) {
-    res.status(401).json({ success: false, error: err.message || 'MFA verification failed' });
   }
 });
 

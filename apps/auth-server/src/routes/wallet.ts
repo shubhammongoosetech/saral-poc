@@ -114,12 +114,25 @@ router.get('/status', requireAuth, (req: Request, res: Response) => {
   });
 });
 
-// POST /wallet/create (Strict One-User-One-Wallet Idempotent Creation)
-router.post('/create', requireAuth, requireMfa, async (req: Request, res: Response) => {
+// Helper to extract raw address strings for blockchain balance/activity queries
+function extractAddressStrings(addresses: {
+  mst: { address: string };
+  solana: { address: string };
+  bitcoin: { address: string };
+}) {
+  return {
+    mst: addresses.mst.address,
+    solana: addresses.solana.address,
+    bitcoin: addresses.bitcoin.address,
+  };
+}
+
+// Consolidated handler for wallet creation & retrieval
+async function handleWalletGeneration(req: Request, res: Response) {
   try {
     const userId = req.user!.userId;
 
-    // Check policy before creation
+    // Check policy before creation/retrieval
     const lat = req.body?.lat !== undefined ? Number(req.body.lat) : undefined;
     const lng = req.body?.lng !== undefined ? Number(req.body.lng) : undefined;
     const policyResult = evaluateWorkingPolicy(userId, lat, lng);
@@ -134,54 +147,19 @@ router.post('/create', requireAuth, requireMfa, async (req: Request, res: Respon
     }
 
     const result = await createOrGetWallet(userId);
+    const rawAddrs = extractAddressStrings(result.addresses);
+    const balances = await getLiveBalances(rawAddrs);
+
     res.status(result.isNew ? 201 : 200).json({
       success: true,
       isNew: result.isNew,
+      hasWallet: true,
       walletId: result.wallet.walletId,
-      status: result.wallet.status,
+      status: result.wallet.status || 'READY',
       message: result.isNew
         ? 'SARAL Wallet created successfully. Keys distributed across 3 Domains.'
         : 'Existing SARAL Wallet retrieved. One-user-one-wallet invariant preserved.',
       addresses: result.addresses,
-      wallet: {
-        address: result.addresses.mst,
-        solanaAddress: result.addresses.solana,
-        bitcoinAddress: result.addresses.bitcoin,
-        balance: '0.0000',
-        solanaBalance: '0.0000',
-        bitcoinBalance: '0.00000000',
-        addresses: result.addresses,
-      },
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || 'Failed to initialize wallet' });
-  }
-});
-
-// Helper to extract raw address strings for blockchain balance/activity queries
-function extractAddressStrings(addresses: {
-  mst: { address: string };
-  solana: { address: string };
-  bitcoin: { address: string };
-}) {
-  return {
-    mst: addresses.mst.address,
-    solana: addresses.solana.address,
-    bitcoin: addresses.bitcoin.address,
-  };
-}
-
-// POST /wallet/generate (Alias for frontend walletApi.generateWallet)
-router.post('/generate', requireAuth, async (req: Request, res: Response) => {
-  try {
-    const userId = req.user!.userId;
-    const result = await createOrGetWallet(userId);
-    const rawAddrs = extractAddressStrings(result.addresses);
-    const balances = await getLiveBalances(rawAddrs);
-
-    res.json({
-      success: true,
-      hasWallet: true,
       wallet: {
         walletId: result.wallet.walletId,
         status: 'READY',
@@ -198,13 +176,16 @@ router.post('/generate', requireAuth, async (req: Request, res: Response) => {
           bitcoin: { network: 'bitcoin-testnet', address: rawAddrs.bitcoin, balance: balances.bitcoin },
         },
       },
-      addresses: result.addresses,
       balances,
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || 'Failed to generate wallet' });
+    res.status(500).json({ success: false, error: err.message || 'Failed to initialize wallet' });
   }
-});
+}
+
+// POST /wallet/create & POST /wallet/generate (Consolidated One-User-One-Wallet API)
+router.post('/create', requireAuth, requireMfa, handleWalletGeneration);
+router.post('/generate', requireAuth, handleWalletGeneration);
 
 // POST /wallet/check-access (Alias for frontend walletApi.checkAccess)
 router.post('/check-access', requireAuth, (req: Request, res: Response) => {

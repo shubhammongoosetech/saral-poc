@@ -105,7 +105,7 @@ services:
     volumes: ['node_f1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     ports:
       - '8443:8443'
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -126,7 +126,7 @@ services:
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f1:8001,http://node-f3:8001
     volumes: ['node_f2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -147,7 +147,7 @@ services:
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f2:8001,http://node-f4:8001
     volumes: ['node_f3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -168,7 +168,7 @@ services:
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f3:8001,http://node-f5:8001
     volumes: ['node_f4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -189,7 +189,7 @@ services:
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f4:8001,http://node-f1:8001
     volumes: ['node_f5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -211,7 +211,7 @@ services:
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-f1:8001,http://node-p2:8001,http://node-r1:8001
     volumes: ['node_p1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -232,7 +232,7 @@ services:
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p1:8001,http://node-p3:8001
     volumes: ['node_p2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -253,7 +253,7 @@ services:
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p2:8001,http://node-p4:8001
     volumes: ['node_p3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -274,7 +274,7 @@ services:
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p3:8001,http://node-p5:8001
     volumes: ['node_p4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -295,7 +295,7 @@ services:
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p4:8001,http://node-p1:8001
     volumes: ['node_p5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -317,7 +317,7 @@ services:
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-f1:8001,http://node-p1:8001,http://node-r2:8001
     volumes: ['node_r1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -338,7 +338,7 @@ services:
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r1:8001,http://node-r3:8001
     volumes: ['node_r2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -359,7 +359,7 @@ services:
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r2:8001,http://node-r4:8001
     volumes: ['node_r3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -380,7 +380,7 @@ services:
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r3:8001,http://node-r5:8001
     volumes: ['node_r4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -401,7 +401,7 @@ services:
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r4:8001,http://node-r1:8001
     volumes: ['node_r5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -418,7 +418,7 @@ services:
     container_name: saral-coord-foundation
     restart: unless-stopped
     volumes: ['../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     environment:
       PORT: 9001
       MTLS_PORT: 9443
@@ -447,7 +447,7 @@ services:
     container_name: saral-coord-public
     restart: unless-stopped
     volumes: ['../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     environment:
       PORT: 9002
       MTLS_PORT: 9443
@@ -476,7 +476,7 @@ services:
     container_name: saral-coord-private
     restart: unless-stopped
     volumes: ['../../infra/tls:/etc/saral/tls:ro']
-    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants]
+    secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     environment:
       PORT: 9003
       MTLS_PORT: 9443
@@ -551,3 +551,5 @@ secrets:
     file: ../secrets/admin_key.secret
   saral_genesis_participants:
     file: ../config/genesis_participants.json
+  auth_ed25519_pub:
+    file: ../config/auth_public_key.pem
