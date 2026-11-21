@@ -221,6 +221,18 @@ func (s *ShareStore) SaveShare(
 		_ = os.Rename(commTmp, commPath)
 	}
 
+	// Also link by sessionID / DKGSessionID
+	sessID := meta.DKGSessionID
+	if sessID == "" {
+		sessID = meta.SessionID
+	}
+	if sessID != "" && sessID != primaryID && sessID != meta.CommitteeID {
+		sessPath := s.getRecordPath(sessID, meta.Epoch)
+		sessTmp := sessPath + ".tmp"
+		_ = os.WriteFile(sessTmp, data, 0600)
+		_ = os.Rename(sessTmp, sessPath)
+	}
+
 	return nil
 }
 

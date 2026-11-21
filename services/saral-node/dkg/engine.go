@@ -87,6 +87,14 @@ func (e *Engine) CreateSessionWithBinding(
 	log.Printf("[DKG Engine - %s] Session %s created for committee %s (n=%d, k=%d, t=%d, index=%d, wallet=%s, key=%s)",
 		e.NodeID, sessionID, committeeID, n, k, t, selfIndex, walletID, keyID)
 
+	// Pre-create the expected AVSS recipient sessions for all committee members
+	if e.AVSSEngine != nil {
+		for _, member := range committee {
+			subSessID := fmt.Sprintf("dkg-%s-contrib-%s", sessionID, member)
+			_, _ = e.AVSSEngine.CreateSession(subSessID, committeeID, member, 1, n, k, t, committee)
+		}
+	}
+
 	return sess, nil
 }
 
@@ -158,15 +166,26 @@ func (e *Engine) OnAVSSSubprotocolCompleted(subSessionID string, avssSess *avss.
 				e.NodeID, dealerID, sess.SessionID, len(sess.CompletedSharings), sess.N-sess.T)
 
 			// If ready to propose qualified set, propose automatically
-			if sess.CanProposeQualifiedSet() && !sess.Agreement.IsDecided {
-				candidateSet := sess.GetCandidateQualifiedSet()
-				propMsg := &proactive.AgreementProposeMessage{
-					CommitteeID:  sess.CommitteeID,
-					Epoch:        sess.Epoch,
-					ProposerID:   e.NodeID,
-					CandidateSet: candidateSet,
-				}
-				go e.proposeQualifiedSet(sess, propMsg)
+			if sess.CanProposeQualifiedSet() && !sess.Agreement.IsDecided && !sess.proposed {
+				sess.proposed = true
+				go func(s *Session) {
+					// If not all N completed yet, wait up to 100ms for peer contributions to arrive
+					if len(s.CompletedSharings) < s.N {
+						time.Sleep(100 * time.Millisecond)
+					}
+					if s.Agreement.IsDecided {
+						return
+					}
+					candidateSet := s.GetCandidateQualifiedSet()
+					propMsg := &proactive.AgreementProposeMessage{
+						SessionID:    s.SessionID,
+						CommitteeID:  s.CommitteeID,
+						Epoch:        s.Epoch,
+						ProposerID:   e.NodeID,
+						CandidateSet: candidateSet,
+					}
+					e.proposeQualifiedSet(s, propMsg)
+				}(sess)
 			}
 			break
 		}
@@ -178,6 +197,53 @@ func (e *Engine) proposeQualifiedSet(sess *Session, propMsg *proactive.Agreement
 	if err == nil && echo != nil {
 		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementEcho, echo)
 	}
+	e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementPropose, propMsg)
+
+	if sess.Agreement.IsDecided {
+		_ = e.finalizeDKG(sess, sess.Agreement.DecidedSet)
+	}
+}
+
+// HandleAgreementPropose processes an incoming qualified set proposal
+func (e *Engine) HandleAgreementPropose(msg *proactive.AgreementProposeMessage) error {
+	sess := e.findSession(msg.SessionID, msg.CommitteeID)
+	if sess == nil {
+		return errors.New("no active DKG session for agreement propose")
+	}
+
+	go func() {
+		// Wait until all dealers in candidateSet have finished AVSS sharing (up to 5s)
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			allDone := true
+			sess.mu.RLock()
+			for _, dealerID := range msg.CandidateSet {
+				if sub, exists := sess.CompletedSharings[dealerID]; !exists || sub == nil || sub.Share == nil {
+					allDone = false
+					break
+				}
+			}
+			sess.mu.RUnlock()
+			if allDone {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		echo, err := sess.Agreement.ProcessProposal(msg)
+		if err != nil {
+			log.Printf("[DKG Engine - %s] ProcessProposal error from %s: %v", e.NodeID, msg.ProposerID, err)
+			return
+		}
+		if echo != nil {
+			e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementEcho, echo)
+		}
+
+		if sess.Agreement.IsDecided {
+			_ = e.finalizeDKG(sess, sess.Agreement.DecidedSet)
+		}
+	}()
+	return nil
 }
 
 // HandleDKGInit processes an incoming DKG initialization broadcast
@@ -211,7 +277,7 @@ func (e *Engine) HandleDKGContribution(msg *DKGContributionMessage) error {
 
 // HandleAgreementEcho processes an agreement echo for the qualified set
 func (e *Engine) HandleAgreementEcho(echo *proactive.AgreementEchoMessage) error {
-	sess := e.findSessionByCommittee(echo.CommitteeID)
+	sess := e.findSession(echo.SessionID, echo.CommitteeID)
 	if sess == nil {
 		return errors.New("no active DKG session for agreement echo")
 	}
@@ -228,7 +294,7 @@ func (e *Engine) HandleAgreementEcho(echo *proactive.AgreementEchoMessage) error
 
 // HandleAgreementReady processes an agreement ready message and checks for consensus decision
 func (e *Engine) HandleAgreementReady(ready *proactive.AgreementReadyMessage) error {
-	sess := e.findSessionByCommittee(ready.CommitteeID)
+	sess := e.findSession(ready.SessionID, ready.CommitteeID)
 	if sess == nil {
 		return errors.New("no active DKG session for agreement ready")
 	}
@@ -250,7 +316,7 @@ func (e *Engine) HandleAgreementReady(ready *proactive.AgreementReadyMessage) er
 
 // HandleAgreementVote processes an ABBA vote message
 func (e *Engine) HandleAgreementVote(msg *proactive.AgreementVoteMessage) error {
-	sess := e.findSessionByCommittee(msg.CommitteeID)
+	sess := e.findSession(msg.SessionID, msg.CommitteeID)
 	if sess == nil {
 		return errors.New("no active DKG session for agreement vote")
 	}
@@ -275,7 +341,7 @@ func (e *Engine) HandleAgreementVote(msg *proactive.AgreementVoteMessage) error 
 
 // HandleAgreementCoinShare processes an incoming threshold coin share
 func (e *Engine) HandleAgreementCoinShare(msg *proactive.AgreementCoinShareMessage) error {
-	sess := e.findSessionByCommittee(msg.CommitteeID)
+	sess := e.findSession(msg.SessionID, msg.CommitteeID)
 	if sess == nil {
 		return errors.New("no active DKG session for agreement coin share")
 	}
@@ -319,10 +385,21 @@ func (e *Engine) finalizeDKG(sess *Session, agreedQUAL []string) error {
 	return nil
 }
 
-func (e *Engine) findSessionByCommittee(committeeID string) *Session {
+func (e *Engine) findSession(sessionID, committeeID string) *Session {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	if sessionID != "" {
+		if sess, exists := e.sessions[sessionID]; exists {
+			return sess
+		}
+	}
+
+	for _, sess := range e.sessions {
+		if sess.CommitteeID == committeeID && sess.State != StateCompleted && sess.State != StateFailed {
+			return sess
+		}
+	}
 	for _, sess := range e.sessions {
 		if sess.CommitteeID == committeeID {
 			return sess
@@ -372,31 +449,36 @@ func (e *Engine) GetPublicShareContribution(
 
 	// 1. Try loading from encrypted vault
 	if e.ShareStore != nil {
-		idToTry := keyID
-		if idToTry == "" {
-			idToTry = committeeID
+		idsToTry := []string{}
+		if keyID != "" {
+			idsToTry = append(idsToTry, keyID)
 		}
-		if idToTry == "" {
-			idToTry = sessionID
+		if sessionID != "" {
+			idsToTry = append(idsToTry, sessionID)
+		}
+		if committeeID != "" {
+			idsToTry = append(idsToTry, committeeID)
 		}
 
-		meta, share, _, err := e.ShareStore.LoadShare(idToTry, epoch, 0)
-		if err == nil && share != nil {
-			defer share.Zero()
+		for _, idToTry := range idsToTry {
+			meta, share, _, err := e.ShareStore.LoadShare(idToTry, epoch, 0)
+			if err == nil && share != nil {
+				defer share.Zero()
 
-			usedCurve := curve
-			if usedCurve == "" && meta.Curve != "" {
-				usedCurve = meta.Curve
-			}
-			if usedCurve == "" {
-				usedCurve = "nist-p256"
-			}
+				usedCurve := curve
+				if usedCurve == "" && meta.Curve != "" {
+					usedCurve = meta.Curve
+				}
+				if usedCurve == "" {
+					usedCurve = "secp256k1"
+				}
 
-			ptHex, err := cryptography.ComputePublicContributionPoint(usedCurve, share.Hex())
-			if err != nil {
-				return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", usedCurve, err)
+				ptHex, err := cryptography.ComputePublicContributionPoint(usedCurve, share.Hex())
+				if err != nil {
+					return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", usedCurve, err)
+				}
+				return ptHex, meta.NodeIndex, meta.Epoch, meta.PublicSecretCommitment, meta, nil
 			}
-			return ptHex, meta.NodeIndex, meta.Epoch, meta.PublicSecretCommitment, meta, nil
 		}
 	}
 
@@ -431,7 +513,7 @@ func (e *Engine) GetPublicShareContribution(
 			usedCurve = matchedSession.Curve
 		}
 		if usedCurve == "" {
-			usedCurve = "nist-p256"
+			usedCurve = "secp256k1"
 		}
 
 		ptHex, err := cryptography.ComputePublicContributionPoint(usedCurve, matchedSession.FinalShare.Hex())

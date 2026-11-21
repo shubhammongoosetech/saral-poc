@@ -29,3 +29,42 @@ func ValidateProactiveParameters(n, k, t int) error {
 	return nil
 }
 
+// ValidateHybridVSSParameters verifies the Kate-Huang-Goldberg condition:
+// n >= 3t + 2f + 1
+func ValidateHybridVSSParameters(n, t, f int) error {
+	required := 3*t + 2*f + 1
+	if n < required {
+		return fmt.Errorf("HybridVSS bound violated: requires n >= 3t + 2f + 1 (got n=%d, required=%d for t=%d, f=%d)", n, required, t, f)
+	}
+	return nil
+}
+
+// HybridVSSEchoQuorum computes the ECHO quorum required before broadcasting READY:
+// Formula from Kate-Huang-Goldberg (Figure 1): ceil((n + t + 1) / 2)
+func HybridVSSEchoQuorum(n, t int) int {
+	return (n + t + 1 + 1) / 2
+}
+
+// HybridVSSReadyStepQuorum computes the READY threshold that triggers an honest node to echo READY:
+// Formula from Kate-Huang-Goldberg (Figure 1): t + 1
+func HybridVSSReadyStepQuorum(t int) int {
+	return t + 1
+}
+
+// HybridVSSCompletionQuorum computes the number of READY messages required for sharing completion:
+// In hybrid model with f crash failures: 2t + f + 1 (or n - t - f)
+func HybridVSSCompletionQuorum(n, t, f int) int {
+	if f > 0 {
+		return 2*t + f + 1
+	}
+	return 2*t + 1
+}
+
+// DualThresholdEchoQuorum computes the ECHO quorum required for generalized reconstruction threshold k > t+1:
+// Any two quorums must intersect in at least k honest nodes:
+// |Q1 \cap Q2| - t >= k  =>  (2Q - n) - t >= k  =>  2Q >= n + k + t
+func DualThresholdEchoQuorum(n, k, t int) int {
+	target := n + k + t
+	return (target + 1) / 2
+}
+

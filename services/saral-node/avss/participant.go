@@ -347,3 +347,97 @@ func (s *Session) generateReadyMessages() []*ReadyMessage {
 	return readys
 }
 
+// ProcessRecoveryRequest handles incoming recovery request from a crashed or recovering peer
+func (s *Session) ProcessRecoveryRequest(req *RecoveryRequestMessage) (*RecoveryResponseMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	reqIdx := NodeIndexInCommittee(s.Committee, req.RequesterID)
+	if reqIdx == -1 {
+		return nil, ErrInvalidSender
+	}
+
+	if s.Commitments == nil {
+		return nil, errors.New("cannot assist recovery: commitments not yet established")
+	}
+
+	var ptHex, ptBlindHex string
+	if s.RowPoly != nil && s.RowBlindPoly != nil {
+		reqIndexFE := cryptography.NewFieldElement(int64(reqIdx))
+		pt := s.RowPoly.Evaluate(reqIndexFE)
+		blindPt := s.RowBlindPoly.Evaluate(reqIndexFE)
+		ptHex = pt.Hex()
+		ptBlindHex = blindPt.Hex()
+	}
+
+	return &RecoveryResponseMessage{
+		SessionID:   s.SessionID,
+		CommitteeID: s.CommitteeID,
+		ResponderID: s.SelfID,
+		RecipientID: req.RequesterID,
+		Epoch:       s.Epoch,
+		Commitments: s.Commitments.ToHexMatrix(),
+		Point:       ptHex,
+		BlindPoint:  ptBlindHex,
+		Timestamp:   time.Now().UnixMilli(),
+	}, nil
+}
+
+// ProcessRecoveryResponse processes a received recovery response to rebuild missing state
+func (s *Session) ProcessRecoveryResponse(resp *RecoveryResponseMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	respIdx := NodeIndexInCommittee(s.Committee, resp.ResponderID)
+	if respIdx == -1 {
+		return ErrInvalidSender
+	}
+
+	// Verify commitment matrix consistency
+	respHash := HashCommitments(resp.Commitments)
+	if s.CommitmentsHash == "" {
+		s.CommitmentsHash = respHash
+		var err error
+		s.Commitments, err = ParseCommitmentMatrixFromHex(resp.Commitments)
+		if err != nil {
+			return fmt.Errorf("failed to parse commitments from recovery response: %w", err)
+		}
+	} else if s.CommitmentsHash != respHash {
+		return ErrCommitmentMismatch
+	}
+
+	if resp.Point != "" && resp.BlindPoint != "" {
+		p, err := cryptography.NewFieldElementFromHex(resp.Point)
+		if err != nil {
+			return err
+		}
+		pPrime, err := cryptography.NewFieldElementFromHex(resp.BlindPoint)
+		if err != nil {
+			return err
+		}
+
+		senderFE := cryptography.NewFieldElement(int64(respIdx))
+		selfFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+		if !s.Commitments.VerifyPoint(senderFE, selfFE, p, pPrime) {
+			return ErrPointVerification
+		}
+
+		// Store in received echoes if not present
+		if _, exists := s.ReceivedEchos[resp.ResponderID]; !exists {
+			s.ReceivedEchos[resp.ResponderID] = &EchoMessage{
+				SessionID:   s.SessionID,
+				CommitteeID: s.CommitteeID,
+				SenderID:    resp.ResponderID,
+				RecipientID: s.SelfID,
+				Epoch:       s.Epoch,
+				Commitments: resp.Commitments,
+				Point:       resp.Point,
+				BlindPoint:  resp.BlindPoint,
+				Timestamp:   resp.Timestamp,
+			}
+		}
+	}
+
+	return nil
+}
+

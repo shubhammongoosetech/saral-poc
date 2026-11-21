@@ -37,6 +37,7 @@ type Session struct {
 	LocalBlind         *cryptography.FieldElement
 	LocalDealerPkg     *avss.DealerPackage
 	ContributionDealt  bool
+	proposed           bool
 
 	// Completed AVSS instances from peer dealers: DealerID -> Session
 	CompletedSharings      map[string]*avss.Session
@@ -126,6 +127,7 @@ func NewSession(
 	sess.Agreement = proactive.NewValidatedAgreementInstance(
 		committeeID, 1, selfID, normalizedCommittee, n, t, n-t, predicate,
 	)
+	sess.Agreement.SessionID = sessionID
 
 	sess.State = StateParticipantsRegistered
 	return sess, nil

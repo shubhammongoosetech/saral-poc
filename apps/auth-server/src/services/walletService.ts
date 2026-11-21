@@ -64,8 +64,8 @@ export interface MultiChainAddressesResponse {
 }
 
 /**
- * Calculates what the old deprecated HMAC algorithm would have produced for a given keyRef/walletId.
- * Strictly used for audit, legacy detection, and warning users whose addresses were not DKG-backed.
+ * Legacy HMAC calculation used EXCLUSIVELY for detecting and flagging old mock addresses.
+ * STRICTLY NEVER used to generate addresses for new or returning user wallet flows.
  */
 export function calculateLegacyHmacAddress(
   walletId: string,
@@ -283,15 +283,13 @@ export async function recomputeWalletAddressesFromShares(
     });
     if (mstResp?.masterPublicKey) {
       mstPubkey = mstResp.masterPublicKey;
+    } else {
+      throw new Error('Missing master public key in response');
     }
   } catch (err: any) {
-    if (keyRefs.mst && /^(04[0-9a-fA-F]{128}|(02|03)[0-9a-fA-F]{64}|[0-9a-fA-F]{128})$/.test(keyRefs.mst)) {
-      mstPubkey = keyRefs.mst;
-    } else {
-      throw new Error(
-        `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for MST: ${err.message}. Fail-closed active.`
-      );
-    }
+    throw new Error(
+      `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for MST: ${err.message}. Fail-closed active.`
+    );
   }
 
   // 2. Solana (ed25519)
@@ -307,15 +305,13 @@ export async function recomputeWalletAddressesFromShares(
     });
     if (solResp?.masterPublicKey) {
       solPubkey = solResp.masterPublicKey;
+    } else {
+      throw new Error('Missing master public key in response');
     }
   } catch (err: any) {
-    if (keyRefs.solana && /^(04[0-9a-fA-F]{128}|[0-9a-fA-F]{64})$/.test(keyRefs.solana)) {
-      solPubkey = keyRefs.solana;
-    } else {
-      throw new Error(
-        `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for Solana: ${err.message}. Fail-closed active.`
-      );
-    }
+    throw new Error(
+      `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for Solana: ${err.message}. Fail-closed active.`
+    );
   }
 
   // 3. Bitcoin (secp256k1)
@@ -331,15 +327,13 @@ export async function recomputeWalletAddressesFromShares(
     });
     if (btcResp?.masterPublicKey) {
       btcPubkey = btcResp.masterPublicKey;
+    } else {
+      throw new Error('Missing master public key in response');
     }
   } catch (err: any) {
-    if (keyRefs.bitcoin && /^(04[0-9a-fA-F]{128}|(02|03)[0-9a-fA-F]{64}|[0-9a-fA-F]{128})$/.test(keyRefs.bitcoin)) {
-      btcPubkey = keyRefs.bitcoin;
-    } else {
-      throw new Error(
-        `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for Bitcoin: ${err.message}. Fail-closed active.`
-      );
-    }
+    throw new Error(
+      `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for Bitcoin: ${err.message}. Fail-closed active.`
+    );
   }
 
   const addresses = deriveMultiChainAddresses(wallet.walletId, {
@@ -348,13 +342,6 @@ export async function recomputeWalletAddressesFromShares(
     bitcoin: btcPubkey,
     dkgSessionId,
   });
-
-  // Check for legacy HMAC migration
-  if (keyRefs.mst && isLegacyHmacAddress(addresses.mst.address, wallet.walletId, keyRefs.mst, 'mst')) {
-    addresses.mst.legacyHmacDetected = true;
-    addresses.mst.migrationNotice =
-      'WARNING: Previous session displayed an unverified mock address. Address updated to genuine 3-of-5 DKG-backed key.';
-  }
 
   return {
     walletId: wallet.walletId,
@@ -421,10 +408,27 @@ export async function createOrGetWallet(userId: string): Promise<{
         dkgSessionId,
       };
 
+      const pendingWallet: WalletMetadataRecord = {
+        userId,
+        walletId,
+        status: 'DKG_IN_PROGRESS',
+        keyReferences,
+        createdAt: now,
+        updatedAt: now,
+      };
+      store.saveWallet(pendingWallet);
+
       console.log(`[DKG] Initiating Dealerless 3-of-5 DKG on Coordinator for user ${userId}...`);
       const dkgSession = await saralBackendClient.startDkg({
         committeeId: 'committee-foundation',
         sessionId: dkgSessionId,
+        committee: [
+          'saral-foundation-1',
+          'saral-foundation-2',
+          'saral-foundation-3',
+          'saral-foundation-4',
+          'saral-foundation-5',
+        ],
         n: 5,
         k: 3,
         t: 1,
@@ -435,17 +439,50 @@ export async function createOrGetWallet(userId: string): Promise<{
       }
       console.log(`[DKG] Dealerless DKG session initialized: ${dkgSessionId}`);
 
-      const newWallet: WalletMetadataRecord = {
+      // Await genuine 3-of-5 DKG consensus across the foundation committee nodes
+      let dkgCompleted = false;
+      const pollStart = Date.now();
+      const maxPollTime = 15000;
+      while (Date.now() - pollStart < maxPollTime) {
+        try {
+          const status = await saralBackendClient.getDkgStatus(dkgSessionId);
+          if (status?.state === 'COMPLETED' || (status?.completedNodes && status.completedNodes >= 3)) {
+            dkgCompleted = true;
+            break;
+          }
+        } catch (_) {}
+        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      if (!dkgCompleted) {
+        const errorWallet: WalletMetadataRecord = {
+          userId,
+          walletId,
+          status: 'ERROR',
+          error: 'DKG consensus timed out across threshold nodes',
+          keyReferences,
+          createdAt: now,
+          updatedAt: new Date().toISOString(),
+        };
+        store.saveWallet(errorWallet);
+        throw new Error('Failed to obtain verified 3-of-5 DKG public key: consensus timed out. Fail-closed active.');
+      }
+
+      pendingWallet.status = 'KEY_READY';
+      store.saveWallet(pendingWallet);
+
+      // Derive addresses from the real DKG shares via Coordinator
+      const derived = await recomputeWalletAddressesFromShares(userId);
+
+      const readyWallet: WalletMetadataRecord = {
         userId,
         walletId,
         status: 'READY',
         keyReferences,
         createdAt: now,
-        updatedAt: now,
+        updatedAt: new Date().toISOString(),
       };
-
-      // Persist ONLY metadata into the database (ZERO addresses, ZERO public keys)
-      store.saveWallet(newWallet);
+      await store.saveWallet(readyWallet);
 
       store.logSecurity({
         id: crypto.randomUUID(),
@@ -456,11 +493,8 @@ export async function createOrGetWallet(userId: string): Promise<{
         timestamp: now,
       });
 
-      // Derive addresses from the real DKG shares via Coordinator
-      const derived = await recomputeWalletAddressesFromShares(userId);
-
       return {
-        wallet: newWallet,
+        wallet: readyWallet,
         isNew: true,
         addresses: derived.addresses,
       };

@@ -11,6 +11,58 @@ import { saralBackendClient } from '../../apps/auth-server/src/clients/saralBack
 describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
   beforeAll(async () => {
     await connectPrisma();
+
+    // Ensure pre-seeded operator user exists
+    const operatorId = 'b79f86f3-44a6-48f9-be43-a1abb6456172';
+    const walletId = 'wal-aa583bf2-9e66-415b-90c6-d8eda93bd540';
+    await prisma.user.upsert({
+      where: { id: operatorId },
+      update: { mobile: '+919825669385' },
+      create: {
+        id: operatorId,
+        name: 'SARAL Operator',
+        mobile: '+919825669385',
+        loginMethod: 'mobile',
+      },
+    });
+    await prisma.walletIdentity.upsert({
+      where: { userId: operatorId },
+      update: { status: 'READY' },
+      create: {
+        id: '3d2e140d-dd97-403e-9ed4-da6f17669b55',
+        userId: operatorId,
+        walletId,
+        status: 'READY',
+        keyReferences: {
+          mst: 'key-mst-7d57a501e008f36f',
+          solana: 'key-sol-b06a5d5b49696a4f',
+          bitcoin: 'key-btc-48ea9f6ba5a7de2a',
+        },
+      },
+    });
+
+    vi.spyOn(saralBackendClient, 'startDkg').mockResolvedValue({
+      success: true,
+      sessionId: 'sess-prisma-1',
+      committeeId: 'committee-foundation',
+      state: 'COMPLETED',
+      n: 5,
+      k: 3,
+      t: 1,
+      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+    });
+    vi.spyOn(saralBackendClient, 'getDkgStatus').mockResolvedValue({
+      sessionId: 'sess-prisma-1',
+      committeeId: 'committee-foundation',
+      epoch: 1,
+      n: 5,
+      k: 3,
+      t: 1,
+      state: 'COMPLETED',
+      completedNodes: 5,
+      totalNodes: 5,
+      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+    });
     vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
       if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
         return {

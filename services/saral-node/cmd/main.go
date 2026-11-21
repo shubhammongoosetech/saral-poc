@@ -156,7 +156,12 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &propMsg); err != nil {
 			return err
 		}
-		return proactiveMgr.HandleAgreementPropose(&propMsg)
+		dkgErr := dkgEngine.HandleAgreementPropose(&propMsg)
+		proErr := proactiveMgr.HandleAgreementPropose(&propMsg)
+		if dkgErr == nil || proErr == nil {
+			return nil
+		}
+		return dkgErr
 	})
 
 	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementEcho, func(msg *relay.RelayMessage) error {
@@ -168,7 +173,12 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &echoMsg); err != nil {
 			return err
 		}
-		return proactiveMgr.HandleAgreementEcho(&echoMsg)
+		dkgErr := dkgEngine.HandleAgreementEcho(&echoMsg)
+		proErr := proactiveMgr.HandleAgreementEcho(&echoMsg)
+		if dkgErr == nil || proErr == nil {
+			return nil
+		}
+		return dkgErr
 	})
 
 	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementReady, func(msg *relay.RelayMessage) error {
@@ -180,7 +190,12 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &readyMsg); err != nil {
 			return err
 		}
-		return proactiveMgr.HandleAgreementReady(&readyMsg)
+		dkgErr := dkgEngine.HandleAgreementReady(&readyMsg)
+		proErr := proactiveMgr.HandleAgreementReady(&readyMsg)
+		if dkgErr == nil || proErr == nil {
+			return nil
+		}
+		return dkgErr
 	})
 
 	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementVote, func(msg *relay.RelayMessage) error {
@@ -192,7 +207,12 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &voteMsg); err != nil {
 			return err
 		}
-		return proactiveMgr.HandleAgreementVote(&voteMsg)
+		dkgErr := dkgEngine.HandleAgreementVote(&voteMsg)
+		proErr := proactiveMgr.HandleAgreementVote(&voteMsg)
+		if dkgErr == nil || proErr == nil {
+			return nil
+		}
+		return dkgErr
 	})
 
 	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementCoinShare, func(msg *relay.RelayMessage) error {
@@ -204,7 +224,12 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &coinMsg); err != nil {
 			return err
 		}
-		return proactiveMgr.HandleAgreementCoinShare(&coinMsg)
+		dkgErr := dkgEngine.HandleAgreementCoinShare(&coinMsg)
+		proErr := proactiveMgr.HandleAgreementCoinShare(&coinMsg)
+		if dkgErr == nil || proErr == nil {
+			return nil
+		}
+		return dkgErr
 	})
 
 	relayRouter.RegisterMessageHandler(dkg.MessageTypeDKGInit, func(msg *relay.RelayMessage) error {

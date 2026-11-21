@@ -180,8 +180,11 @@ router.post('/generate', requireAuth, async (req: Request, res: Response) => {
     const balances = await getLiveBalances(rawAddrs);
 
     res.json({
+      success: true,
       hasWallet: true,
       wallet: {
+        walletId: result.wallet.walletId,
+        status: 'READY',
         address: rawAddrs.mst,
         balance: balances.mst,
         solanaAddress: rawAddrs.solana,
@@ -189,6 +192,11 @@ router.post('/generate', requireAuth, async (req: Request, res: Response) => {
         bitcoinAddress: rawAddrs.bitcoin,
         bitcoinBalance: balances.bitcoin,
         addresses: rawAddrs,
+        chains: {
+          mst: { network: 'mst-testnet', address: rawAddrs.mst, balance: balances.mst },
+          solana: { network: 'solana-devnet', address: rawAddrs.solana, balance: balances.solana },
+          bitcoin: { network: 'bitcoin-testnet', address: rawAddrs.bitcoin, balance: balances.bitcoin },
+        },
       },
       addresses: result.addresses,
       balances,
@@ -224,8 +232,23 @@ function parseCoordinates(req: Request) {
 router.get('/', requireAuth, async (req: Request, res: Response) => {
   const userId = req.user!.userId;
   const wallet = store.getWalletByUserId(userId);
-  if (!wallet || wallet.status !== 'READY') {
+  if (!wallet || wallet.status === 'NO_WALLET') {
     res.json({ success: true, hasWallet: false, wallet: null });
+    return;
+  }
+
+  if (wallet.status === 'ERROR') {
+    res.status(503).json({
+      success: false,
+      hasWallet: true,
+      wallet: {
+        walletId: wallet.walletId,
+        status: 'ERROR',
+        error: wallet.error || 'Wallet is in error state',
+        createdAt: wallet.createdAt,
+      },
+      error: wallet.error || 'Wallet is in error state',
+    });
     return;
   }
 
@@ -241,7 +264,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
       hasWallet: true,
       wallet: {
         walletId: wallet.walletId,
-        status: wallet.status,
+        status: 'READY',
         address: rawAddrs.mst,
         balance: balances.mst,
         solanaAddress: rawAddrs.solana,
@@ -249,6 +272,11 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
         bitcoinAddress: rawAddrs.bitcoin,
         bitcoinBalance: balances.bitcoin,
         addresses: rawAddrs,
+        chains: {
+          mst: { network: 'mst-testnet', address: rawAddrs.mst, balance: balances.mst },
+          solana: { network: 'solana-devnet', address: rawAddrs.solana, balance: balances.solana },
+          bitcoin: { network: 'bitcoin-testnet', address: rawAddrs.bitcoin, balance: balances.bitcoin },
+        },
         createdAt: wallet.createdAt,
       },
       addresses: derived.addresses,
@@ -256,16 +284,16 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('[GET /wallet] Error deriving addresses:', err.message);
-    res.json({
-      success: true,
+    res.status(503).json({
+      success: false,
       hasWallet: true,
       wallet: {
         walletId: wallet.walletId,
-        status: wallet.status,
-        address: '',
-        balance: '0.0000',
+        status: 'ERROR',
+        error: err.message,
         createdAt: wallet.createdAt,
       },
+      error: err.message || 'Failed to derive blockchain addresses from threshold nodes',
     });
   }
 });

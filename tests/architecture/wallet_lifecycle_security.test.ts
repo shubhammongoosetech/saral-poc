@@ -40,6 +40,28 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
 
   beforeAll(async () => {
     // Configure mock DKG Coordinator response returning verified public keys
+    vi.spyOn(saralBackendClient, 'startDkg').mockResolvedValue({
+      success: true,
+      sessionId: 'sess-1',
+      committeeId: 'committee-foundation',
+      state: 'COMPLETED',
+      n: 5,
+      k: 3,
+      t: 1,
+      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+    });
+    vi.spyOn(saralBackendClient, 'getDkgStatus').mockResolvedValue({
+      sessionId: 'sess-1',
+      committeeId: 'committee-foundation',
+      epoch: 1,
+      n: 5,
+      k: 3,
+      t: 1,
+      state: 'COMPLETED',
+      completedNodes: 5,
+      totalNodes: 5,
+      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+    });
     vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
       if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
         return {

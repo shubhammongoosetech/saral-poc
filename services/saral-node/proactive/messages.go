@@ -22,6 +22,7 @@ type EpochStartMessage struct {
 
 // AgreementProposeMessage proposes an accepted set of completed AVSS sharings
 type AgreementProposeMessage struct {
+	SessionID    string   `json:"sessionId,omitempty"`
 	CommitteeID  string   `json:"committeeId"`
 	Epoch        uint64   `json:"epoch"`
 	ProposerID   string   `json:"proposerId"`
@@ -31,6 +32,7 @@ type AgreementProposeMessage struct {
 
 // AgreementEchoMessage echoes validation of a candidate set proposal
 type AgreementEchoMessage struct {
+	SessionID    string `json:"sessionId,omitempty"`
 	CommitteeID  string `json:"committeeId"`
 	Epoch        uint64 `json:"epoch"`
 	SenderID     string `json:"senderId"`
@@ -40,6 +42,7 @@ type AgreementEchoMessage struct {
 
 // AgreementReadyMessage broadcasts readiness on an agreed proposal
 type AgreementReadyMessage struct {
+	SessionID    string `json:"sessionId,omitempty"`
 	CommitteeID  string `json:"committeeId"`
 	Epoch        uint64 `json:"epoch"`
 	SenderID     string `json:"senderId"`
@@ -50,6 +53,7 @@ type AgreementReadyMessage struct {
 // AgreementVoteMessage exchanges binary agreement votes (Step 1: PRE-VOTE, Step 2: MAIN-VOTE)
 // in the randomized Asynchronous Byzantine Agreement (ABBA) protocol (CKS00 / CKS05).
 type AgreementVoteMessage struct {
+	SessionID     string `json:"sessionId,omitempty"`
 	CommitteeID   string `json:"committeeId"`
 	Epoch         uint64 `json:"epoch"`
 	Round         int    `json:"round"`
@@ -62,6 +66,7 @@ type AgreementVoteMessage struct {
 
 // AgreementCoinShareMessage broadcasts a participant's verifiable common-coin share for round r.
 type AgreementCoinShareMessage struct {
+	SessionID   string                  `json:"sessionId,omitempty"`
 	CommitteeID string                  `json:"committeeId"`
 	Epoch       uint64                  `json:"epoch"`
 	Round       int                     `json:"round"`

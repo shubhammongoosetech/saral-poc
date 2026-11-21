@@ -60,7 +60,17 @@ export interface WorkingPolicyRecord {
 export interface WalletMetadataRecord {
   userId: string;
   walletId: string;
-  status: 'CREATING' | 'READY';
+  status:
+    | 'NOT_CREATED'
+    | 'CREATING'
+    | 'DKG_IN_PROGRESS'
+    | 'KEY_READY'
+    | 'DERIVING_ADDRESS'
+    | 'READY'
+    | 'UNAVAILABLE'
+    | 'ERROR'
+    | string;
+  error?: string;
   keyReferences: {
     mst?: string;
     solana?: string;
@@ -279,23 +289,39 @@ export class DataStore {
     this.persist();
 
     const prismaUserId = toPrismaUuid(record.userId);
-    prisma.mFAEnrollment
-      .upsert({
-        where: { userId: prismaUserId },
-        create: {
-          userId: prismaUserId,
-          type: record.type,
-          totpSecretEncrypted: record.totpSecretEncrypted,
-          recoveryCodesHashed: record.recoveryCodesHashed || [],
-          verifiedAt: record.verifiedAt ? new Date(record.verifiedAt) : undefined,
-        },
-        update: {
-          type: record.type,
-          totpSecretEncrypted: record.totpSecretEncrypted,
-          recoveryCodesHashed: record.recoveryCodesHashed || [],
-          verifiedAt: record.verifiedAt ? new Date(record.verifiedAt) : undefined,
-        },
-      })
+    const user = this.data.users[record.userId] || { name: 'SARAL User', loginMethod: 'google' as const };
+    const ensureUser = prisma.user.upsert({
+      where: { id: prismaUserId },
+      create: {
+        id: prismaUserId,
+        name: user.name || 'SARAL User',
+        googleId: user.googleId,
+        email: user.email,
+        mobile: user.mobile,
+        loginMethod: user.loginMethod || 'google',
+      },
+      update: {},
+    });
+
+    ensureUser
+      .then(() =>
+        prisma.mFAEnrollment.upsert({
+          where: { userId: prismaUserId },
+          create: {
+            userId: prismaUserId,
+            type: record.type,
+            totpSecretEncrypted: record.totpSecretEncrypted,
+            recoveryCodesHashed: record.recoveryCodesHashed || [],
+            verifiedAt: record.verifiedAt ? new Date(record.verifiedAt) : undefined,
+          },
+          update: {
+            type: record.type,
+            totpSecretEncrypted: record.totpSecretEncrypted,
+            recoveryCodesHashed: record.recoveryCodesHashed || [],
+            verifiedAt: record.verifiedAt ? new Date(record.verifiedAt) : undefined,
+          },
+        })
+      )
       .catch((e) => console.warn('[Prisma] saveMfa warning:', e.message));
   }
 
@@ -309,37 +335,53 @@ export class DataStore {
     this.persist();
 
     const prismaUserId = toPrismaUuid(policy.userId);
+    const user = this.data.users[policy.userId] || { name: 'SARAL User', loginMethod: 'google' as const };
+    const ensureUser = prisma.user.upsert({
+      where: { id: prismaUserId },
+      create: {
+        id: prismaUserId,
+        name: user.name || 'SARAL User',
+        googleId: user.googleId,
+        email: user.email,
+        mobile: user.mobile,
+        loginMethod: user.loginMethod || 'google',
+      },
+      update: {},
+    });
+
     const radiusKm = policy.radiusMeters ? policy.radiusMeters / 1000 : 25;
-    prisma.workingPolicy
-      .upsert({
-        where: { userId: prismaUserId },
-        create: {
-          userId: prismaUserId,
-          startTime: policy.startTime || '00:00',
-          endTime: policy.endTime || '23:59',
-          timezone: policy.timezone || 'Asia/Kolkata',
-          city: policy.allowedRegion || 'Indore',
-          lat: policy.lat || 22.7196,
-          lng: policy.lng || 75.8577,
-          radiusKm,
-          timeRestrictionEnabled: policy.timeRestrictionEnabled ?? true,
-          locationRestrictionEnabled: policy.locationRestrictionEnabled ?? false,
-          geofenceEnabled: policy.geofenceEnabled ?? false,
-        },
-        update: {
-          startTime: policy.startTime || '00:00',
-          endTime: policy.endTime || '23:59',
-          timezone: policy.timezone || 'Asia/Kolkata',
-          city: policy.allowedRegion || 'Indore',
-          lat: policy.lat || 22.7196,
-          lng: policy.lng || 75.8577,
-          radiusKm,
-          timeRestrictionEnabled: policy.timeRestrictionEnabled ?? true,
-          locationRestrictionEnabled: policy.locationRestrictionEnabled ?? false,
-          geofenceEnabled: policy.geofenceEnabled ?? false,
-          setAt: new Date(),
-        },
-      })
+    ensureUser
+      .then(() =>
+        prisma.workingPolicy.upsert({
+          where: { userId: prismaUserId },
+          create: {
+            userId: prismaUserId,
+            startTime: policy.startTime || '00:00',
+            endTime: policy.endTime || '23:59',
+            timezone: policy.timezone || 'Asia/Kolkata',
+            city: policy.allowedRegion || 'Indore',
+            lat: policy.lat || 22.7196,
+            lng: policy.lng || 75.8577,
+            radiusKm,
+            timeRestrictionEnabled: policy.timeRestrictionEnabled ?? true,
+            locationRestrictionEnabled: policy.locationRestrictionEnabled ?? false,
+            geofenceEnabled: policy.geofenceEnabled ?? false,
+          },
+          update: {
+            startTime: policy.startTime || '00:00',
+            endTime: policy.endTime || '23:59',
+            timezone: policy.timezone || 'Asia/Kolkata',
+            city: policy.allowedRegion || 'Indore',
+            lat: policy.lat || 22.7196,
+            lng: policy.lng || 75.8577,
+            radiusKm,
+            timeRestrictionEnabled: policy.timeRestrictionEnabled ?? true,
+            locationRestrictionEnabled: policy.locationRestrictionEnabled ?? false,
+            geofenceEnabled: policy.geofenceEnabled ?? false,
+            setAt: new Date(),
+          },
+        })
+      )
       .catch((e) => console.warn('[Prisma] savePolicy warning:', e.message));
   }
 
@@ -348,13 +390,27 @@ export class DataStore {
     return this.data.wallets[userId] || null;
   }
 
-  public saveWallet(record: WalletMetadataRecord): void {
+  public async saveWallet(record: WalletMetadataRecord): Promise<void> {
     this.data.wallets[record.userId] = record;
     this.persist();
 
     const prismaUserId = toPrismaUuid(record.userId);
-    prisma.walletIdentity
-      .upsert({
+    const user = this.data.users[record.userId] || { name: 'SARAL User', loginMethod: 'google' as const };
+    try {
+      await prisma.user.upsert({
+        where: { id: prismaUserId },
+        create: {
+          id: prismaUserId,
+          name: user.name || 'SARAL User',
+          googleId: user.googleId,
+          email: user.email,
+          mobile: user.mobile,
+          loginMethod: user.loginMethod || 'google',
+        },
+        update: {},
+      });
+
+      await prisma.walletIdentity.upsert({
         where: { userId: prismaUserId },
         create: {
           userId: prismaUserId,
@@ -367,8 +423,10 @@ export class DataStore {
           keyReferences: record.keyReferences,
           updatedAt: new Date(),
         },
-      })
-      .catch((e) => console.warn('[Prisma] saveWallet warning:', e.message));
+      });
+    } catch (e: any) {
+      console.warn('[Prisma] saveWallet warning:', e.message);
+    }
   }
 
   // --- OTP Management ---
@@ -460,19 +518,35 @@ export class DataStore {
 
     const prismaId = toPrismaUuid(record.id);
     const prismaUserId = toPrismaUuid(record.userId);
-    prisma.securityAuditEvent
-      .create({
-        data: {
-          id: prismaId,
-          userId: prismaUserId,
-          eventType: record.eventType,
-          severity: record.severity,
-          ipAddress: record.ip,
-          userAgent: record.userAgent,
-          details: record.details ? JSON.stringify(record.details) : undefined,
-          createdAt: new Date(record.timestamp),
-        },
-      })
+    const user = this.data.users[record.userId] || { name: 'SARAL User', loginMethod: 'google' as const };
+    const ensureUser = prisma.user.upsert({
+      where: { id: prismaUserId },
+      create: {
+        id: prismaUserId,
+        name: user.name || 'SARAL User',
+        googleId: user.googleId,
+        email: user.email,
+        mobile: user.mobile,
+        loginMethod: user.loginMethod || 'google',
+      },
+      update: {},
+    });
+
+    ensureUser
+      .then(() =>
+        prisma.securityAuditEvent.create({
+          data: {
+            id: prismaId,
+            userId: prismaUserId,
+            eventType: record.eventType,
+            severity: record.severity,
+            ipAddress: record.ip,
+            userAgent: record.userAgent,
+            details: record.details ? JSON.stringify(record.details) : undefined,
+            createdAt: new Date(record.timestamp),
+          },
+        })
+      )
       .catch((e) => console.warn('[Prisma] logSecurity warning:', e.message));
   }
 }
