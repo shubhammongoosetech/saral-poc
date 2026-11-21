@@ -28,7 +28,6 @@ model User {
   otps               OTPChallenge[]
   accessLogs         AccessLog[]
   securityEvents     SecurityAuditEvent[]
-  transactions       Transaction[]
   walletCreationJobs WalletCreationJob[]
 
   @@map("users")
@@ -53,9 +52,7 @@ model MFAEnrollment {
   id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId              String    @unique @map("user_id") @db.Uuid
   type                String    @default("totp") @db.VarChar(50)
-  secret              String?   @db.Text
   totpSecretEncrypted String?   @map("totp_secret_encrypted") @db.Text
-  recoveryCodes       String[]  @default([]) @map("recovery_codes")
   recoveryCodesHashed String[]  @default([]) @map("recovery_codes_hashed")
   verifiedAt          DateTime? @map("verified_at") @db.Timestamptz(6)
 
@@ -204,20 +201,4 @@ model AccessLog {
 
   @@index([userId])
   @@map("access_logs")
-}
-
-model Transaction {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  chain     String   @default("mst-testnet") @db.VarChar(50)
-  txHash    String   @unique @map("tx_hash") @db.VarChar(255)
-  toAddress String   @map("to_address") @db.VarChar(255)
-  amount    String   @db.VarChar(100)
-  status    String   @default("CONFIRMED") @db.VarChar(50)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("transactions")
 }

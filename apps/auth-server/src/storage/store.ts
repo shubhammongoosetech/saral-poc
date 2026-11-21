@@ -204,8 +204,8 @@ export class DataStore {
         this.data.mfa[m.userId] = {
           userId: m.userId,
           type: (m.type as any) || 'totp',
-          totpSecretEncrypted: m.totpSecretEncrypted || m.secret || undefined,
-          recoveryCodesHashed: m.recoveryCodesHashed || m.recoveryCodes || [],
+          totpSecretEncrypted: m.totpSecretEncrypted || undefined,
+          recoveryCodesHashed: m.recoveryCodesHashed || [],
           verifiedAt: m.verifiedAt ? m.verifiedAt.toISOString() : undefined,
           updatedAt: new Date().toISOString(),
         };

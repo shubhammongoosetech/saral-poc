@@ -52,8 +52,8 @@ echo -e "${GREEN}✓ Build artifacts cleaned.${NC}"
 # 4. Reset PostgreSQL database tables using Prisma
 echo -e "\n${BLUE}[4/4] Resetting PostgreSQL database tables...${NC}"
 if pg_isready -h localhost -p 5432 >/dev/null 2>&1; then
-  (cd apps/auth-server && npx prisma db push --force-reset --accept-data-loss && npx prisma db seed)
-  echo -e "${GREEN}✓ PostgreSQL database tables dropped, recreated clean, and seeded.${NC}"
+  (cd apps/auth-server && npx prisma db push --force-reset --accept-data-loss)
+  echo -e "${GREEN}✓ PostgreSQL database tables dropped and recreated clean.${NC}"
 else
   echo -e "${YELLOW}⚠️  PostgreSQL on localhost:5432 is not currently running. Skipping DB reset.${NC}"
 fi

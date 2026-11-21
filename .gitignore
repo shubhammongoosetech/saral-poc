@@ -37,4 +37,6 @@ vault_data/
 *.sock
 data/
 scratch/
+infra/postgres/backup/
+
 

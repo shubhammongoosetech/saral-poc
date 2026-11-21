@@ -98,8 +98,7 @@ The Authentication & Orchestration Server is a TypeScript service running on Nod
 apps/auth-server/
 ├── prisma/
 │   ├── schema.prisma        # PostgreSQL relational schema
-│   ├── migrations/          # Version-controlled SQL migrations
-│   └── seed.ts              # Idempotent development seed
+│   └── migrations/          # Version-controlled SQL migrations
 ├── src/
 │   ├── auth/                # Asymmetric Ed25519 token manager (KeyManager) & JWKS
 │   ├── clients/             # Typed JSON-RPC saralBackendClient for Go Coordinator
@@ -116,63 +115,47 @@ apps/auth-server/
 
 ---
 
-## 5. Prisma / PostgreSQL Data Ownership
+## 5. Prisma / PostgreSQL Data Ownership & Clean Schema
 
-Central metadata is managed through PostgreSQL 16 via Prisma ORM:
+Central relational state is managed strictly through PostgreSQL 16 via Prisma ORM (`apps/auth-server/prisma/schema.prisma`). In accordance with SARAL's Zero-Persistence & Minimal Relational Architecture, all legacy demo tables (`transactions`), plaintext fields (`mfa.secret`, `mfa.recovery_codes`), and seed scripts (`seed.ts`) have been permanently removed.
+
+### Active PostgreSQL Tables (12 Canonical Tables)
+
+| Table Name | Model Name | Purpose & Security Scope |
+| :--- | :--- | :--- |
+| **`users`** | `User` | Core user identity (Google ID, mobile, email, login method). |
+| **`auth_identities`** | `AuthIdentity` | Normalized federated OAuth provider links (Google, Mobile). |
+| **`mfa`** | `MFAEnrollment` | MFA enrollment with AES-256 encrypted TOTP secret (`totp_secret_encrypted`) and SHA-256 hashed recovery codes. Plaintext secrets strictly eliminated. |
+| **`mfa_recovery_codes`**| `MFARecoveryCode` | Normalized single-use recovery code hashes and redemption timestamps. |
+| **`work_policy`** | `WorkingPolicy` | Geofence coordinates, allowed radius (km), time windows, and active policy flags. |
+| **`otps`** | `OTPChallenge` | Phone OTP challenges with HMAC-SHA256 hashed code, purpose, expiration, and used flag. |
+| **`auth_sessions`** | `AuthSession` | Active session tokens with JTI, expiration, revocation state, and MFA-verified flag. |
+| **`wallets`** | `WalletIdentity` | Strict 1:1 user-to-logical-wallet mapping with opaque JSON key references. **Zero addresses, public keys, or private keys.** |
+| **`wallet_key_references`**| `WalletKeyReference` | Normalized per-chain active key references (`wallet_id`, `chain`, `key_ref`). |
+| **`wallet_creation_jobs`** | `WalletCreationJob` | Asynchronous DKG generation job lifecycle tracking (`PENDING`, `PROCESSING`, `COMPLETED`, `FAILED`). |
+| **`security_event_logs`** | `SecurityAuditEvent` | Tamper-evident hash-chained security event audit log (`previous_hash`, `entry_hash`). |
+| **`access_logs`** | `AccessLog` | Policy authorization attempt records with coordinates, decision, and evaluation reason. |
 
 ```mermaid
 erDiagram
-    User ||--o{ UserAuthAccount : "has accounts"
+    User ||--o{ AuthIdentity : "has federated identities"
     User ||--o| WorkingPolicy : "has policy"
-    User ||--o| TotpMfa : "has MFA"
-    User ||--o| WalletMetadata : "owns exactly one"
+    User ||--o| MFAEnrollment : "has MFA"
+    MFAEnrollment ||--o{ MFARecoveryCode : "tracks recovery codes"
+    User ||--o| WalletIdentity : "owns exactly one"
+    WalletIdentity ||--o{ WalletKeyReference : "has chain key refs"
+    User ||--o{ OTPChallenge : "receives OTPs"
+    User ||--o{ AuthSession : "holds sessions"
     User ||--o{ AccessLog : "generates"
     User ||--o{ SecurityAuditEvent : "records"
-
-    User {
-        uuid id PK
-        string email
-        string mobile
-        string name
-        string loginMethod
-        timestamp createdAt
-    }
-
-    WalletMetadata {
-        uuid id PK
-        uuid userId FK
-        string walletId UK
-        string status
-        json keyReferences
-        timestamp createdAt
-        timestamp updatedAt
-    }
-
-    WorkingPolicy {
-        uuid id PK
-        uuid userId FK
-        boolean timeRestrictionEnabled
-        string startTime
-        string endTime
-        json days
-        string timezone
-        boolean locationRestrictionEnabled
-        string allowedRegion
-        boolean geofenceEnabled
-        float lat
-        float lng
-        int radiusMeters
-    }
+    User ||--o{ WalletCreationJob : "initiates jobs"
 ```
 
-### Data Ownership Rules:
-1. **User Identity:** `users` records primary identity (Google ID, email, or verified mobile).
-2. **Policy Enforcement:** `working_policies` defines geofence boundaries and working hour restrictions.
-3. **MFA State:** `totp_mfas` stores encrypted TOTP secrets (`AES-256-GCM`) and hashed backup codes.
-4. **Zero Address Guarantee:** `wallets` table persists **ONLY opaque metadata**:
-   - `wallet_id`: `wal-<uuid>`
-   - `key_references`: JSON containing opaque identifiers (`key-mst-...`, `key-sol-...`, `key-btc-...`, `dkgSessionId`).
-   - **NO private keys, NO public keys, and NO addresses are saved in PostgreSQL.**
+### Data Architecture Invariants:
+1. **Zero Address & Key Storage:** The central database persists **ZERO private keys, ZERO public keys, and ZERO blockchain addresses**. It stores only opaque identifiers (`key-mst-...`, `key-sol-...`, `key-btc-...`, `dkgSessionId`).
+2. **On-Chain Transaction Derivation:** The legacy `transactions` table has been removed. Transaction histories are queried live from blockchain RPC networks (`chainService.ts`) rather than stored centrally.
+3. **Zero Plaintext MFA Secrets:** Plaintext TOTP secrets and recovery codes are strictly disallowed. Only `totp_secret_encrypted` (AES-256) and `recovery_codes_hashed` (SHA-256) are retained.
+4. **Zero-Seed Startup (No Demo Data):** The application contains no mock users, fake wallets, or `seed.ts` dependencies. Fresh databases initialize cleanly via `npm run prisma:migrate`. Real users and wallets bootstrap exclusively through authenticated OAuth, OTP, and genuine Go Coordinator DKG runs.
 
 ---
 

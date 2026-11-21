@@ -102,7 +102,7 @@ describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
     expect(result[0].now).toBeInstanceOf(Date);
   });
 
-  it('2. Reads existing pre-seeded users and wallet identities without schema loss', async () => {
+  it('2. Reads existing users and wallet identities without schema loss', async () => {
     const operatorId = 'b79f86f3-44a6-48f9-be43-a1abb6456172';
     const user = await prisma.user.findUnique({
       where: { id: operatorId },

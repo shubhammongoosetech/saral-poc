@@ -53,14 +53,14 @@ mkdir -p services/saral-node/bin services/coordinator/bin services/verifier/bin
 (cd services/verifier && CGO_ENABLED=0 GOOS=linux go build -o bin/verifier ./cmd/main.go)
 echo -e "${GREEN}✓ Go microservices compiled successfully.${NC}"
 
-# Step 4: Build Prisma Client & Seed Database
-echo -e "\n${BLUE}[3/6] Generating Prisma ORM Client & seeding database...${NC}"
+# Step 4: Build Prisma Client & Sync Database
+echo -e "\n${BLUE}[3/6] Generating Prisma ORM Client & syncing database...${NC}"
 npm run prisma:generate
 if pg_isready -h localhost -p 5432 >/dev/null 2>&1; then
-  (cd apps/auth-server && npx prisma db push --accept-data-loss && npx prisma db seed)
-  echo -e "${GREEN}✓ Database schema pushed and seeded with default operator.${NC}"
+  (cd apps/auth-server && npx prisma db push --accept-data-loss)
+  echo -e "${GREEN}✓ Database schema pushed and verified successfully.${NC}"
 else
-  echo -e "${YELLOW}⚠️  PostgreSQL on localhost:5432 is offline. Skipping database seeding.${NC}"
+  echo -e "${YELLOW}⚠️  PostgreSQL on localhost:5432 is offline. Skipping database schema push.${NC}"
 fi
 
 # Step 5: Start 21 DKG Backend Containers in Docker
