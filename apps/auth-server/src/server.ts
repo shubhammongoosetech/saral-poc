@@ -17,7 +17,7 @@ export async function startServer(): Promise<any> {
   }
 
   // 2. Start Express server
-  const server = app.listen(port, '0.0.0.0', () => {
+  const server = app.listen(port, () => {
     console.log(`[SARAL Auth Server] Active and listening on port ${port} (Prisma ORM enabled)`);
   });
 

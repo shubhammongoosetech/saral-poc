@@ -8,6 +8,8 @@ const (
 	MessageTypeShared           = "AVSS_SHARED"
 	MessageTypeReconstruct      = "AVSS_RECONSTRUCT"
 	MessageTypeReconstructShare = "AVSS_RECONSTRUCT_SHARE"
+	MessageTypeRecoveryRequest  = "AVSS_RECOVERY_REQ"
+	MessageTypeRecoveryResponse = "AVSS_RECOVERY_RESP"
 )
 
 // InitMessage initiates an AVSS session
@@ -81,5 +83,28 @@ type ReconstructShareMessage struct {
 	Share       string `json:"share"`
 	BlindShare  string `json:"blindShare"`
 	Timestamp   int64  `json:"timestamp"`
+}
+
+// RecoveryRequestMessage allows a crashed or recovering node to request its missing slice or verified commitments
+type RecoveryRequestMessage struct {
+	SessionID   string `json:"sessionId"`
+	CommitteeID string `json:"committeeId"`
+	RequesterID string `json:"requesterId"`
+	Epoch       uint64 `json:"epoch"`
+	Timestamp   int64  `json:"timestamp"`
+}
+
+// RecoveryResponseMessage delivers the buffered valid slice or public evaluation to the recovering node
+type RecoveryResponseMessage struct {
+	SessionID    string     `json:"sessionId"`
+	CommitteeID  string     `json:"committeeId"`
+	ResponderID  string     `json:"responderId"`
+	RecipientID  string     `json:"recipientId"`
+	Epoch        uint64     `json:"epoch"`
+	Commitments  [][]string `json:"commitments"`
+	Point        string     `json:"point,omitempty"`
+	BlindPoint   string     `json:"blindPoint,omitempty"`
+	RowPolySlice []string   `json:"rowPolySlice,omitempty"`
+	Timestamp    int64      `json:"timestamp"`
 }
 

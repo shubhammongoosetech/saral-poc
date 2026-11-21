@@ -171,7 +171,7 @@ func (e *Engine) HandleSendMessage(msg *SendMessage) error {
 		committee := []string{e.NodeID} // will be resolved if registered
 		n := 15                          // default global POC15 or 5
 		t := 4
-		if k <= 2 {
+		if k <= 3 {
 			n = 5
 			t = 1
 		}

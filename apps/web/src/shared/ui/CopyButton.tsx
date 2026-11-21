@@ -21,6 +21,7 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
 
   const handleCopy = async (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
+    if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
@@ -30,14 +31,18 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
     }
   };
 
+  const isDisabled = !text || props.disabled;
+
   if (variant === 'pill') {
     return (
       <button
         type="button"
         onClick={handleCopy}
+        disabled={isDisabled}
         aria-label={copied ? copiedLabel : label}
         className={cn(
           'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono font-medium border transition-colors select-none',
+          isDisabled && 'opacity-50 cursor-not-allowed',
           copied
             ? 'bg-success/15 border-success/30 text-success'
             : 'bg-surface-2 border-border text-muted hover:text-text hover:bg-surface-2/80',
@@ -65,8 +70,10 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
       <button
         type="button"
         onClick={handleCopy}
+        disabled={isDisabled}
         className={cn(
           'inline-flex items-center justify-center gap-2 h-9 px-3 rounded-lg text-xs font-medium border border-border bg-surface-2 text-text hover:bg-surface-2/80 transition-colors',
+          isDisabled && 'opacity-50 cursor-not-allowed',
           className
         )}
         {...props}
@@ -90,10 +97,12 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
     <button
       type="button"
       onClick={handleCopy}
+      disabled={isDisabled}
       aria-label={copied ? copiedLabel : label}
       title={copied ? copiedLabel : label}
       className={cn(
         'inline-flex items-center justify-center w-7 h-7 rounded-md text-muted hover:text-text hover:bg-surface-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent',
+        isDisabled && 'opacity-40 cursor-not-allowed',
         copied && 'text-success hover:text-success',
         className
       )}

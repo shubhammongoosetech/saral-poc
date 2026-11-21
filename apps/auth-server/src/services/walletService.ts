@@ -1,26 +1,36 @@
 /**
- * SARAL Protocol V3 — Multi-Chain Wallet & Per-User DKG Orchestration Service
+ * SARAL Protocol V3 — Core Wallet Service
  *
- * CRITICAL CRYPTOGRAPHIC & PRIVACY MANDATES:
- * 1. STRICT ONE-USER-ONE-WALLET RULE: Each user identity owns exactly ONE logical wallet.
- *    Returning users NEVER silently generate a replacement wallet or rotate keys on login.
- * 2. ZERO-ADDRESS STORAGE IN APPLICATION DATABASE:
- *    Central database persists only opaque key references (e.g. keyReferences: { mst, solana, bitcoin }).
- *    NO wallet addresses or public keys are written to PostgreSQL or central application tables.
- * 3. DETERMINISTIC RAM-ONLY ADDRESS RECOMPUTATION:
- *    On authenticated access (satisfying MFA and Working Policy), addresses are derived
- *    in-memory from authoritative node verification material and returned to the client.
- * 4. MULTI-CHAIN ADDRESS STANDARDS:
- *    - MST Blockchain: EVM-compatible (secp256k1 -> Keccak-256 -> EIP-55 mixed-case checksum)
- *    - Solana: Ed25519 -> 32-byte point -> Base58 representation
- *    - Bitcoin Taproot: secp256k1 -> BIP-340 even-Y x-only key -> BIP-341 tweak -> BIP-350 Bech32m (tb1p...)
- * 5. NO PRIVATE KEY RECONSTRUCTION: Signing keys exist exclusively as distributed polynomial shares in node vaults.
+ * Implements:
+ * 1. Genuine 3-of-5 DKG-Backed Blockchain Address Derivation.
+ * 2. Strict Zero Address & Zero Public Key Persistence in Database.
+ * 3. Elimination of HMAC-based Address Fallbacks.
+ * 4. Curve-Specific Compliance:
+ *    - MST Testnet: secp256k1 Keccak-256 + EIP-55 mixed-case checksum
+ *    - Solana Devnet: Ed25519 32-byte public key Base58
+ *    - Bitcoin Testnet: secp256k1 BIP-341 Taproot output-key tweak + BIP-350 Bech32m (tb1p...)
+ * 5. Strict Fail-Closed Security: No fake addresses, no random strings, clear errors.
+ * 6. Migration & Legacy HMAC Detection for old fake addresses.
  */
 
 import crypto from 'crypto';
-import { saralBackendClient } from '../clients/saralBackendClient';
 import { DataStore, WalletMetadataRecord } from '../storage/store';
 import { evaluateWorkingPolicy } from './policyService';
+import { saralBackendClient } from '../clients/saralBackendClient';
+import {
+  toEip55Checksum,
+  deriveEvmAddressFromPublicKey,
+} from '../utils/eip55';
+import {
+  encodeBase58,
+  deriveSolanaAddressFromPublicKey,
+} from '../utils/base58';
+import {
+  encodeTaprootAddress as encodeTaprootBech32m,
+  deriveBitcoinTaprootAddressFromPublicKey,
+} from '../utils/bech32m';
+
+export { toEip55Checksum, encodeBase58, encodeTaprootBech32m };
 
 const store = DataStore.getInstance();
 
@@ -29,16 +39,19 @@ export interface ChainAddressInfo {
   network: string;
   curve: string;
   address: string;
-  status: 'ACTIVE_VERIFIED' | 'AWAITING_DKG_CURVE';
+  status: string;
   verified: boolean;
-  explorerUrl?: string;
-  notes?: string;
+  explorerUrl: string;
+  notes: string;
+  dkgBacked?: boolean;
+  legacyHmacDetected?: boolean;
+  migrationNotice?: string;
 }
 
 export interface MultiChainAddressesResponse {
   walletId: string;
   userId: string;
-  status: 'READY';
+  status: string;
   addresses: {
     mst: ChainAddressInfo;
     solana: ChainAddressInfo;
@@ -50,147 +63,128 @@ export interface MultiChainAddressesResponse {
   };
 }
 
-// Standard Base58 alphabet (Bitcoin / Solana)
-const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-
-function encodeBase58(buffer: Buffer): string {
-  const digits: number[] = [0];
-  for (let i = 0; i < buffer.length; i++) {
-    for (let j = 0; j < digits.length; j++) digits[j] <<= 8;
-    digits[0] += buffer[i];
-    let carry = 0;
-    for (let j = 0; j < digits.length; j++) {
-      digits[j] += carry;
-      carry = (digits[j] / 58) | 0;
-      digits[j] %= 58;
-    }
-    while (carry) {
-      digits.push(carry % 58);
-      carry = (carry / 58) | 0;
-    }
+/**
+ * Legacy HMAC calculation used EXCLUSIVELY for detecting and flagging old mock addresses.
+ * STRICTLY NEVER used to generate addresses for new or returning user wallet flows.
+ */
+export function calculateLegacyHmacAddress(
+  walletId: string,
+  keyRef: string,
+  chain: 'mst' | 'solana' | 'bitcoin'
+): string {
+  if (chain === 'mst') {
+    const seed = crypto
+      .createHmac('sha256', keyRef || walletId)
+      .update(`${walletId}:mst-testnet:secp256k1`)
+      .digest();
+    return toEip55Checksum(seed.subarray(12, 32).toString('hex'));
+  } else if (chain === 'solana') {
+    const seed = crypto
+      .createHmac('sha256', keyRef || walletId)
+      .update(`${walletId}:solana-devnet:ed25519`)
+      .digest();
+    return encodeBase58(seed);
+  } else {
+    const seed = crypto
+      .createHmac('sha256', keyRef || walletId)
+      .update(`${walletId}:bitcoin-taproot:secp256k1`)
+      .digest();
+    return encodeTaprootBech32m('tb', seed);
   }
-  for (let i = 0; buffer[i] === 0 && i < buffer.length - 1; i++) {
-    digits.push(0);
-  }
-  return digits.reverse().map((d) => BASE58_ALPHABET[d]).join('');
-}
-
-// Standard EIP-55 Checksum
-export function toEip55Checksum(addrLower: string): string {
-  const clean = addrLower.toLowerCase().replace(/^0x/, '');
-  if (clean.length !== 40) return '0x' + clean;
-
-  const hash = crypto.createHash('sha256').update(clean).digest('hex');
-  let ret = '0x';
-  for (let i = 0; i < clean.length; i++) {
-    const c = clean[i];
-    if (c >= '0' && c <= '9') {
-      ret += c;
-    } else {
-      const nibble = parseInt(hash[i] || '0', 16);
-      ret += nibble >= 8 ? c.toUpperCase() : c;
-    }
-  }
-  return ret;
-}
-
-// Bech32m (BIP-350) encoding for Bitcoin Taproot (witness version 1)
-const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-
-function bech32Polymod(values: number[]): number {
-  const GENERATORS = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
-  let chk = 1;
-  for (const v of values) {
-    const b = chk >> 25;
-    chk = ((chk & 0x1ffffff) << 5) ^ v;
-    for (let i = 0; i < 5; i++) {
-      if ((b >> i) & 1) chk ^= GENERATORS[i];
-    }
-  }
-  return chk;
-}
-
-function hrpExpand(hrp: string): number[] {
-  const ret: number[] = [];
-  for (let i = 0; i < hrp.length; i++) ret.push(hrp.charCodeAt(i) >> 5);
-  ret.push(0);
-  for (let i = 0; i < hrp.length; i++) ret.push(hrp.charCodeAt(i) & 31);
-  return ret;
-}
-
-function convertBits(data: Buffer, frombits: number, tobits: number, pad: boolean): number[] {
-  let acc = 0;
-  let bits = 0;
-  const ret: number[] = [];
-  const maxv = (1 << tobits) - 1;
-  for (let i = 0; i < data.length; i++) {
-    const val = data[i];
-    acc = (acc << frombits) | val;
-    bits += frombits;
-    while (bits >= tobits) {
-      bits -= tobits;
-      ret.push((acc >> bits) & maxv);
-    }
-  }
-  if (pad) {
-    if (bits > 0) ret.push((acc << (tobits - bits)) & maxv);
-  } else if (bits >= frombits || ((acc << (tobits - bits)) & maxv)) {
-    throw new Error('Invalid bit conversion');
-  }
-  return ret;
-}
-
-export function encodeTaprootBech32m(hrp: string, xOnlyPubkey: Buffer): string {
-  // Witness version 1 (Taproot)
-  const dataWords = [1, ...convertBits(xOnlyPubkey, 8, 5, true)];
-  const polymodValues = hrpExpand(hrp).concat(dataWords).concat([0, 0, 0, 0, 0, 0]);
-  // Bech32m constant 0x2bc830a3 (BIP-350)
-  const mod = bech32Polymod(polymodValues) ^ 0x2bc830a3;
-  const checksum: number[] = [];
-  for (let p = 0; p < 6; ++p) {
-    checksum.push((mod >> (5 * (5 - p))) & 31);
-  }
-
-  let result = hrp + '1';
-  for (const d of dataWords.concat(checksum)) {
-    result += BECH32_CHARSET[d];
-  }
-  return result;
 }
 
 /**
- * Deterministically derives public multi-chain addresses in RAM from immutable key references.
+ * Checks whether an address was derived using the old deprecated HMAC algorithm.
+ */
+export function isLegacyHmacAddress(
+  address: string,
+  walletId: string,
+  keyRef: string,
+  chain: 'mst' | 'solana' | 'bitcoin'
+): boolean {
+  try {
+    const legacy = calculateLegacyHmacAddress(walletId, keyRef, chain);
+    return legacy.toLowerCase() === address.toLowerCase();
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Derives a specific chain address exclusively from a verified DKG public key point.
+ * Strictly fails closed if the public key format is invalid.
+ */
+export function deriveAddressFromDkgPublicKey(
+  chain: 'mst' | 'solana' | 'bitcoin',
+  pubKeyHex: string
+): string {
+  const cleanHex = pubKeyHex.replace(/^0x/, '');
+
+  if (chain === 'mst') {
+    return deriveEvmAddressFromPublicKey(cleanHex);
+  } else if (chain === 'solana') {
+    return deriveSolanaAddressFromPublicKey(cleanHex);
+  } else if (chain === 'bitcoin') {
+    return deriveBitcoinTaprootAddressFromPublicKey(cleanHex, 'tb');
+  }
+
+  throw new Error(`Unsupported chain family: ${chain}`);
+}
+
+/**
+ * Derives multi-chain addresses exclusively from verified DKG public keys in RAM.
  * ZERO addresses are persisted in the central database.
  */
 export function deriveMultiChainAddresses(
   walletId: string,
-  keyRefs: { mst?: string; solana?: string; bitcoin?: string }
+  keyRefsOrPublicKeys: {
+    mst?: string;
+    solana?: string;
+    bitcoin?: string;
+    dkgSessionId?: string;
+  }
 ): {
   mst: ChainAddressInfo;
   solana: ChainAddressInfo;
   bitcoin: ChainAddressInfo;
 } {
-  // 1. MST Blockchain (EVM compatible: secp256k1)
-  const mstSeed = crypto
-    .createHmac('sha256', keyRefs.mst || walletId)
-    .update(`${walletId}:mst-testnet:secp256k1`)
-    .digest();
-  const rawEvmAddress = mstSeed.subarray(12, 32).toString('hex');
-  const mstAddress = toEip55Checksum(rawEvmAddress);
+  const mstKey = keyRefsOrPublicKeys.mst || '';
+  const solKey = keyRefsOrPublicKeys.solana || '';
+  const btcKey = keyRefsOrPublicKeys.bitcoin || '';
 
-  // 2. Solana (Ed25519)
-  const solSeed = crypto
-    .createHmac('sha256', keyRefs.solana || walletId)
-    .update(`${walletId}:solana-devnet:ed25519`)
-    .digest();
-  const solAddress = encodeBase58(solSeed);
+  // Validate that inputs are valid cryptographic public keys, not arbitrary reference strings.
+  // secp256k1: 64-byte raw coordinates, 65-byte uncompressed (04...), or 33-byte compressed (02/03...)
+  // ed25519: 32-byte hex or 65-byte uncompressed
+  const isSecpKey = (k: string) => /^(04[0-9a-fA-F]{128}|(02|03)[0-9a-fA-F]{64}|[0-9a-fA-F]{128})$/.test(k);
+  const isEdKey = (k: string) => /^(04[0-9a-fA-F]{128}|[0-9a-fA-F]{64})$/.test(k);
 
-  // 3. Bitcoin Taproot (BIP-340 / BIP-341 / BIP-350 Bech32m tb1p...)
-  const btcSeed = crypto
-    .createHmac('sha256', keyRefs.bitcoin || walletId)
-    .update(`${walletId}:bitcoin-taproot:secp256k1`)
-    .digest();
-  const btcAddress = encodeTaprootBech32m('tb', btcSeed);
+  let mstAddress: string;
+  let solAddress: string;
+  let btcAddress: string;
+
+  if (isSecpKey(mstKey)) {
+    mstAddress = deriveAddressFromDkgPublicKey('mst', mstKey);
+  } else {
+    throw new Error(
+      `CRITICAL SECURITY VIOLATION: Refusing to derive MST address from non-public-key reference "${mstKey}". Addresses must be derived exclusively from verified 3-of-5 DKG public keys.`
+    );
+  }
+
+  if (isEdKey(solKey)) {
+    solAddress = deriveAddressFromDkgPublicKey('solana', solKey);
+  } else {
+    throw new Error(
+      `CRITICAL SECURITY VIOLATION: Refusing to derive Solana address from non-public-key reference "${solKey}". Addresses must be derived exclusively from verified 3-of-5 DKG public keys.`
+    );
+  }
+
+  if (isSecpKey(btcKey)) {
+    btcAddress = deriveAddressFromDkgPublicKey('bitcoin', btcKey);
+  } else {
+    throw new Error(
+      `CRITICAL SECURITY VIOLATION: Refusing to derive Bitcoin address from non-public-key reference "${btcKey}". Addresses must be derived exclusively from verified 3-of-5 DKG public keys.`
+    );
+  }
 
   return {
     mst: {
@@ -200,8 +194,9 @@ export function deriveMultiChainAddresses(
       address: mstAddress,
       status: 'ACTIVE_VERIFIED',
       verified: true,
+      dkgBacked: true,
       explorerUrl: `https://explorer.mst.saral.network/address/${mstAddress}`,
-      notes: 'Native EVM compatible sovereign chain with EIP-55 checksum',
+      notes: 'Native EVM compatible sovereign chain with Keccak-256 and EIP-55 checksum',
     },
     solana: {
       blockchain: 'solana',
@@ -210,6 +205,7 @@ export function deriveMultiChainAddresses(
       address: solAddress,
       status: 'ACTIVE_VERIFIED',
       verified: true,
+      dkgBacked: true,
       explorerUrl: `https://explorer.solana.com/address/${solAddress}?cluster=devnet`,
       notes: 'Native Ed25519 32-byte public key Base58 encoded',
     },
@@ -220,15 +216,146 @@ export function deriveMultiChainAddresses(
       address: btcAddress,
       status: 'ACTIVE_VERIFIED',
       verified: true,
+      dkgBacked: true,
       explorerUrl: `https://blockstream.info/testnet/address/${btcAddress}`,
       notes: 'BIP-340/341 Taproot output with BIP-350 Bech32m encoding (tb1p...)',
     },
   };
 }
 
+// In-flight mutex map to prevent concurrent duplicate wallet creations for same user (Section 6 & 15)
+const inFlightCreations = new Map<
+  string,
+  Promise<{
+    wallet: WalletMetadataRecord;
+    isNew: boolean;
+    addresses: ReturnType<typeof deriveMultiChainAddresses>;
+  }>
+>();
+
+/**
+ * Recomputes returning user's wallet public key and multi-chain addresses directly from
+ * verified distributed key shares on the Go Coordinator without ever reconstructing private keys.
+ * STRICT FAIL-CLOSED: Never falls back to HMAC or arbitrary random addresses!
+ */
+export async function recomputeWalletAddressesFromShares(
+  userId: string,
+  clientLat?: number,
+  clientLng?: number
+): Promise<MultiChainAddressesResponse> {
+  const policy = store.getPolicy(userId);
+  let policyResult = { allowed: true, serverTime: new Date().toISOString() };
+  if (policy) {
+    const res = evaluateWorkingPolicy(userId, clientLat, clientLng);
+    if (!res.allowed) {
+      const err: any = new Error(res.reason || 'Access denied by Working Policy.');
+      err.statusCode = 403;
+      err.policyResult = res;
+      throw err;
+    }
+    policyResult = res;
+  }
+
+  const wallet = store.getWalletByUserId(userId);
+  if (!wallet) {
+    const err: any = new Error('No SARAL wallet found for user. Please complete onboarding.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const keyRefs = wallet.keyReferences || {};
+  const dkgSessionId = keyRefs.dkgSessionId;
+
+  let mstPubkey = '';
+  let solPubkey = '';
+  let btcPubkey = '';
+
+  // 1. MST EVM (secp256k1)
+  try {
+    const mstResp = await saralBackendClient.derivePublicKey({
+      walletId: wallet.walletId,
+      userId,
+      keyId: keyRefs.mst,
+      dkgSessionId,
+      committeeId: 'committee-foundation',
+      curve: 'secp256k1',
+      chainFamily: 'mst',
+    });
+    if (mstResp?.masterPublicKey) {
+      mstPubkey = mstResp.masterPublicKey;
+    } else {
+      throw new Error('Missing master public key in response');
+    }
+  } catch (err: any) {
+    throw new Error(
+      `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for MST: ${err.message}. Fail-closed active.`
+    );
+  }
+
+  // 2. Solana (ed25519)
+  try {
+    const solResp = await saralBackendClient.derivePublicKey({
+      walletId: wallet.walletId,
+      userId,
+      keyId: keyRefs.solana,
+      dkgSessionId,
+      committeeId: 'committee-foundation',
+      curve: 'ed25519',
+      chainFamily: 'solana',
+    });
+    if (solResp?.masterPublicKey) {
+      solPubkey = solResp.masterPublicKey;
+    } else {
+      throw new Error('Missing master public key in response');
+    }
+  } catch (err: any) {
+    throw new Error(
+      `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for Solana: ${err.message}. Fail-closed active.`
+    );
+  }
+
+  // 3. Bitcoin (secp256k1)
+  try {
+    const btcResp = await saralBackendClient.derivePublicKey({
+      walletId: wallet.walletId,
+      userId,
+      keyId: keyRefs.bitcoin,
+      dkgSessionId,
+      committeeId: 'committee-foundation',
+      curve: 'secp256k1',
+      chainFamily: 'bitcoin',
+    });
+    if (btcResp?.masterPublicKey) {
+      btcPubkey = btcResp.masterPublicKey;
+    } else {
+      throw new Error('Missing master public key in response');
+    }
+  } catch (err: any) {
+    throw new Error(
+      `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for Bitcoin: ${err.message}. Fail-closed active.`
+    );
+  }
+
+  const addresses = deriveMultiChainAddresses(wallet.walletId, {
+    mst: mstPubkey,
+    solana: solPubkey,
+    bitcoin: btcPubkey,
+    dkgSessionId,
+  });
+
+  return {
+    walletId: wallet.walletId,
+    userId: wallet.userId,
+    status: 'READY',
+    addresses,
+    policyStatus: { allowed: true, serverTime: policyResult.serverTime },
+  };
+}
+
 /**
  * Creates the user's single logical wallet through an idempotent state machine.
  * STRICT ONE-USER-ONE-WALLET RULE: If a wallet exists, returns the existing one!
+ * CONCURRENT CREATION SAFETY: Deduplicates simultaneous requests into one active execution.
  */
 export async function createOrGetWallet(userId: string): Promise<{
   wallet: WalletMetadataRecord;
@@ -237,176 +364,157 @@ export async function createOrGetWallet(userId: string): Promise<{
 }> {
   // Check if wallet already exists
   const existing = store.getWalletByUserId(userId);
-  if (existing) {
-    const addresses = deriveMultiChainAddresses(existing.walletId, existing.keyReferences);
+  if (existing && existing.status === 'READY') {
+    const derived = await recomputeWalletAddressesFromShares(userId);
     return {
       wallet: existing,
       isNew: false,
-      addresses,
+      addresses: derived.addresses,
     };
   }
 
-  // First-time creation
-  const walletId = `wal-${crypto.randomUUID()}`;
-  const now = new Date().toISOString();
-
-  // Orchestrate DKG across committee nodes
-  let dkgSessionId = `dkg-foundation-${crypto.randomUUID()}`;
-  let masterPubKey = '';
-
-  try {
-    console.log(`[DKG] Initiating Dealerless DKG on Coordinator for user ${userId}...`);
-    const dkgSession = await saralBackendClient.startDkg({
-      committeeId: 'committee-foundation',
-    });
-    dkgSessionId = dkgSession.sessionId;
-
-    // 2. Fetch Master Public Key produced by DKG
-    const pubKeyResp = await saralBackendClient.getDkgPublicKey(dkgSession.sessionId);
-    masterPubKey = pubKeyResp.masterPublicKey || '';
-    console.log(`[DKG] Dealerless DKG completed! Master Public Key: ${masterPubKey}`);
-  } catch (dkgErr: any) {
-    console.warn(`[DKG] Live Coordinator call: ${dkgErr.message}. Generating deterministic threshold key.`);
-    masterPubKey = crypto.createHash('sha256').update(`dkg:${userId}:${walletId}`).digest('hex');
+  // Deduplicate in-flight concurrent requests for same user
+  if (inFlightCreations.has(userId)) {
+    return inFlightCreations.get(userId)!;
   }
 
-  // 3. Real DKG Key & Session ID bound to keyReferences
-  const keyIdentifier = masterPubKey || dkgSessionId;
-  const keyReferences = {
-    mst: keyIdentifier,
-    solana: keyIdentifier,
-    bitcoin: keyIdentifier,
-    dkgSessionId,
-  };
+  const creationPromise = (async () => {
+    try {
+      // Re-check existing wallet after acquiring lock
+      const doubleCheck = store.getWalletByUserId(userId);
+      if (doubleCheck && doubleCheck.status === 'READY') {
+        const derived = await recomputeWalletAddressesFromShares(userId);
+        return {
+          wallet: doubleCheck,
+          isNew: false,
+          addresses: derived.addresses,
+        };
+      }
 
-  const newWallet: WalletMetadataRecord = {
-    userId,
-    walletId,
-    status: 'READY',
-    keyReferences,
-    createdAt: now,
-    updatedAt: now,
-  };
+      // First-time creation with stable opaque identifiers (Section 6)
+      const walletId = `wal-${crypto.randomUUID()}`;
+      const now = new Date().toISOString();
 
-  // Persist ONLY metadata into the database
-  store.saveWallet(newWallet);
+      // Distinct stable opaque chain-specific key references (Section 6)
+      let dkgSessionId = `dkg-foundation-${crypto.randomUUID()}`;
+      const keyMst = `key-mst-${crypto.randomBytes(8).toString('hex')}`;
+      const keySol = `key-sol-${crypto.randomBytes(8).toString('hex')}`;
+      const keyBtc = `key-btc-${crypto.randomBytes(8).toString('hex')}`;
 
-  store.logSecurity({
-    id: crypto.randomUUID(),
-    userId,
-    eventType: 'WALLET_CREATED_ONE_USER_ONE_WALLET',
-    severity: 'INFO',
-    details: { walletId, keyReferences },
-    timestamp: now,
-  });
+      const keyReferences = {
+        mst: keyMst,
+        solana: keySol,
+        bitcoin: keyBtc,
+        dkgSessionId,
+      };
 
-  const addresses = deriveMultiChainAddresses(walletId, keyReferences);
+      const pendingWallet: WalletMetadataRecord = {
+        userId,
+        walletId,
+        status: 'DKG_IN_PROGRESS',
+        keyReferences,
+        createdAt: now,
+        updatedAt: now,
+      };
+      store.saveWallet(pendingWallet);
 
-  return {
-    wallet: newWallet,
-    isNew: true,
-    addresses,
-  };
+      console.log(`[DKG] Initiating Dealerless 3-of-5 DKG on Coordinator for user ${userId}...`);
+      const dkgSession = await saralBackendClient.startDkg({
+        committeeId: 'committee-foundation',
+        sessionId: dkgSessionId,
+        committee: [
+          'saral-foundation-1',
+          'saral-foundation-2',
+          'saral-foundation-3',
+          'saral-foundation-4',
+          'saral-foundation-5',
+        ],
+        n: 5,
+        k: 3,
+        t: 1,
+      });
+      if (dkgSession && dkgSession.sessionId) {
+        dkgSessionId = dkgSession.sessionId;
+        keyReferences.dkgSessionId = dkgSessionId;
+      }
+      console.log(`[DKG] Dealerless DKG session initialized: ${dkgSessionId}`);
+
+      // Await genuine 3-of-5 DKG consensus across the foundation committee nodes
+      let dkgCompleted = false;
+      const pollStart = Date.now();
+      const maxPollTime = 15000;
+      while (Date.now() - pollStart < maxPollTime) {
+        try {
+          const status = await saralBackendClient.getDkgStatus(dkgSessionId);
+          if (status?.state === 'COMPLETED' || (status?.completedNodes && status.completedNodes >= 3)) {
+            dkgCompleted = true;
+            break;
+          }
+        } catch (_) {}
+        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      if (!dkgCompleted) {
+        const errorWallet: WalletMetadataRecord = {
+          userId,
+          walletId,
+          status: 'ERROR',
+          error: 'DKG consensus timed out across threshold nodes',
+          keyReferences,
+          createdAt: now,
+          updatedAt: new Date().toISOString(),
+        };
+        store.saveWallet(errorWallet);
+        throw new Error('Failed to obtain verified 3-of-5 DKG public key: consensus timed out. Fail-closed active.');
+      }
+
+      pendingWallet.status = 'KEY_READY';
+      store.saveWallet(pendingWallet);
+
+      // Derive addresses from the real DKG shares via Coordinator
+      const derived = await recomputeWalletAddressesFromShares(userId);
+
+      const readyWallet: WalletMetadataRecord = {
+        userId,
+        walletId,
+        status: 'READY',
+        keyReferences,
+        createdAt: now,
+        updatedAt: new Date().toISOString(),
+      };
+      await store.saveWallet(readyWallet);
+
+      store.logSecurity({
+        id: crypto.randomUUID(),
+        userId,
+        eventType: 'WALLET_CREATED_ONE_USER_ONE_WALLET',
+        severity: 'INFO',
+        details: { walletId, keyReferences },
+        timestamp: now,
+      });
+
+      return {
+        wallet: readyWallet,
+        isNew: true,
+        addresses: derived.addresses,
+      };
+    } finally {
+      inFlightCreations.delete(userId);
+    }
+  })();
+
+  inFlightCreations.set(userId, creationPromise);
+  return creationPromise;
 }
 
 /**
  * Retrieves the user's addresses on-the-fly, strictly enforcing Working Policy.
+ * Dynamically resolves from genuine 3-of-5 DKG shares in RAM.
  */
-export function getAuthenticatedWalletAddresses(
-  userId: string,
-  clientLat?: number,
-  clientLng?: number
-): MultiChainAddressesResponse {
-  // 1. Mandatory Working Policy validation
-  const policyResult = evaluateWorkingPolicy(userId, clientLat, clientLng);
-  if (!policyResult.allowed) {
-    const err: any = new Error(policyResult.reason || 'Access denied by Working Policy.');
-    err.statusCode = 403;
-    err.policyResult = policyResult;
-    throw err;
-  }
-
-  // 2. Fetch immutable wallet metadata
-  const wallet = store.getWalletByUserId(userId);
-  if (!wallet) {
-    const err: any = new Error('No SARAL wallet found for user. Please complete onboarding.');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  // 3. Deterministic address derivation in RAM
-  const addresses = deriveMultiChainAddresses(wallet.walletId, wallet.keyReferences);
-
-  return {
-    walletId: wallet.walletId,
-    userId: wallet.userId,
-    status: 'READY',
-    addresses,
-    policyStatus: {
-      allowed: true,
-      serverTime: policyResult.serverTime,
-    },
-  };
-}
-
-/**
- * Recomputes returning user's wallet public key and multi-chain addresses directly from
- * verified distributed key shares on the Go Coordinator without ever reconstructing private keys.
- */
-export async function recomputeWalletAddressesFromShares(
+export async function getAuthenticatedWalletAddresses(
   userId: string,
   clientLat?: number,
   clientLng?: number
 ): Promise<MultiChainAddressesResponse> {
-  const policyResult = evaluateWorkingPolicy(userId, clientLat, clientLng);
-  if (!policyResult.allowed) {
-    const err: any = new Error(policyResult.reason || 'Access denied by Working Policy.');
-    err.statusCode = 403;
-    err.policyResult = policyResult;
-    throw err;
-  }
-
-  const wallet = store.getWalletByUserId(userId);
-  if (!wallet) {
-    const err: any = new Error('No SARAL wallet found for user. Please complete onboarding.');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  // Attempt to recompute public key from distributed shares on Go Coordinator/Nodes
-  try {
-    const dkgSessionId = wallet.keyReferences?.dkgSessionId;
-    const resp = await saralBackendClient.derivePublicKey({
-      walletId: wallet.walletId,
-      userId,
-      dkgSessionId,
-      committeeId: 'committee-foundation',
-    });
-    if (resp && resp.masterPublicKey) {
-      const addresses = deriveMultiChainAddresses(wallet.walletId, {
-        ...wallet.keyReferences,
-        mst: resp.masterPublicKey,
-        solana: resp.masterPublicKey,
-        bitcoin: resp.masterPublicKey,
-      });
-      return {
-        walletId: wallet.walletId,
-        userId: wallet.userId,
-        status: 'READY',
-        addresses,
-        policyStatus: { allowed: true, serverTime: policyResult.serverTime },
-      };
-    }
-  } catch (err: any) {
-    console.warn(`[derivePublicKey] Distributed share recomputation fallback: ${err.message}`);
-  }
-
-  const addresses = deriveMultiChainAddresses(wallet.walletId, wallet.keyReferences);
-  return {
-    walletId: wallet.walletId,
-    userId: wallet.userId,
-    status: 'READY',
-    addresses,
-    policyStatus: { allowed: true, serverTime: policyResult.serverTime },
-  };
+  return recomputeWalletAddressesFromShares(userId, clientLat, clientLng);
 }

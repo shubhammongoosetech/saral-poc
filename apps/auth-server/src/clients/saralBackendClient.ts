@@ -53,6 +53,26 @@ export interface DkgStartResponse {
   committee: string[];
 }
 
+export interface DkgStatusResponse {
+  sessionId: string;
+  committeeId: string;
+  epoch: number;
+  n: number;
+  k: number;
+  t: number;
+  state: string;
+  committee: string[];
+  qualifiedSet?: string[];
+  masterSigningPublicKey?: string;
+  masterSecretCommitment?: string;
+  masterPublicKey?: string;
+  curve?: string;
+  completedNodes: number;
+  totalNodes: number;
+  status?: string;
+  message?: string;
+}
+
 export interface DkgPublicKeyResponse {
   sessionId: string;
   committeeId: string;
@@ -69,6 +89,7 @@ export interface DerivePublicKeyParams {
   dkgSessionId?: string;
   committeeId?: string;
   curve?: string;
+  chainFamily?: string;
   epoch?: number;
 }
 
@@ -197,6 +218,13 @@ export class SaralBackendClient {
    */
   public async startDkg(params: DkgStartParams = {}): Promise<DkgStartResponse> {
     return this.rpcCall<DkgStartResponse>('saral_startDkg', params as Record<string, unknown>);
+  }
+
+  /**
+   * Retrieves status and node completion counts for an active DKG session.
+   */
+  public async getDkgStatus(sessionId: string): Promise<DkgStatusResponse> {
+    return this.rpcCall<DkgStatusResponse>('saral_getDkgStatus', { sessionId });
   }
 
   /**

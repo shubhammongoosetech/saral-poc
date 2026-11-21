@@ -189,13 +189,12 @@ export class KeyManager {
 
   public issueToken(subject: string = 'dev-operator-1', role: string = 'admin', mfaVerified: boolean = true): string {
     const now = Math.floor(Date.now() / 1000);
-    const ttl = parseInt(process.env.ACCESS_TOKEN_TTL_SECONDS || '86400', 10);
     const payload: TokenClaims = {
       sub: subject,
       iss: this.issuer,
       aud: this.audience,
       iat: now,
-      exp: now + ttl,
+      exp: now + 3600, // 1 hour expiry
       mfaVerified,
       domainRole: role,
       nonce: crypto.randomBytes(16).toString('hex'),

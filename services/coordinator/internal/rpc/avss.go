@@ -90,6 +90,11 @@ func (s *Server) getNodeEndpoint(nodeID string) string {
 
 // postNodeJSON dispatches an authenticated HTTP POST request to a node endpoint
 func (s *Server) postNodeJSON(url string, reqBody interface{}, respDest interface{}) error {
+	return s.postNodeJSONWithAuth(url, reqBody, respDest, "")
+}
+
+// postNodeJSONWithAuth dispatches an authenticated HTTP POST request forwarding a caller Bearer token
+func (s *Server) postNodeJSONWithAuth(url string, reqBody interface{}, respDest interface{}, bearerToken string) error {
 	data, err := json.Marshal(reqBody)
 	if err != nil {
 		return err
@@ -102,6 +107,9 @@ func (s *Server) postNodeJSON(url string, reqBody interface{}, respDest interfac
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
+	if bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimPrefix(bearerToken, "Bearer "))
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

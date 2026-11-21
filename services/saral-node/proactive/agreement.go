@@ -53,6 +53,7 @@ type ValidityPredicate func(candidateSet []string) bool
 // implementing randomized Asynchronous Binary Byzantine Agreement (ABBA / CKS00 / CKS05)
 // with a threshold common coin over NIST P-256.
 type ValidatedAgreementInstance struct {
+	SessionID      string
 	CommitteeID    string
 	Epoch          uint64
 	SelfID         string
@@ -192,10 +193,18 @@ func (v *ValidatedAgreementInstance) ProcessProposal(msg *AgreementProposeMessag
 	v.proposals[propHash] = msg.CandidateSet
 	v.proposerHashMap[msg.ProposerID] = propHash
 
+	// Decision rule: if >= 2t + 1 READYs were already received while proposal was in flight
+	if !v.IsDecided && len(v.readys[propHash]) >= 2*v.T+1 {
+		v.DecidedSet = msg.CandidateSet
+		v.DecidedHash = propHash
+		v.IsDecided = true
+	}
+
 	// Generate ECHO if not yet sent
 	if !v.sentEcho {
 		v.sentEcho = true
 		return &AgreementEchoMessage{
+			SessionID:    v.SessionID,
 			CommitteeID:  v.CommitteeID,
 			Epoch:        v.Epoch,
 			SenderID:     v.SelfID,
@@ -225,6 +234,7 @@ func (v *ValidatedAgreementInstance) ProcessEcho(echo *AgreementEchoMessage) (*A
 	if !v.sentReady && len(v.echos[echo.ProposalHash]) >= v.N-v.T {
 		v.sentReady = true
 		return &AgreementReadyMessage{
+			SessionID:    v.SessionID,
 			CommitteeID:  v.CommitteeID,
 			Epoch:        v.Epoch,
 			SenderID:     v.SelfID,
@@ -255,6 +265,7 @@ func (v *ValidatedAgreementInstance) ProcessReady(ready *AgreementReadyMessage) 
 	if !v.sentReady && len(v.readys[ready.ProposalHash]) >= v.T+1 {
 		v.sentReady = true
 		readyToSend = &AgreementReadyMessage{
+			SessionID:    v.SessionID,
 			CommitteeID:  v.CommitteeID,
 			Epoch:        v.Epoch,
 			SenderID:     v.SelfID,

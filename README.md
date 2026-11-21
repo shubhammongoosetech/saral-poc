@@ -1,266 +1,331 @@
-# SARAL Protocol — Distributed Key Generation & Web3 Wallet Architecture
+# SARAL Protocol — Separation-of-Powers Cryptographic Key Infrastructure
 
-A production-grade, architecture-first implementation of the **SARAL Protocol** (Separation-of-Powers Cryptographic Key Infrastructure).
+A production-grade, dealerless threshold cryptography Web3 wallet platform and distributed microservice mesh.
 
-SARAL distributes network trust, identity, and control-plane orchestration across three independent administrative realms: **Foundation Domain**, **Public Domain**, and **Private Domain**, ensuring private signing keys are never materialized in whole on any single server, database, or client device.
+SARAL distributes network trust, identity, and control-plane orchestration across three independent sovereign realms: **Foundation Domain**, **Public Domain**, and **Private Domain**. Private signing keys are never created, assembled, or persisted on any single server, database, or client device.
 
-For complete cryptographic specifications, sequence diagrams, and mathematical formulations, see [SARAL_ARCHITECTURE.md](file:///home/mongoose/Poc/saral-poc/SARAL_ARCHITECTURE.md).
-
----
-
-## 1. Key Invariants & Features
-
-1. **Prisma ORM & PostgreSQL Persistence:**
-   - Central authentication, policy, and wallet metadata managed via Prisma ORM (`apps/auth-server/prisma`).
-   - Version-controlled schema migrations with strict relation and constraint integrity.
-   - Singleton client lifecycle with connection pooling and graceful shutdown.
-2. **Mandatory TOTP MFA (RFC 6238):**
-   - Pure Node.js crypto implementation of RFC 6238 Time-Based One-Time Password.
-   - Initial enrollment generates QR code, secret key, and 8 single-use backup recovery codes (`XXXX-XXXX`).
-   - Secrets encrypted at rest using AES-256-GCM (`totp_secret_encrypted`).
-   - Returning users challenged with TOTP without repeating enrollment.
-3. **Authoritative Working Policy Engine:**
-   - Enforced immediately post-MFA and evaluated on sensitive operations.
-   - Time window checks with overnight span support using authoritative server time in IANA timezones.
-   - Weekday validation (MON-SUN).
-   - Haversine distance geofencing with fail-closed security.
-4. **Zero-Address Persistence Mandate:**
-   - Central PostgreSQL persists ZERO wallet addresses and ZERO signing private keys.
-   - Persists only opaque key references (`key-mst-...`, `key-sol-...`, `key-btc-...`).
-   - Addresses derived deterministically in RAM upon authenticated requests.
-5. **Single Logical Wallet Invariant:**
-   - Exactly one wallet per user (`UNIQUE(user_id)`).
-   - Repeat logins idempotently recompute the exact same addresses without initiating redundant DKGs:
-     `MST_Login1 == MST_Login2`, `SOL_Login1 == SOL_Login2`, `BTC_Login1 == BTC_Login2`.
-6. **Chain-Compatible Address Derivations:**
-   - **MST Testnet (EVM):** EIP-55 checksummed `0x...` hex address.
-   - **Solana Devnet:** Base58 Ed25519 public key.
-   - **Bitcoin Testnet:** BIP-340/341 Taproot $X$-only point with BIP-350 Bech32m using `tb1p...` prefix.
-7. **Docker-Only Persistence (24-Container Mesh):**
-   - Exactly 24 containers defined in `infra/compose/full24.yml`:
-     1 `postgres` + 1 `auth-server` + 3 `verifiers` + 15 `nodes` + 3 `coordinators` + 1 `web`.
-   - Central persistence in named volume `saral_postgres_data`.
-   - Node shares in isolated named volumes `node_f1_vault` through `node_r5_vault`.
+For complete mathematical formulations, cryptographic proofs, and protocol specifications, see [SARAL_ARCHITECTURE.md](file:///home/mongoose/Poc/saral-poc/SARAL_ARCHITECTURE.md).
 
 ---
 
-## 2. Prerequisites
+## 1. Project Overview
 
-- **Go:** `1.24+` (or `1.27+`)
-- **Node.js:** `20.x` or `22.x+` (or `26.x`)
-- **Docker & Docker Compose:** Docker Compose v2+
-- **Git**
+SARAL eliminates both the custodial risk of central database key storage and the self-custody risk of vulnerable seed phrases.
+
+### Core Architectural Invariants:
+1. **Dealerless Distributed Key Generation (DKG):** Distributed 3-of-5 threshold keys generated collaboratively across independent Go nodes using Kate-Huang-Goldberg Asynchronous Verifiable Secret Sharing (AVSS) and Randomized Byzantine Agreement.
+2. **Zero Central Key & Address Persistence:** The central PostgreSQL database persists **ZERO private keys, ZERO public keys, and ZERO blockchain addresses**. It stores only opaque key references (`key-mst-...`). Addresses are derived on-the-fly strictly in RAM upon authenticated requests.
+3. **Strict One-User-One-Wallet Guarantee:** Exactly one logical multi-chain wallet per user (`UNIQUE(user_id)`). Returning users idempotently derive the exact same blockchain addresses without re-running DKG.
+4. **Multi-Chain Native Compatibility:** Real aggregate public key points derive standard addresses for **MST Testnet (EVM EIP-55)**, **Solana Devnet (Ed25519 Base58)**, and **Bitcoin Testnet (BIP-341 Taproot Bech32m)**.
+5. **Mandatory TOTP MFA & Working Policy:** Two-factor authentication (RFC 6238 TOTP) combined with an authoritative time and Haversine distance geofence engine.
 
 ---
 
-## 3. Quick Start Commands
+## 2. Architecture
 
-### 3.1 Recommended Workflow: Local Dev + Docker DKG Mesh
-This is the recommended workflow for development: DKG nodes, coordinators, and verifiers run inside Docker, while Auth Server and Web Frontend run locally on the host for rapid live-reloading.
+```text
+React Web Frontend (Port 5173 / Port 80)
+       │
+       │ HTTP / REST (JWT Bearer)
+       ▼
+Node.js Auth Server (Port 3001) ───► PostgreSQL 16 (Port 5432)
+       │                              (Opaque Key References Only)
+       │ Scoped Ed25519 Tokens / JSON-RPC
+       ▼
+Go Coordinators (Foundation 9001, Public 9002, Private 9003)
+       │
+       │ Mutual TLS (mTLS 1.3) Mesh
+       ▼
+15 Distributed Go Nodes (5 Foundation, 5 Public, 5 Private)
+  • Local Encrypted Vaults (/vault, AES-256-GCM)
+  • Autonomous Kate-Huang-Goldberg AVSS Engine
+  • Randomized Byzantine Agreement (ABBA)
+```
 
-#### Step 1: Start Background DKG Mesh (Coordinators, Nodes, Verifiers)
-Start the 21 DKG backend containers in Docker (skipping web & auth-server):
+---
+
+## 3. Technology Stack
+
+- **Frontend:** React 18, Vite, TypeScript, Tailwind CSS, TanStack Query, Radix UI.
+- **Backend / Auth Server:** Node.js 20+, TypeScript, Express, Prisma ORM, PostgreSQL 16.
+- **Distributed Microservices:** Go 1.24+ (Coordinator, Verifier, Saral-Node).
+- **Cryptography:**
+  - Secp256k1 & Ed25519 Elliptic Curves
+  - Kate-Huang-Goldberg Bivariate AVSS
+  - Pedersen Bivariate Commitments
+  - Pure Keccak-256 with EIP-55 mixed-case checksum
+  - Base58 encoding for Solana
+  - BIP-341 Taproot key-tweak with BIP-350 Bech32m witness v1 encoding
+  - AES-256-GCM for encrypted share vaults
+- **Container Infrastructure:** Docker, Docker Compose (24-container self-contained mesh), Alpine Linux.
+
+---
+
+## 4. Folder Structure
+
+```text
+saral-poc/
+├── apps/
+│   ├── web/                     # React 18 + Vite + Tailwind CSS Web3 Dashboard
+│   └── auth-server/             # Node.js Auth Server (Prisma ORM, EdDSA JWKS, MFA, Policy)
+│       ├── prisma/              # Prisma schema & version-controlled migrations
+│       └── src/
+│           ├── auth/            # Asymmetric Ed25519 token manager & JWKS
+│           ├── clients/         # Go Coordinator JSON-RPC client
+│           ├── config/          # Centralized environment & auth config
+│           ├── database/        # Singleton PrismaClient connection lifecycle
+│           ├── middleware/      # authGuard, requireMfa, policyGuard, errorHandler
+│           ├── routes/          # Express REST routes (auth.ts, wallet.ts)
+│           ├── services/        # accountService, walletService, policyService, chainService
+│           ├── storage/         # Unified in-memory cache with async Prisma synchronization
+│           └── utils/           # EIP-55, Base58, Bech32m, TOTP cryptographic utilities
+├── services/
+│   ├── coordinator/             # Go Consensus Coordinator (Foundation, Public, Private)
+│   ├── verifier/                # Go Stateless JWT / Proof Verifier
+│   └── saral-node/              # Go MPC Node (AVSS, ABBA Consensus, Encrypted Vaults)
+├── infra/
+│   ├── compose/
+│   │   ├── full24.yml           # Complete 24-container production mesh
+│   │   └── poc15.yml            # 15-node development compose setup
+│   ├── config/                  # Genesis registry & asymmetric Ed25519 public keys
+│   ├── secrets/                 # Cluster secrets (internal tokens, admin keys)
+│   ├── tls/                     # Cluster CA, certificates, and mTLS keys
+│   └── postgres/                # PostgreSQL init SQL schema
+├── scripts/
+│   ├── clean-all.sh             # Safe cleanup & Docker volume wipe
+│   ├── fresh-setup.sh           # Automated end-to-end stack build & bootstrap
+│   ├── run-dev.sh               # Launch local development environment
+│   ├── sync-genesis.js          # Sync container identities with genesis registry
+│   └── verify-all.sh            # Run all verification test suites
+├── tests/
+│   ├── architecture/            # Architecture, Prisma ORM, and wallet lifecycle test suites
+│   ├── avss/                    # AVSS cryptographic tests
+│   ├── cryptography/            # Finite field and curve test vectors
+│   ├── dkg/                     # Distributed Key Generation protocol tests
+│   ├── integration/             # Multi-chain end-to-end integration tests
+│   └── proactive/               # Proactive secret refresh tests
+├── .env.example                 # Comprehensive environment configuration template
+├── go.work                      # Go multi-module workspace
+├── package.json                 # Monorepo workspaces configuration
+├── README.md                    # Project overview & operator runbook
+└── SARAL_ARCHITECTURE.md        # Detailed technical specifications
+```
+
+---
+
+## 5. Prerequisites
+
+- **Go:** `1.24+` installed on host
+- **Node.js:** `20.x` or `22.x+` (Node 20+ required for native crypto & KaTeX)
+- **npm:** `10.x+`
+- **Docker & Docker Compose:** Docker v24+ with Docker Compose v2+
+- **OpenSSL:** Standard Linux/macOS openssl utility
+
+---
+
+## 6. Environment Configuration
+
+1. Copy the template to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+2. Inspect `.env` and configure your environment (defaults work out of the box for local development).
+3. **Never commit `.env` or files containing private credentials.**
+
+---
+
+## 7. Installation
+
+Install all monorepo dependencies across the root and workspaces:
+
 ```bash
+# Install Node.js dependencies across workspaces
+npm install
+
+# Compile all Go microservices (coordinator, verifier, saral-node)
+npm run build:go
+
+# Generate Prisma client & compile TypeScript apps
+npm run build:apps
+```
+
+---
+
+## 8. Development Run
+
+### Recommended: Local Dev + Docker Background Mesh
+
+This workflow runs the 21 Go backend containers in Docker while running the Auth Server and React Web UI on the host for rapid live-reloading:
+
+```bash
+# 1. Start background Go DKG mesh & PostgreSQL
 npm run docker:nodes
-# ya direct command:
-docker start $(docker ps -a -q --filter "name=saral-prod-coord" --filter "name=saral-prod-node" --filter "name=saral-prod-verifier")
-```
-*Verify containers are up and healthy:*
-```bash
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-```
 
-#### Step 2: Database Schema Sync (PostgreSQL)
-Ensure your local PostgreSQL schema is in sync with Prisma:
-```bash
-cd apps/auth-server && npx prisma db push && cd ../..
-```
+# 2. Sync database schema
+npm run prisma:push
 
-#### Step 3: Run Application (Auth Server + Web Frontend)
-Start both development servers concurrently:
-```bash
+# 3. Start Auth Server & Web Frontend concurrently
 npm run dev
 ```
-* **Web Frontend:** [http://localhost:5173](http://localhost:5173)
-* **Auth Server:** [http://localhost:3001](http://localhost:3001) (Health: [http://localhost:3001/health](http://localhost:3001/health))
+
+- **Web Frontend:** [http://localhost:5173](http://localhost:5173)
+- **Auth Server:** [http://localhost:3001](http://localhost:3001) (Health: [http://localhost:3001/health](http://localhost:3001/health))
 
 ---
 
-### 3.2 Running Services Individually
-If you want to run the frontend and backend in separate terminal windows:
+## 9. Full Docker Run (Production Mesh)
 
-* **Terminal 1 (Auth Server):**
-  ```bash
-  npm --prefix apps/auth-server run dev
-  ```
-
-* **Terminal 2 (Web Frontend):**
-  ```bash
-  npm --prefix apps/web run dev
-  ```
-
----
-
-### 3.3 Full 24-Container Docker Mesh (Production Mode)
-Run everything (including PostgreSQL, Auth Server, and NGINX Web) inside Docker:
+Run the entire 24-container self-contained cluster inside Docker:
 
 ```bash
-# 1. Clean build outputs
-npm run clean
-
-# 2. Build Go binaries, Prisma Client, TypeScript SDK, and Frontend
-npm run build
-
-# 3. Start all 24 containers in Docker
+# 1. Build and start all 24 containers
 docker compose -f infra/compose/full24.yml up -d --build
 
-# 4. Check status of all containers
+# 2. Check cluster health
 docker compose -f infra/compose/full24.yml ps
 
-# 5. Stop all Docker containers
+# 3. Stop containers
 docker compose -f infra/compose/full24.yml down
 
-# 6. Stop and wipe all database & vault volumes (Complete Reset)
+# 4. Stop and wipe persistent volumes (Complete clean reset)
 docker compose -f infra/compose/full24.yml down -v
 ```
 
 ---
 
-## 4. Docker & Container Management Cheatsheet
+## 10. Authentication Flow
 
-### Start & Stop SARAL Containers
-* **Start DKG Services Only (Nodes, Coordinators, Verifiers):**
-  ```bash
-  docker start $(docker ps -a -q --filter "name=saral-prod-coord" --filter "name=saral-prod-node" --filter "name=saral-prod-verifier")
-  ```
-* **Stop all SARAL containers (Safe - leaves other projects untouched):**
-  ```bash
-  docker stop $(docker ps -q --filter "name=saral")
-  ```
-* **Remove / Delete all SARAL containers (Safe):**
-  ```bash
-  docker rm $(docker ps -a -q --filter "name=saral")
-  ```
-* **Stop & Down via Docker Compose (and wipe data volumes):**
-  ```bash
-  npm run docker:down
-  # or complete reset with volumes:
-  docker compose -f infra/compose/full24.yml down -v
-  ```
-
-### Stop & Remove ALL Containers on Machine (Complete Clean)
-> ⚠️ **Caution:** This will stop and remove containers from other projects as well (e.g., portainer, redis).
-* **Stop ALL running containers:**
-  ```bash
-  docker stop $(docker ps -q)
-  ```
-* **Remove ALL containers:**
-  ```bash
-  docker rm $(docker ps -a -q)
-  ```
-* **Force Stop & Remove ALL in one command:**
-  ```bash
-  docker rm -f $(docker ps -a -q)
-  ```
-
-### Inspecting Logs & Node Vaults
-* **Follow Coordinator logs:**
-  ```bash
-  docker logs -f saral-prod-coord-foundation
-  ```
-* **Follow Node logs:**
-  ```bash
-  docker logs -f saral-prod-node-f1
-  ```
-* **Inspect Key Shares inside a Node's Vault:**
-  ```bash
-  docker exec -it saral-prod-node-f1 ls -la /vault
-  ```
+1. **Step 1 — Primary Authentication:**
+   - Phone Login: `POST /api/auth/phone/request-otp` $\to$ `POST /api/auth/phone/verify-otp`.
+   - Google Login: `POST /api/auth/google`.
+   - Returns token with `mfaVerified: false`.
+2. **Step 2 — Mandatory TOTP MFA (RFC 6238):**
+   - New User: `POST /api/auth/mfa/enroll` (generates QR URI and 8 backup codes).
+   - Verify: `POST /api/auth/mfa/verify` (validates code, returns upgraded token with `mfaVerified: true`).
+3. **Step 3 — Working Policy Configuration:**
+   - Set operating schedule and geofence: `PUT /api/wallet/policy`.
+   - Policy is evaluated before any sensitive cryptographic operation.
 
 ---
 
-## 5. Prisma ORM & Database Migration
+## 11. Wallet Creation (First-Time User)
+
+1. User clicks **"Create Wallet"** on the dashboard.
+2. Web UI calls **`POST /api/wallet/generate`**.
+3. Auth Server starts a 3-of-5 DKG session across the Foundation Nodes (`saral_startDkg`).
+4. Nodes exchange bivariate polynomial commitments and reach Byzantine consensus.
+5. Coordinator aggregates verified public points $Y = x \cdot G$.
+6. Auth Server derives MST, Solana, and Bitcoin addresses in RAM.
+7. Wallet metadata is saved in PostgreSQL as `status: 'READY'`. **Zero addresses and zero private keys are stored.**
+
+---
+
+## 12. Returning Wallet (Existing User)
+
+1. User logs in and passes MFA.
+2. Web UI loads `/wallet` and calls **`GET /api/wallet`**.
+3. Auth Server verifies user already has a wallet (`status: 'READY'`). **No new DKG is initiated.**
+4. Auth Server calls `saral_derivePublicKey` on the Go Coordinator.
+5. 3 Foundation Nodes return their public points $Y_i = x_i \cdot G$.
+6. Coordinator computes **Lagrange Interpolation at $x = 0$** in RAM:
+   $$Y = \sum_{i=1}^{3} \lambda_i \cdot Y_i$$
+7. Exact same Master Public Key $Y$ is recomputed, and addresses are derived on-the-fly.
+
+---
+
+## 13. Threshold & Quorum Specifications
+
+- **Total Nodes:** $n = 5$ Foundation Nodes (`saral-foundation-1` through `5`).
+- **Signing / Derivation Quorum:** $k = 3$ (At least 3 nodes required).
+- **Byzantine Fault Tolerance:** $t = 1$ ($n > 3t \implies 5 > 3(1)$).
+- **Security Guarantee:** Any single compromised node reveals zero information about the master key.
+
+---
+
+## 14. Multi-Chain Native Support
+
+| Network | Family | Curve | Algorithm | Address Format |
+| :--- | :--- | :--- | :--- | :--- |
+| **MST Testnet** | EVM | Secp256k1 | Keccak-256 + EIP-55 | `0x4b78...` (Mixed Case) |
+| **Solana Devnet** | Solana | Ed25519 | 32-byte Point Compression + Base58 | `7dF3...` (Base58) |
+| **Bitcoin Testnet** | Bitcoin | Secp256k1 | BIP-341 Taproot Tweak + BIP-350 Bech32m | `tb1p...` (Witness v1) |
+
+---
+
+## 15. API Overview
+
+All API endpoints are mounted on standard `/api` and root paths:
+
+| Endpoint | Method | Purpose | Auth Required |
+| :--- | :---: | :--- | :---: |
+| `/api/auth/phone/request-otp` | `POST` | Request phone OTP | ❌ No |
+| `/api/auth/phone/verify-otp` | `POST` | Verify phone OTP | ❌ No |
+| `/api/auth/google` | `POST` | Verify Google ID token | ❌ No |
+| `/api/auth/mfa/enroll` | `POST` | Enroll in TOTP MFA | ✅ Yes |
+| `/api/auth/mfa/verify` | `POST` | Verify TOTP code & upgrade token | ✅ Yes |
+| `/.well-known/jwks.json` | `GET` | Public Ed25519 JWKS key ring | ❌ No |
+| `/api/wallet/generate` | `POST` | Create or get multi-chain wallet | ✅ Yes |
+| `/api/wallet/create` | `POST` | Consolidated wallet creation API | ✅ Yes (MFA) |
+| `/api/wallet` | `GET` | Get wallet addresses & live balances | ✅ Yes |
+| `/api/wallet/balances` | `GET` | Read-only live balance refresh | ✅ Yes |
+| `/api/wallet/transactions` | `GET` | Query inbound transactions | ✅ Yes |
+| `/api/wallet/policy` | `GET/PUT` | Read or update working policy | ✅ Yes |
+
+---
+
+## 16. Testing
+
+Run all test suites with a single command:
 
 ```bash
-# Generate Prisma Client
-npm run prisma:generate
-
-# Deploy pending migrations
-npm run prisma:migrate
-
-# Sync schema directly to database
-cd apps/auth-server && npx prisma db push
-
-# Open Prisma Studio (visual database inspector)
-cd apps/auth-server && npx prisma studio
+# Run all TypeScript, Go architecture, and cryptographic tests
+npm test
 ```
 
----
-
-## 6. Running Verification & Test Suites
+### Individual Test Suites:
 
 ```bash
-# 1. Run all unit and integration tests (SDK, Prisma, Architecture, Crypto)
-npm test
+# 1. TypeScript security & wallet lifecycle suite (Vitest)
+npm run test:ts
 
-# 2. Run TypeScript & SDK architecture tests
-npm run test:sdk
-
-# 3. Run Go 15-node distributed architecture tests
+# 2. Go 15-node distributed architecture & relay network suite
 npm run test:go
 
-# 4. Run full cryptography test suite (secp256k1, Ed25519, AVSS, Proactive, DKG)
+# 3. Multi-domain P2P relay integration suite
+npm run test:relay
+
+# 4. Cryptographic AVSS, ABBA consensus & proactive refresh suite
 npm run test:all-crypto
+
+# 5. Typecheck across all workspaces
+npm run typecheck
 ```
 
 ---
 
-## 7. Project Structure
+## 17. Troubleshooting
 
-```text
-saral-poc/
-├── apps/
-│   ├── web/               # React 19 + Vite + Tailwind CSS Web3 Wallet Frontend
-│   └── auth-server/       # Node.js Auth Server (Prisma ORM, Ed25519/EdDSA JWKS JWT, RFC 6238 MFA, Working Policy)
-│       ├── prisma/        # Prisma Schema & Versioned Migrations
-│       └── src/
-│           ├── config/    # Centralized Environment & Auth Configuration
-│           ├── database/  # Singleton Prisma Client & Connection Lifecycle
-│           ├── middleware/# Authenticate (EdDSA JWKS), RequireMfa, Policy & Error Handlers
-│           ├── modules/   # Domain-Driven Modules (Auth, OTP, MFA, Policy, Wallet)
-│           ├── clients/   # Direct SARAL Go Backend Client (HTTP/JSON-RPC)
-│           ├── utils/     # Cryptographic Primitives (EIP-55, Base58, Bech32m, TOTP)
-│           ├── app.ts     # Express Application Config
-│           └── server.ts  # Server Startup & Graceful Shutdown
-├── services/
-│   ├── coordinator/       # Go Coordinator (Foundation, Public, Private)
-│   ├── verifier/          # Go Stateless Verifier (Token validation)
-│   └── saral-node/        # Reusable Go Node daemon (P2P Mesh + AES-256-GCM Vaults)
-├── infra/
-│   ├── compose/
-│   │   ├── full24.yml     # Complete 24-Container Production Mesh (PostgreSQL + Mesh)
-│   │   └── poc15.yml      # 15-Node POC Compose configuration
-│   ├── postgres/          # PostgreSQL initialization and schema
-│   └── config/            # Genesis configurations
-├── tests/
-│   ├── architecture/      # End-to-end architecture, Prisma ORM, & SDK test suites
-│   ├── avss/              # Asynchronous Verifiable Secret Sharing tests
-│   ├── cryptography/      # Mathematical curve and finite field tests
-│   ├── dkg/               # Distributed Key Generation protocol tests
-│   ├── integration/       # Multi-chain integration tests
-│   └── proactive/         # Proactive share refresh and consensus tests
-├── README.md              # Project overview and runbook
-└── SARAL_ARCHITECTURE.md  # Detailed architecture, threat model, and specifications
+### Port 5432 Already in Use:
+A host PostgreSQL service is running. Either stop it (`sudo systemctl stop postgresql`) or point `DATABASE_URL` in `.env` to your host PostgreSQL.
+
+### DKG Consensus Timeout:
+Ensure all 5 Foundation Node containers (`saral-prod-node-f1` to `f5`) are running:
+```bash
+docker ps --filter "name=saral-prod-node-f"
+```
+
+### Resetting Cluster State:
+To wipe all container data and recreate keys from a clean slate:
+```bash
+bash scripts/clean-all.sh
+bash scripts/fresh-setup.sh
 ```
 
 ---
 
-## 8. Troubleshooting
+## 18. Security Architecture
 
-* **`failed to bind host port for 0.0.0.0:5432: address already in use`**:
-  A local PostgreSQL instance is running on your host machine. Run `sudo systemctl stop postgresql` before running Docker Compose, or point `DATABASE_URL` in `.env` to your local host instance.
-* **Database Reset**:
-  To reset PostgreSQL and local node vaults to a clean state, run:
-  ```bash
-  docker compose -f infra/compose/full24.yml down -v
-  ```
+- **Encrypted Node Vaults:** Node key shares are encrypted at rest with AES-256-GCM.
+- **Fail-Closed Principle:** If nodes or verifiers are unreachable, address derivation fails closed; mock keys or fake HMAC fallbacks are strictly rejected.
+- **Mutual TLS (mTLS 1.3):** Direct peer connections between nodes enforce cryptographic identity verification.
+- **Asymmetric JWT / JWKS:** Authenticated internal requests use Ed25519 signed tokens verified against public JWKS key sets.

@@ -85,6 +85,17 @@ func (cm *CommitmentMatrix) VerifyRowPolynomial(
 	return true
 }
 
+// VerifyPoly implements the research paper's verify-poly predicate (Figure 1, Kate-Huang-Goldberg):
+// verify-poly(C, i, a, a') := for each l in [0, t]: Commit(a_{i, l}, a'_{i, l}) == \sum_{j=0}^t i^j * C_{j, l}
+// Guarantees that the received univariate slice belongs to the committed symmetric bivariate polynomial.
+func (cm *CommitmentMatrix) VerifyPoly(
+	i *cryptography.FieldElement,
+	rowPoly *Polynomial,
+	rowBlindPoly *Polynomial,
+) bool {
+	return cm.VerifyRowPolynomial(i, rowPoly, rowBlindPoly)
+}
+
 // VerifyColPolynomial verifies that column polynomials b_i(x) and b'_i(x) match the commitment matrix:
 // For each coefficient j in [0, k-1]:
 // Commit(b_{i,j}, b'_{i,j}) == \sum_{l=0}^{k-1} i^l * C_{j,l}

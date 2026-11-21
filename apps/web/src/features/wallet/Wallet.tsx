@@ -83,8 +83,8 @@ export const Wallet: React.FC = () => {
     );
   }
 
-  // Before Wallet Creation: Clean Centered Card
-  if (!hasWallet) {
+  // Before Wallet Creation or in ERROR state: Clean Centered Card
+  if (!hasWallet || wallet?.status === 'ERROR') {
     return (
       <div className="w-full max-w-md mx-auto py-12 flex flex-col items-center gap-6">
         <div className="w-16 h-16 rounded-2xl bg-accent/10 text-accent flex items-center justify-center font-bold text-2xl select-none">
@@ -96,11 +96,28 @@ export const Wallet: React.FC = () => {
             SARAL Key Infrastructure
           </h1>
           <p className="text-xs text-muted max-w-sm mx-auto leading-relaxed">
-            Your cryptographic keys will be generated collaboratively across 15 independent nodes using Dealerless Kate-Huang-Goldberg DKG. No single party ever holds your private keys.
+            Your cryptographic keys will be generated collaboratively across independent nodes using Dealerless Kate-Huang-Goldberg DKG with 3-of-5 threshold security. No single party ever holds your private keys.
           </p>
         </div>
 
-        {error && <Alert variant="error">{error}</Alert>}
+        {(error || wallet?.error) && (
+          <Alert variant="error" className="w-full">
+            <div className="flex flex-col gap-2">
+              <span>{error || wallet?.error}</span>
+              {wallet?.status === 'ERROR' && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleRefreshAll}
+                  loading={isRefetching}
+                  className="self-start text-xs mt-1"
+                >
+                  Retry Address Derivation
+                </Button>
+              )}
+            </div>
+          </Alert>
+        )}
 
         {creating ? (
           <Card className="w-full flex flex-col gap-3 p-5 bg-surface border-border">
@@ -133,24 +150,33 @@ export const Wallet: React.FC = () => {
           </Card>
         ) : (
           <Button onClick={handleCreateWallet} loading={creating} size="lg" className="w-full max-w-xs">
-            Create Wallet
+            {wallet?.status === 'ERROR' ? 'Retry Wallet Creation' : 'Create Wallet'}
           </Button>
         )}
       </div>
     );
   }
 
-  const mstcBalance = wallet?.balance || '0.0000';
-  const solBalance = wallet?.solanaBalance || '0.0000';
-  const btcBalance = wallet?.bitcoinBalance || '0.00000000';
+  const mstcBalance = wallet?.chains?.mst?.balance ?? wallet?.balance ?? '0.0000';
+  const solBalance = wallet?.chains?.solana?.balance ?? wallet?.solanaBalance ?? '0.0000';
+  const btcBalance = wallet?.chains?.bitcoin?.balance ?? wallet?.bitcoinBalance ?? '0.00000000';
 
-  const evmAddress = wallet?.address || wallet?.addresses?.mst || '';
-  const solAddress = wallet?.solanaAddress || wallet?.addresses?.solana || '';
-  const btcAddress = wallet?.bitcoinAddress || wallet?.addresses?.bitcoin || '';
+  const evmAddress = wallet?.chains?.mst?.address || wallet?.address || wallet?.addresses?.mst || '';
+  const solAddress = wallet?.chains?.solana?.address || wallet?.solanaAddress || wallet?.addresses?.solana || '';
+  const btcAddress = wallet?.chains?.bitcoin?.address || wallet?.bitcoinAddress || wallet?.addresses?.bitcoin || '';
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-5xl mx-auto">
-      {error && <Alert variant="error">{error}</Alert>}
+      {(!evmAddress || error) && (
+        <Alert variant="error" className="w-full">
+          <div className="flex items-center justify-between">
+            <span>{error || 'Unable to derive addresses from threshold nodes. Please retry.'}</span>
+            <Button size="sm" variant="secondary" onClick={handleRefreshAll} loading={isRefetching}>
+              Retry Derivation
+            </Button>
+          </div>
+        </Alert>
+      )}
 
       {/* Top Hero Balance Header */}
       <Card className="flex flex-col gap-5 p-6 bg-surface border-border">

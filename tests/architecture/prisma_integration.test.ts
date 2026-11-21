@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { prisma, connectPrisma, disconnectPrisma } from '../../apps/auth-server/src/database/prisma';
 import { authRepository } from '../../apps/auth-server/src/modules/auth/auth.repository';
 import { authService } from '../../apps/auth-server/src/modules/auth/auth.service';
@@ -6,10 +6,89 @@ import { mfaService } from '../../apps/auth-server/src/modules/mfa/mfa.service';
 import { policyService } from '../../apps/auth-server/src/modules/policy/policy.service';
 import { walletService } from '../../apps/auth-server/src/modules/wallet/wallet.service';
 import { encryptTotpSecret, decryptTotpSecret } from '../../apps/auth-server/src/utils/crypto';
+import { saralBackendClient } from '../../apps/auth-server/src/clients/saralBackendClient';
 
 describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
   beforeAll(async () => {
     await connectPrisma();
+
+    // Ensure pre-seeded operator user exists
+    const operatorId = 'b79f86f3-44a6-48f9-be43-a1abb6456172';
+    const walletId = 'wal-aa583bf2-9e66-415b-90c6-d8eda93bd540';
+    await prisma.user.upsert({
+      where: { id: operatorId },
+      update: { mobile: '+919825669385' },
+      create: {
+        id: operatorId,
+        name: 'SARAL Operator',
+        mobile: '+919825669385',
+        loginMethod: 'mobile',
+      },
+    });
+    await prisma.walletIdentity.upsert({
+      where: { userId: operatorId },
+      update: { status: 'READY' },
+      create: {
+        id: '3d2e140d-dd97-403e-9ed4-da6f17669b55',
+        userId: operatorId,
+        walletId,
+        status: 'READY',
+        keyReferences: {
+          mst: 'key-mst-7d57a501e008f36f',
+          solana: 'key-sol-b06a5d5b49696a4f',
+          bitcoin: 'key-btc-48ea9f6ba5a7de2a',
+        },
+      },
+    });
+
+    vi.spyOn(saralBackendClient, 'startDkg').mockResolvedValue({
+      success: true,
+      sessionId: 'sess-prisma-1',
+      committeeId: 'committee-foundation',
+      state: 'COMPLETED',
+      n: 5,
+      k: 3,
+      t: 1,
+      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+    });
+    vi.spyOn(saralBackendClient, 'getDkgStatus').mockResolvedValue({
+      sessionId: 'sess-prisma-1',
+      committeeId: 'committee-foundation',
+      epoch: 1,
+      n: 5,
+      k: 3,
+      t: 1,
+      state: 'COMPLETED',
+      completedNodes: 5,
+      totalNodes: 5,
+      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+    });
+    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
+      if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
+        return {
+          success: true,
+          walletId: params.walletId,
+          keyId: params.keyId,
+          sessionId: params.dkgSessionId || 'sess-1',
+          committeeId: 'committee-foundation',
+          epoch: 1,
+          curve: 'ed25519',
+          threshold: 3,
+          masterPublicKey: '042169367072777666f3593f95feb28688789dd6b04e7cf45cb08f6ec91449bdf16666666666666666666666666666666666666666666666666666666666666658',
+        };
+      }
+      return {
+        success: true,
+        walletId: params.walletId,
+        keyId: params.keyId,
+        sessionId: params.dkgSessionId || 'sess-1',
+        committeeId: 'committee-foundation',
+        epoch: 1,
+        curve: 'secp256k1',
+        threshold: 3,
+        masterPublicKey: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
+      };
+    });
   });
 
   afterAll(async () => {
@@ -152,6 +231,7 @@ describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
   });
 
   it('6. Strict One-User-One-Wallet Idempotent Creation & Recomputation via Prisma', async () => {
+    await prisma.user.deleteMany({ where: { mobile: '+919333444555' } });
     const tempUser = await authRepository.createUser({
       mobile: '+919333444555',
       loginMethod: 'mobile',

@@ -127,7 +127,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f2:8001,http://node-p1:8001,http://node-r1:8001
-    volumes: ['node_f1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_f1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     ports:
       - '8443:8443'
     networks: [saral-mesh]
@@ -149,7 +149,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f1:8001,http://node-f3:8001
-    volumes: ['node_f2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_f2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -169,7 +169,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f2:8001,http://node-f4:8001
-    volumes: ['node_f3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_f3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -189,7 +189,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f3:8001,http://node-f5:8001
-    volumes: ['node_f4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_f4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -209,7 +209,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-foundation:9001
       PEER_NODES: http://node-f4:8001,http://node-f1:8001
-    volumes: ['node_f5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_f5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -230,7 +230,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-f1:8001,http://node-p2:8001,http://node-r1:8001
-    volumes: ['node_p1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_p1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -250,7 +250,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p1:8001,http://node-p3:8001
-    volumes: ['node_p2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_p2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -270,7 +270,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p2:8001,http://node-p4:8001
-    volumes: ['node_p3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_p3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -290,7 +290,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p3:8001,http://node-p5:8001
-    volumes: ['node_p4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_p4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -310,7 +310,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-public:9002
       PEER_NODES: http://node-p4:8001,http://node-p1:8001
-    volumes: ['node_p5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_p5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -331,7 +331,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-f1:8001,http://node-p1:8001,http://node-r2:8001
-    volumes: ['node_r1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_r1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -351,7 +351,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r1:8001,http://node-r3:8001
-    volumes: ['node_r2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_r2_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -371,7 +371,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r2:8001,http://node-r4:8001
-    volumes: ['node_r3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_r3_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -391,7 +391,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r3:8001,http://node-r5:8001
-    volumes: ['node_r4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_r4_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -411,7 +411,7 @@ services:
       MTLS_PORT: 8443
       COORDINATOR_URL: http://coordinator-private:9003
       PEER_NODES: http://node-r4:8001,http://node-r1:8001
-    volumes: ['node_r5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['node_r5_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -435,7 +435,7 @@ services:
       NODE_ADDRS: http://node-f1:8001,http://node-f2:8001,http://node-f3:8001,http://node-f4:8001,http://node-f5:8001
     ports:
       - '9001:9001'
-    volumes: ['../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     depends_on:
       verifier-foundation:
         condition: service_healthy
@@ -461,7 +461,7 @@ services:
       NODE_ADDRS: http://node-p1:8001,http://node-p2:8001,http://node-p3:8001,http://node-p4:8001,http://node-p5:8001
     ports:
       - '9002:9002'
-    volumes: ['../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     depends_on:
       verifier-public:
         condition: service_healthy
@@ -487,7 +487,7 @@ services:
       NODE_ADDRS: http://node-r1:8001,http://node-r2:8001,http://node-r3:8001,http://node-r4:8001,http://node-r5:8001
     ports:
       - '9003:9003'
-    volumes: ['../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro']
+    volumes: ['../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     depends_on:
       verifier-private:
         condition: service_healthy

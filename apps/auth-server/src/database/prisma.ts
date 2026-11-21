@@ -9,7 +9,9 @@ export const prisma: PrismaClient =
   global.__saral_prisma ||
   new PrismaClient({
     log:
-      process.env.NODE_ENV === 'development'
+      process.env.NODE_ENV === 'test'
+        ? []
+        : process.env.NODE_ENV === 'development'
         ? ['warn', 'error']
         : ['error'],
   });

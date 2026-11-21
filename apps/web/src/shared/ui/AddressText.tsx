@@ -18,6 +18,14 @@ export const AddressText: React.FC<AddressTextProps> = ({
   copyable = false,
   className,
 }) => {
+  if (!address) {
+    return (
+      <span className={cn('inline-flex items-center font-mono text-xs text-muted/60 italic', className)}>
+        Unavailable
+      </span>
+    );
+  }
+
   const truncated = truncateAddress(address, startChars, endChars);
 
   return (

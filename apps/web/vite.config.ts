@@ -47,16 +47,16 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         '/api': {
-          target: 'http://127.0.0.1:3001',
+          target: 'http://localhost:3001',
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api/, ''),
         },
         '/auth': {
-          target: 'http://127.0.0.1:3001',
+          target: 'http://localhost:3001',
           changeOrigin: true,
         },
         '/wallet': {
-          target: 'http://127.0.0.1:3001',
+          target: 'http://localhost:3001',
           changeOrigin: true,
         },
       },

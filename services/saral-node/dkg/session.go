@@ -25,11 +25,19 @@ type Session struct {
 	T           int
 	State       DKGState
 
+	// Authenticated User & Key Binding
+	WalletID      string
+	KeyID         string
+	UserBindingID string
+	ChainFamily   string
+	Curve         string
+
 	// Local random secret contribution material
 	LocalSecret        *cryptography.FieldElement
 	LocalBlind         *cryptography.FieldElement
 	LocalDealerPkg     *avss.DealerPackage
 	ContributionDealt  bool
+	proposed           bool
 
 	// Completed AVSS instances from peer dealers: DealerID -> Session
 	CompletedSharings      map[string]*avss.Session
@@ -119,6 +127,7 @@ func NewSession(
 	sess.Agreement = proactive.NewValidatedAgreementInstance(
 		committeeID, 1, selfID, normalizedCommittee, n, t, n-t, predicate,
 	)
+	sess.Agreement.SessionID = sessionID
 
 	sess.State = StateParticipantsRegistered
 	return sess, nil
@@ -335,17 +344,28 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 	// 5. Secure Persistence in Node Vault
 	if s.ShareStore != nil {
 		meta := vault.ShareRecordMetadata{
-			CommitteeID:            s.CommitteeID,
+			WalletID:               s.WalletID,
+			KeyID:                  s.KeyID,
+			UserBindingID:          s.UserBindingID,
+			DKGSessionID:           s.SessionID,
 			SessionID:              s.SessionID,
+			CommitteeID:            s.CommitteeID,
+			ParticipantID:          s.SelfID,
 			NodeID:                 s.SelfID,
 			NodeIndex:              s.SelfIndex,
+			ChainFamily:            s.ChainFamily,
+			Curve:                  s.Curve,
+			Threshold:              s.K,
+			ShareEpoch:             s.Epoch,
 			Epoch:                  s.Epoch,
 			ShareVersion:           s.Epoch,
 			State:                  "ACTIVE",
 			PublicShareCommitment:  shareCommitment.Hex(),
 			PublicSecretCommitment: masterSecretCommit.Hex(),
+			CreationTimestamp:      time.Now().UnixMilli(),
 			CreatedAt:              time.Now().UnixMilli(),
 			UpdatedAt:              time.Now().UnixMilli(),
+			RecordVersion:          1,
 		}
 		if err := s.ShareStore.SaveShare(meta, combinedShare, combinedBlind); err != nil {
 			s.State = StateFailed

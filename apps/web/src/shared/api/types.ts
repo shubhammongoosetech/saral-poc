@@ -69,7 +69,16 @@ export interface ProfileResponse {
   topology?: Record<string, unknown>;
 }
 
+export interface ChainInfo {
+  network: string;
+  address: string;
+  balance?: string | null;
+}
+
 export interface WalletData {
+  walletId?: string;
+  status?: string;
+  error?: string;
   address: string;
   balance: string;
   solanaAddress?: string;
@@ -80,6 +89,11 @@ export interface WalletData {
     mst?: string;
     solana?: string;
     bitcoin?: string;
+  };
+  chains?: {
+    mst?: ChainInfo;
+    solana?: ChainInfo;
+    bitcoin?: ChainInfo;
   };
 }
 
