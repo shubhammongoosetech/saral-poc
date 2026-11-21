@@ -80,6 +80,11 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 		K           int      `json:"k"`
 		T           int      `json:"t"`
 		Committee   []string `json:"committee"`
+		WalletID    string   `json:"walletId"`
+		KeyID       string   `json:"keyId"`
+		UserID      string   `json:"userId"`
+		Curve       string   `json:"curve"`
+		ChainFamily string   `json:"chainFamily"`
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &req); err != nil {
@@ -120,13 +125,15 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 	}
 	req.N = n
 
-	// Default threshold parameters for supported configurations
+	// Default threshold parameters:
+	// For n = 15: k = 5, t = 4
+	// For n = 5: strictly 3-of-5 threshold (k = 3, t = 1, polynomial degree k - 1 = 2)
 	if req.K == 0 && req.T == 0 {
 		if req.N == 15 {
 			req.K = 5
 			req.T = 4
 		} else if req.N == 5 {
-			req.K = 2
+			req.K = 3
 			req.T = 1
 		}
 	}
@@ -142,7 +149,7 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 		req.CommitteeID = fmt.Sprintf("comm-%d", req.N)
 	}
 
-	// Step 1: Initialize session on each committee node
+	// Step 1: Initialize session on each committee node with authenticated bindings
 	nodeErrors := make(map[string]string)
 	for _, memberID := range normalizedCommittee {
 		ep := s.getNodeEndpoint(memberID)
@@ -158,6 +165,11 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 			"k":           req.K,
 			"t":           req.T,
 			"committee":   normalizedCommittee,
+			"walletId":    req.WalletID,
+			"keyId":       req.KeyID,
+			"userId":      req.UserID,
+			"curve":       req.Curve,
+			"chainFamily": req.ChainFamily,
 		}
 		var initResp map[string]interface{}
 		if err := s.postNodeJSON(ep+"/node/dkg/init", initPayload, &initResp); err != nil {
@@ -398,6 +410,7 @@ type DerivePublicKeyParams struct {
 	DKGSessionID string `json:"dkgSessionId"`
 	CommitteeID  string `json:"committeeId"`
 	Curve        string `json:"curve"`
+	ChainFamily  string `json:"chainFamily"`
 	Epoch        uint64 `json:"epoch"`
 }
 
@@ -466,8 +479,20 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 		if len(committee) == 15 {
 			kThreshold = 5
 		} else {
-			kThreshold = 2
+			// Strictly 3-of-5 threshold for 5-node committees
+			kThreshold = 3
 		}
+	}
+
+	curveName := "secp256k1"
+	if req.Curve != "" {
+		curveName = req.Curve
+	} else if meta != nil && meta.Curve != "" {
+		curveName = meta.Curve
+	} else if strings.EqualFold(req.ChainFamily, "solana") {
+		curveName = "ed25519"
+	} else if strings.EqualFold(req.ChainFamily, "evm") || strings.EqualFold(req.ChainFamily, "bitcoin") || strings.EqualFold(req.ChainFamily, "mst") {
+		curveName = "secp256k1"
 	}
 
 	type nodeContribution struct {
@@ -502,9 +527,11 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 				"userId":      req.UserID,
 				"walletId":    req.WalletID,
 				"keyId":       req.KeyID,
+				"curve":       curveName,
+				"chainFamily": req.ChainFamily,
 			}
 			var resp nodeContribution
-			if err := s.postNodeJSON(endpoint+"/node/dkg/share-contribution", payload, &resp); err == nil && resp.PublicPoint != "" {
+			if err := s.postNodeJSONWithAuth(endpoint+"/node/dkg/share-contribution", payload, &resp, token); err == nil && resp.PublicPoint != "" {
 				ptBytes, decErr := hex.DecodeString(strings.TrimPrefix(resp.PublicPoint, "0x"))
 				if decErr == nil {
 					cp, parseErr := ParseCurvePointFromBytes(ptBytes)
@@ -522,21 +549,8 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 	}
 	wg.Wait()
 
-	// If fewer than threshold k contributions from nodes, check if metadata has completed public key
+	// Strictly require at least threshold k verified node contributions
 	if len(validPoints) < kThreshold {
-		if meta != nil && meta.MasterPublicKey != "" {
-			return map[string]interface{}{
-				"success":         true,
-				"walletId":        req.WalletID,
-				"keyId":           req.KeyID,
-				"sessionId":       sessionID,
-				"committeeId":     committeeID,
-				"epoch":           epoch,
-				"curve":           meta.Curve,
-				"threshold":       meta.K,
-				"masterPublicKey": meta.MasterPublicKey,
-			}, nil
-		}
 		return nil, &JsonRpcErr{
 			Code:    -32000,
 			Message: fmt.Sprintf("insufficient verified node shares: obtained %d valid points, required threshold k=%d", len(validPoints), kThreshold),
@@ -557,15 +571,28 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 		points[i] = kPoints[i].Point
 	}
 
-	reconstructedY, err := InterpolatePublicContributionsAtZero(indices, points)
+	reconstructedY, err := InterpolatePublicContributionsAtZeroForCurve(indices, points, curveName)
 	if err != nil {
 		return nil, &JsonRpcErr{Code: -32000, Message: fmt.Sprintf("failed computing Lagrange interpolation: %v", err)}
 	}
 
 	derivedHex := fmt.Sprintf("04%064x%064x", reconstructedY.X, reconstructedY.Y)
-	curveName := "NIST P-256"
-	if meta != nil && meta.Curve != "" {
-		curveName = meta.Curve
+
+	// Derive address in RAM only without persistence
+	derivedAddress := ""
+	switch strings.ToLower(req.ChainFamily) {
+	case "mst", "evm", "ethereum":
+		derivedAddress = DeriveEvmAddress(reconstructedY)
+	case "solana", "sol":
+		derivedAddress = DeriveSolanaAddress(reconstructedY)
+	case "bitcoin", "btc":
+		derivedAddress = DeriveBitcoinTaprootAddress(reconstructedY, "tb")
+	default:
+		if strings.Contains(strings.ToLower(curveName), "secp256k1") {
+			derivedAddress = DeriveEvmAddress(reconstructedY)
+		} else if strings.Contains(strings.ToLower(curveName), "ed25519") {
+			derivedAddress = DeriveSolanaAddress(reconstructedY)
+		}
 	}
 
 	return map[string]interface{}{
@@ -578,5 +605,6 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 		"curve":           curveName,
 		"threshold":       kThreshold,
 		"masterPublicKey": derivedHex,
+		"derivedAddress":  derivedAddress,
 	}, nil
 }

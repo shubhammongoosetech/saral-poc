@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { prisma, connectPrisma, disconnectPrisma } from '../../apps/auth-server/src/database/prisma';
 import { authRepository } from '../../apps/auth-server/src/modules/auth/auth.repository';
 import { authService } from '../../apps/auth-server/src/modules/auth/auth.service';
@@ -6,10 +6,37 @@ import { mfaService } from '../../apps/auth-server/src/modules/mfa/mfa.service';
 import { policyService } from '../../apps/auth-server/src/modules/policy/policy.service';
 import { walletService } from '../../apps/auth-server/src/modules/wallet/wallet.service';
 import { encryptTotpSecret, decryptTotpSecret } from '../../apps/auth-server/src/utils/crypto';
+import { saralBackendClient } from '../../apps/auth-server/src/clients/saralBackendClient';
 
 describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
   beforeAll(async () => {
     await connectPrisma();
+    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
+      if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
+        return {
+          success: true,
+          walletId: params.walletId,
+          keyId: params.keyId,
+          sessionId: params.dkgSessionId || 'sess-1',
+          committeeId: 'committee-foundation',
+          epoch: 1,
+          curve: 'ed25519',
+          threshold: 3,
+          masterPublicKey: '042169367072777666f3593f95feb28688789dd6b04e7cf45cb08f6ec91449bdf16666666666666666666666666666666666666666666666666666666666666658',
+        };
+      }
+      return {
+        success: true,
+        walletId: params.walletId,
+        keyId: params.keyId,
+        sessionId: params.dkgSessionId || 'sess-1',
+        committeeId: 'committee-foundation',
+        epoch: 1,
+        curve: 'secp256k1',
+        threshold: 3,
+        masterPublicKey: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
+      };
+    });
   });
 
   afterAll(async () => {
@@ -152,6 +179,7 @@ describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
   });
 
   it('6. Strict One-User-One-Wallet Idempotent Creation & Recomputation via Prisma', async () => {
+    await prisma.user.deleteMany({ where: { mobile: '+919333444555' } });
     const tempUser = await authRepository.createUser({
       mobile: '+919333444555',
       loginMethod: 'mobile',

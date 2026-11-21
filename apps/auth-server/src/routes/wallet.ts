@@ -231,8 +231,8 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 
   try {
     const { lat, lng } = parseCoordinates(req);
-    // Recompute addresses dynamically in RAM
-    const derived = getAuthenticatedWalletAddresses(userId, lat, lng);
+    // Recompute addresses dynamically in RAM from verified DKG shares
+    const derived = await getAuthenticatedWalletAddresses(userId, lat, lng);
     const rawAddrs = extractAddressStrings(derived.addresses);
     const balances = await getLiveBalances(rawAddrs);
 
@@ -275,7 +275,7 @@ router.get('/balances', requireAuth, async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
     const { lat, lng } = parseCoordinates(req);
-    const derived = getAuthenticatedWalletAddresses(userId, lat, lng);
+    const derived = await getAuthenticatedWalletAddresses(userId, lat, lng);
     const rawAddrs = extractAddressStrings(derived.addresses);
     const balances = await getLiveBalances(rawAddrs);
     res.json({
@@ -292,7 +292,7 @@ const handleActivity = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
     const { lat, lng } = parseCoordinates(req);
-    const derived = getAuthenticatedWalletAddresses(userId, lat, lng);
+    const derived = await getAuthenticatedWalletAddresses(userId, lat, lng);
     const rawAddrs = extractAddressStrings(derived.addresses);
     const transactions = await getLiveActivity(rawAddrs);
     res.json({
@@ -311,13 +311,13 @@ router.get('/transactions', requireAuth, handleActivity);
 router.get('/activity', requireAuth, handleActivity);
 
 // GET /wallet/addresses (Requires Auth + Policy check; derives addresses in RAM)
-router.get('/addresses', requireAuth, (req: Request, res: Response) => {
+router.get('/addresses', requireAuth, async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
     const lat = req.query?.lat !== undefined ? Number(req.query.lat) : undefined;
     const lng = req.query?.lng !== undefined ? Number(req.query.lng) : undefined;
 
-    const result = getAuthenticatedWalletAddresses(userId, lat, lng);
+    const result = await getAuthenticatedWalletAddresses(userId, lat, lng);
     res.json({
       success: true,
       ...result,

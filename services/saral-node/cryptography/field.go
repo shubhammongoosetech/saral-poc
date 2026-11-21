@@ -44,6 +44,13 @@ type FieldElement struct {
 	val *big.Int
 }
 
+// Zero explicitly clears the underlying big.Int to prevent memory lingering
+func (fe *FieldElement) Zero() {
+	if fe != nil && fe.val != nil {
+		fe.val.SetInt64(0)
+	}
+}
+
 // NewFieldElement creates a new FieldElement from an int64, reduced mod q.
 func NewFieldElement(v int64) *FieldElement {
 	z := big.NewInt(v)

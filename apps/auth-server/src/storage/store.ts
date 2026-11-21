@@ -9,7 +9,16 @@
  * 3. Fail-Closed / High Performance In-Memory Sync for sub-millisecond route resolution.
  */
 
+import crypto from 'crypto';
 import { prisma } from '../database/prisma';
+
+export function toPrismaUuid(id: string): string {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+    return id;
+  }
+  const hash = crypto.createHash('md5').update(id).digest('hex');
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
 
 export interface UserRecord {
   id: string;
@@ -237,12 +246,12 @@ export class DataStore {
     this.data.users[user.id] = user;
     this.persist();
 
-    // Persist via Prisma asynchronously
+    const prismaId = toPrismaUuid(user.id);
     prisma.user
       .upsert({
-        where: { id: user.id },
+        where: { id: prismaId },
         create: {
-          id: user.id,
+          id: prismaId,
           name: user.name,
           googleId: user.googleId,
           email: user.email,
@@ -269,11 +278,12 @@ export class DataStore {
     this.data.mfa[record.userId] = record;
     this.persist();
 
+    const prismaUserId = toPrismaUuid(record.userId);
     prisma.mFAEnrollment
       .upsert({
-        where: { userId: record.userId },
+        where: { userId: prismaUserId },
         create: {
-          userId: record.userId,
+          userId: prismaUserId,
           type: record.type,
           totpSecretEncrypted: record.totpSecretEncrypted,
           recoveryCodesHashed: record.recoveryCodesHashed || [],
@@ -298,12 +308,13 @@ export class DataStore {
     this.data.policies[policy.userId] = policy;
     this.persist();
 
+    const prismaUserId = toPrismaUuid(policy.userId);
     const radiusKm = policy.radiusMeters ? policy.radiusMeters / 1000 : 25;
     prisma.workingPolicy
       .upsert({
-        where: { userId: policy.userId },
+        where: { userId: prismaUserId },
         create: {
-          userId: policy.userId,
+          userId: prismaUserId,
           startTime: policy.startTime || '00:00',
           endTime: policy.endTime || '23:59',
           timezone: policy.timezone || 'Asia/Kolkata',
@@ -341,11 +352,12 @@ export class DataStore {
     this.data.wallets[record.userId] = record;
     this.persist();
 
+    const prismaUserId = toPrismaUuid(record.userId);
     prisma.walletIdentity
       .upsert({
-        where: { userId: record.userId },
+        where: { userId: prismaUserId },
         create: {
-          userId: record.userId,
+          userId: prismaUserId,
           walletId: record.walletId,
           status: record.status,
           keyReferences: record.keyReferences,
@@ -374,11 +386,13 @@ export class DataStore {
     this.data.otps[record.id] = record;
     this.persist();
 
+    const prismaId = toPrismaUuid(record.id);
+    const prismaUserId = toPrismaUuid(record.userId);
     prisma.oTPChallenge
       .create({
         data: {
-          id: record.id,
-          userId: record.userId,
+          id: prismaId,
+          userId: prismaUserId,
           code: record.codeHash,
           purpose: record.purpose,
           expiresAt: new Date(record.expiresAt),
@@ -393,9 +407,10 @@ export class DataStore {
       this.data.otps[id].used = true;
       this.persist();
 
+      const prismaId = toPrismaUuid(id);
       prisma.oTPChallenge
         .update({
-          where: { id },
+          where: { id: prismaId },
           data: { used: true },
         })
         .catch((e) => console.warn('[Prisma] markOtpUsed warning:', e.message));
@@ -419,11 +434,13 @@ export class DataStore {
     }
     this.persist();
 
+    const prismaId = toPrismaUuid(record.id);
+    const prismaUserId = toPrismaUuid(record.userId);
     prisma.accessLog
       .create({
         data: {
-          id: record.id,
-          userId: record.userId,
+          id: prismaId,
+          userId: prismaUserId,
           attemptedAt: new Date(record.attemptedAt),
           lat: record.lat,
           lng: record.lng,
@@ -441,11 +458,13 @@ export class DataStore {
     }
     this.persist();
 
+    const prismaId = toPrismaUuid(record.id);
+    const prismaUserId = toPrismaUuid(record.userId);
     prisma.securityAuditEvent
       .create({
         data: {
-          id: record.id,
-          userId: record.userId,
+          id: prismaId,
+          userId: prismaUserId,
           eventType: record.eventType,
           severity: record.severity,
           ipAddress: record.ip,

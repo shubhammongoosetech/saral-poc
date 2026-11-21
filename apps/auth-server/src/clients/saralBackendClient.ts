@@ -69,6 +69,7 @@ export interface DerivePublicKeyParams {
   dkgSessionId?: string;
   committeeId?: string;
   curve?: string;
+  chainFamily?: string;
   epoch?: number;
 }
 

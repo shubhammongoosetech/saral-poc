@@ -84,7 +84,7 @@ describe('SARAL Protocol V3 — Internal Backend Client & Multi-Chain Address De
     const walletId = 'wal-deterministic-001';
     const keyRefs = {
       mst: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
-      solana: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+      solana: '042169367072777666f3593f95feb28688789dd6b04e7cf45cb08f6ec91449bdf16666666666666666666666666666666666666666666666666666666666666658',
       bitcoin: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
     };
 

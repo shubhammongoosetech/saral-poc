@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import crypto from 'crypto';
 import { DataStore } from '../../apps/auth-server/src/storage/store';
+import { saralBackendClient } from '../../apps/auth-server/src/clients/saralBackendClient';
 import {
   requestPhoneOtp,
   verifyPhoneOtp,
@@ -29,6 +30,35 @@ import {
 
 describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', () => {
   const store = DataStore.getInstance();
+
+  beforeEach(() => {
+    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
+      if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
+        return {
+          success: true,
+          walletId: params.walletId,
+          keyId: params.keyId,
+          sessionId: params.dkgSessionId || 'sess-1',
+          committeeId: 'committee-foundation',
+          epoch: 1,
+          curve: 'ed25519',
+          threshold: 3,
+          masterPublicKey: '042169367072777666f3593f95feb28688789dd6b04e7cf45cb08f6ec91449bdf16666666666666666666666666666666666666666666666666666666666666658',
+        };
+      }
+      return {
+        success: true,
+        walletId: params.walletId,
+        keyId: params.keyId,
+        sessionId: params.dkgSessionId || 'sess-1',
+        committeeId: 'committee-foundation',
+        epoch: 1,
+        curve: 'secp256k1',
+        threshold: 3,
+        masterPublicKey: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
+      };
+    });
+  });
 
   describe('1. Phone OTP & Identity Normalization', () => {
     it('normalizes mobile numbers to E.164 (+91 standard)', () => {
@@ -247,9 +277,9 @@ describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', ()
     it('deterministically recomputes multi-chain addresses in RAM matching standards', () => {
       const walletId = 'wal-test-deterministic-001';
       const keyRefs = {
-        mst: 'opaque-ref-mst-abc',
-        solana: 'opaque-ref-sol-def',
-        bitcoin: 'opaque-ref-btc-ghi',
+        mst: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
+        solana: '042169367072777666f3593f95feb28688789dd6b04e7cf45cb08f6ec91449bdf16666666666666666666666666666666666666666666666666666666666666658',
+        bitcoin: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
       };
 
       const run1 = deriveMultiChainAddresses(walletId, keyRefs);
@@ -261,9 +291,9 @@ describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', ()
       expect(run1.bitcoin.address).toBe(run2.bitcoin.address);
 
       // Standards formatting
-      expect(run1.mst.address).toMatch(/^0x[a-fA-F0-9]{40}$/);
-      expect(run1.solana.address).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
-      expect(run1.bitcoin.address).toMatch(/^tb1p[0-9a-z]{58}$/);
+      expect(run1.mst.address).toBe('0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf');
+      expect(run1.solana.address).toBe('6x5SYnLroiN7WYq8NQYU9KHcH4YjpBbwpUfVu3EB7igV');
+      expect(run1.bitcoin.address).toBe('tb1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssk79hv2');
     });
   });
 });

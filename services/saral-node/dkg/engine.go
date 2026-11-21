@@ -51,6 +51,15 @@ func (e *Engine) CreateSession(
 	n, k, t int,
 	committee []string,
 ) (*Session, error) {
+	return e.CreateSessionWithBinding(sessionID, committeeID, "", "", "", "", "", n, k, t, committee)
+}
+
+// CreateSessionWithBinding initializes a new DKG session with authenticated wallet and user ownership bindings
+func (e *Engine) CreateSessionWithBinding(
+	sessionID, committeeID, walletID, keyID, userID, curve, chainFamily string,
+	n, k, t int,
+	committee []string,
+) (*Session, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -68,9 +77,15 @@ func (e *Engine) CreateSession(
 		return nil, err
 	}
 
+	sess.WalletID = walletID
+	sess.KeyID = keyID
+	sess.UserBindingID = userID
+	sess.Curve = curve
+	sess.ChainFamily = chainFamily
+
 	e.sessions[sessionID] = sess
-	log.Printf("[DKG Engine - %s] Session %s created for committee %s (n=%d, k=%d, t=%d, index=%d)",
-		e.NodeID, sessionID, committeeID, n, k, t, selfIndex)
+	log.Printf("[DKG Engine - %s] Session %s created for committee %s (n=%d, k=%d, t=%d, index=%d, wallet=%s, key=%s)",
+		e.NodeID, sessionID, committeeID, n, k, t, selfIndex, walletID, keyID)
 
 	return sess, nil
 }
@@ -348,19 +363,40 @@ func (e *Engine) GetAllSessionViews() []*DKGSessionPublicView {
 // GetPublicShareContribution computes the node's public share point Y_i = x_i * G from its
 // existing encrypted DKG share, WITHOUT EVER exposing or reconstructing the private scalar x_i.
 func (e *Engine) GetPublicShareContribution(
-	sessionID, committeeID string,
+	keyID, sessionID, committeeID, curve string,
 	epoch uint64,
-) (*cryptography.CurvePoint, int, uint64, string, error) {
+) (string, int, uint64, string, *vault.ShareRecordMetadata, error) {
 	if epoch == 0 {
 		epoch = 1
 	}
 
 	// 1. Try loading from encrypted vault
-	if e.ShareStore != nil && committeeID != "" {
-		meta, share, _, err := e.ShareStore.LoadShare(committeeID, epoch, epoch)
+	if e.ShareStore != nil {
+		idToTry := keyID
+		if idToTry == "" {
+			idToTry = committeeID
+		}
+		if idToTry == "" {
+			idToTry = sessionID
+		}
+
+		meta, share, _, err := e.ShareStore.LoadShare(idToTry, epoch, 0)
 		if err == nil && share != nil {
-			point := cryptography.GeneratorG.ScalarMult(share)
-			return point, meta.NodeIndex, meta.Epoch, meta.PublicSecretCommitment, nil
+			defer share.Zero()
+
+			usedCurve := curve
+			if usedCurve == "" && meta.Curve != "" {
+				usedCurve = meta.Curve
+			}
+			if usedCurve == "" {
+				usedCurve = "nist-p256"
+			}
+
+			ptHex, err := cryptography.ComputePublicContributionPoint(usedCurve, share.Hex())
+			if err != nil {
+				return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", usedCurve, err)
+			}
+			return ptHex, meta.NodeIndex, meta.Epoch, meta.PublicSecretCommitment, meta, nil
 		}
 	}
 
@@ -372,6 +408,14 @@ func (e *Engine) GetPublicShareContribution(
 	if sessionID != "" {
 		matchedSession = e.sessions[sessionID]
 	}
+	if matchedSession == nil && keyID != "" {
+		for _, s := range e.sessions {
+			if s.KeyID == keyID {
+				matchedSession = s
+				break
+			}
+		}
+	}
 	if matchedSession == nil && committeeID != "" {
 		for _, s := range e.sessions {
 			if s.CommitteeID == committeeID {
@@ -382,15 +426,35 @@ func (e *Engine) GetPublicShareContribution(
 	}
 
 	if matchedSession != nil && matchedSession.FinalShare != nil {
-		point := cryptography.GeneratorG.ScalarMult(matchedSession.FinalShare)
+		usedCurve := curve
+		if usedCurve == "" && matchedSession.Curve != "" {
+			usedCurve = matchedSession.Curve
+		}
+		if usedCurve == "" {
+			usedCurve = "nist-p256"
+		}
+
+		ptHex, err := cryptography.ComputePublicContributionPoint(usedCurve, matchedSession.FinalShare.Hex())
+		if err != nil {
+			return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", usedCurve, err)
+		}
 		commit := ""
 		if matchedSession.MasterSecretCommitment != nil {
 			commit = matchedSession.MasterSecretCommitment.Hex()
 		}
-		return point, matchedSession.SelfIndex, matchedSession.Epoch, commit, nil
+		meta := &vault.ShareRecordMetadata{
+			WalletID:      matchedSession.WalletID,
+			KeyID:         matchedSession.KeyID,
+			UserBindingID: matchedSession.UserBindingID,
+			DKGSessionID:  matchedSession.SessionID,
+			CommitteeID:   matchedSession.CommitteeID,
+			NodeIndex:     matchedSession.SelfIndex,
+			Curve:         matchedSession.Curve,
+		}
+		return ptHex, matchedSession.SelfIndex, matchedSession.Epoch, commit, meta, nil
 	}
 
-	return nil, 0, 0, "", fmt.Errorf("no verified DKG share found on node %s for committee %s / session %s at epoch %d",
-		e.NodeID, committeeID, sessionID, epoch)
+	return "", 0, 0, "", nil, fmt.Errorf("no verified DKG share found on node %s for key %s / committee %s / session %s at epoch %d",
+		e.NodeID, keyID, committeeID, sessionID, epoch)
 }
 
