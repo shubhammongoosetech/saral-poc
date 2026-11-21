@@ -31,5 +31,8 @@ export const env = {
   CHAIN_ID: parseInt(process.env.CHAIN_ID || '91562037', 10),
   SOLANA_RPC_URL: process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
   BITCOIN_API_URL: process.env.BITCOIN_API_URL || 'https://blockstream.info/testnet/api',
+
+  // SARAL Go Backend
+  COORDINATOR_URL: process.env.COORDINATOR_URL || 'http://localhost:9001',
 };
 

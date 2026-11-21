@@ -103,15 +103,22 @@ export class KeyManager {
     this.issuer = process.env.SARAL_JWT_ISSUER || 'saral-auth-server';
     this.audience = process.env.SARAL_JWT_AUDIENCE || 'saral-domain-coordinators';
 
-    let keyDir = process.env.KEY_DIR || '';
-    if (!keyDir) {
-      const candidates = [
-        path.resolve(__dirname, '../../../infra/config'),
-        path.resolve(process.cwd(), 'infra/config'),
-        path.resolve(process.cwd(), '../../infra/config'),
-      ];
-      for (const c of candidates) {
-        if (fs.existsSync(c)) {
+    const rawKeyDir = process.env.KEY_DIR || '';
+    const candidates = [
+      rawKeyDir,
+      rawKeyDir ? path.resolve(process.cwd(), rawKeyDir) : '',
+      rawKeyDir ? path.resolve(__dirname, '../../..', rawKeyDir) : '',
+      path.resolve(__dirname, '../../../infra/config'),
+      path.resolve(process.cwd(), 'infra/config'),
+      path.resolve(process.cwd(), '../../infra/config'),
+    ].filter(Boolean);
+
+    let keyDir = '';
+    for (const c of candidates) {
+      if (fs.existsSync(c)) {
+        const privPath = path.join(c, 'auth_ed25519_private_key.pem');
+        const pubPath = path.join(c, 'auth_ed25519_public_key.pem');
+        if (fs.existsSync(privPath) && fs.existsSync(pubPath)) {
           keyDir = c;
           break;
         }
