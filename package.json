@@ -21,7 +21,6 @@
     "prisma:generate": "npm --prefix apps/auth-server run prisma:generate",
     "prisma:migrate": "npm --prefix apps/auth-server run prisma:migrate",
     "prisma:push": "npx prisma db push --schema=apps/auth-server/prisma/schema.prisma",
-    "prisma:seed": "npm --prefix apps/auth-server run prisma:seed",
     "dev": "concurrently -n AUTH,WEB -c \"blue,green\" \"npm --prefix apps/auth-server run dev\" \"npm --prefix apps/web run dev\"",
     "test": "npm run test:ts && npm run test:go && npm run test:all-crypto",
     "test:ts": "vitest run",

@@ -161,12 +161,21 @@ This workflow runs the 21 Go backend containers in Docker while running the Auth
 # 1. Start background Go DKG mesh & PostgreSQL
 npm run docker:nodes
 
-# 2. Sync database schema
-npm run prisma:push
+# 2. Sync database schema (Zero-seed startup: initializes cleanly without demo users)
+npm run prisma:migrate
 
 # 3. Start Auth Server & Web Frontend concurrently
 npm run dev
 ```
+
+### Database Architecture & Zero-Seed Policy
+
+The central PostgreSQL 16 database uses Prisma ORM (`apps/auth-server/prisma/schema.prisma`). All legacy demo tables (`transactions`), plaintext fields (`mfa.secret`, `mfa.recovery_codes`), and demo seed scripts (`seed.ts`) have been completely removed:
+
+- **12 Active Tables:** `users`, `auth_identities`, `mfa` (encrypted), `mfa_recovery_codes` (hashed), `work_policy`, `otps`, `auth_sessions`, `wallets` (opaque refs only), `wallet_key_references`, `wallet_creation_jobs`, `security_event_logs`, and `access_logs`.
+- **Zero Address & Key Storage:** PostgreSQL stores **ZERO private keys, ZERO public keys, and ZERO blockchain addresses**. Central storage holds only opaque identifiers (`key-mst-...`, `key-sol-...`, `key-btc-...`, `dkgSessionId`).
+- **Live On-Chain Transactions:** The obsolete `transactions` table has been dropped; multi-chain activity is queried live from RPC endpoints (`chainService.ts`).
+- **Zero-Seed Startup:** No demo accounts, mock wallets, or seed scripts are required. The stack initializes cleanly on an empty database and dynamically provisions users and wallets upon authenticated Google or phone login via Go Coordinator DKG.
 
 - **Web Frontend:** [http://localhost:5173](http://localhost:5173)
 - **Auth Server:** [http://localhost:3001](http://localhost:3001) (Health: [http://localhost:3001/health](http://localhost:3001/health))
