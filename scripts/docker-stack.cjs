@@ -64,6 +64,17 @@ async function main() {
     const coordinators = domains.map((domain) => `coordinator-${domain}`);
     compose(['up', '-d', '--build', '--no-deps', '--wait', ...verifiers, ...nodes, ...coordinators]);
   }
+
+  // Synchronize genesis participants with freshly booted node vault identities
+  try {
+    const { execSync } = require('node:child_process');
+    console.log('[docker-stack] Synchronizing node genesis identities...');
+    execSync('node scripts/sync-genesis.js', { cwd: root, stdio: 'inherit' });
+    compose(['restart', 'coordinator-foundation', 'coordinator-public', 'coordinator-private']);
+    console.log('[docker-stack] Coordinators reloaded with synchronized genesis participants.');
+  } catch (err) {
+    console.warn('[docker-stack] Notice during genesis sync:', err.message);
+  }
 }
 
 main().catch((err) => {
