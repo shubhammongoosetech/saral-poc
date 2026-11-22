@@ -96,6 +96,7 @@ func main() {
 	avssEngine := avss.NewEngine(idMgr.Identity.NodeID, domain, *vaultDirFlag, shareStore, relayAdapter)
 	proactiveMgr := proactive.NewManager(idMgr.Identity.NodeID, domain, shareStore, avssEngine, relayAdapter)
 	dkgEngine := dkg.NewEngine(idMgr.Identity.NodeID, domain, *vaultDirFlag, shareStore, avssEngine, relayAdapter)
+	dkgEngine.ConfigureWalletAgreement(idMgr.Sign, relayRouter.TrustedSigningKey)
 	avssEngine.AddCompletionListener(dkgEngine.OnAVSSSubprotocolCompleted)
 
 	// Register AVSS and Proactive relay message handlers
@@ -107,6 +108,9 @@ func main() {
 		var sendMsg avss.SendMessage
 		if err := json.Unmarshal(rawBytes, &sendMsg); err != nil {
 			return err
+		}
+		if !matchingRelaySender(msg.SourceNode, sendMsg.DealerID) {
+			return fmt.Errorf("authenticated relay sender does not match message sender")
 		}
 		return avssEngine.HandleSendMessage(&sendMsg)
 	})
@@ -120,6 +124,9 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &echoMsg); err != nil {
 			return err
 		}
+		if !matchingRelaySender(msg.SourceNode, echoMsg.SenderID) {
+			return fmt.Errorf("authenticated relay sender does not match message sender")
+		}
 		return avssEngine.HandleEchoMessage(&echoMsg)
 	})
 
@@ -131,6 +138,9 @@ func main() {
 		var readyMsg avss.ReadyMessage
 		if err := json.Unmarshal(rawBytes, &readyMsg); err != nil {
 			return err
+		}
+		if !matchingRelaySender(msg.SourceNode, readyMsg.SenderID) {
+			return fmt.Errorf("authenticated relay sender does not match message sender")
 		}
 		return avssEngine.HandleReadyMessage(&readyMsg)
 	})
@@ -156,6 +166,9 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &propMsg); err != nil {
 			return err
 		}
+		if !matchingRelaySender(msg.SourceNode, propMsg.ProposerID) {
+			return fmt.Errorf("authenticated relay sender does not match message sender")
+		}
 		dkgErr := dkgEngine.HandleAgreementPropose(&propMsg)
 		proErr := proactiveMgr.HandleAgreementPropose(&propMsg)
 		if dkgErr == nil || proErr == nil {
@@ -172,6 +185,9 @@ func main() {
 		var echoMsg proactive.AgreementEchoMessage
 		if err := json.Unmarshal(rawBytes, &echoMsg); err != nil {
 			return err
+		}
+		if !matchingRelaySender(msg.SourceNode, echoMsg.SenderID) {
+			return fmt.Errorf("authenticated relay sender does not match message sender")
 		}
 		dkgErr := dkgEngine.HandleAgreementEcho(&echoMsg)
 		proErr := proactiveMgr.HandleAgreementEcho(&echoMsg)
@@ -190,6 +206,9 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &readyMsg); err != nil {
 			return err
 		}
+		if !matchingRelaySender(msg.SourceNode, readyMsg.SenderID) {
+			return fmt.Errorf("authenticated relay sender does not match message sender")
+		}
 		dkgErr := dkgEngine.HandleAgreementReady(&readyMsg)
 		proErr := proactiveMgr.HandleAgreementReady(&readyMsg)
 		if dkgErr == nil || proErr == nil {
@@ -207,6 +226,9 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &voteMsg); err != nil {
 			return err
 		}
+		if !matchingRelaySender(msg.SourceNode, voteMsg.SenderID) {
+			return fmt.Errorf("authenticated relay sender does not match message sender")
+		}
 		dkgErr := dkgEngine.HandleAgreementVote(&voteMsg)
 		proErr := proactiveMgr.HandleAgreementVote(&voteMsg)
 		if dkgErr == nil || proErr == nil {
@@ -223,6 +245,9 @@ func main() {
 		var coinMsg proactive.AgreementCoinShareMessage
 		if err := json.Unmarshal(rawBytes, &coinMsg); err != nil {
 			return err
+		}
+		if !matchingRelaySender(msg.SourceNode, coinMsg.SenderID) {
+			return fmt.Errorf("authenticated relay sender does not match message sender")
 		}
 		dkgErr := dkgEngine.HandleAgreementCoinShare(&coinMsg)
 		proErr := proactiveMgr.HandleAgreementCoinShare(&coinMsg)
@@ -253,7 +278,22 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &contribMsg); err != nil {
 			return err
 		}
+		if !matchingRelaySender(msg.SourceNode, contribMsg.DealerID) {
+			return fmt.Errorf("authenticated relay sender does not match message sender")
+		}
 		return dkgEngine.HandleDKGContribution(&contribMsg)
+	})
+
+	relayRouter.RegisterMessageHandler(dkg.MessageTypeWalletAgreement, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var agreementMsg dkg.WalletAgreementMessage
+		if err := json.Unmarshal(rawBytes, &agreementMsg); err != nil {
+			return err
+		}
+		return dkgEngine.HandleWalletAgreement(&agreementMsg)
 	})
 
 	// 5. Setup HTTP Routes
@@ -341,4 +381,10 @@ func getEnvInt(key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
+}
+
+func matchingRelaySender(source, claimed string) bool {
+	canonicalSource, _ := membership.NormalizeNodeID(source)
+	canonicalClaimed, _ := membership.NormalizeNodeID(claimed)
+	return canonicalSource != "" && canonicalSource == canonicalClaimed
 }

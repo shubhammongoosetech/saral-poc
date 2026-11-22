@@ -1,4 +1,6 @@
 import { Component, ErrorInfo, ReactNode } from 'react';
+import { authApi } from '@/shared/api/endpoints';
+import { SESSION_STORE } from '@/shared/lib/storage';
 
 interface Props {
   children: ReactNode;
@@ -40,9 +42,9 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   handleLogout = () => {
-    try {
-      localStorage.removeItem('saral_session_token');
-    } catch (_) {}
+    if (SESSION_STORE.getToken()) void authApi.logout();
+    SESSION_STORE.clearToken();
+    SESSION_STORE.clearMfaMarkers();
     window.location.href = '/';
   };
 

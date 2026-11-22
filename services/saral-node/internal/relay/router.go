@@ -24,7 +24,7 @@ import (
 const (
 	MaxPayloadBytes = 1024 * 1024 // 1 MB
 	MaxHistoryItems = 500
-	DefaultTimeout  = 10000       // 10 seconds
+	DefaultTimeout  = 10000 // 10 seconds
 )
 
 type RelayRouter struct {
@@ -35,6 +35,7 @@ type RelayRouter struct {
 	vaultDir            string
 	trustedParticipants map[string]membership.ParticipantEntry // Canonical NodeID -> ParticipantEntry
 	seenMessages        map[string]*RelayAck
+	acceptedProtocol    map[string]*RelayAck
 	history             []*DeliveryRecord
 	messageHandlers     map[string]func(msg *RelayMessage) error
 	mu                  sync.RWMutex
@@ -70,6 +71,7 @@ func NewRelayRouter(
 		vaultDir:            vaultDir,
 		trustedParticipants: make(map[string]membership.ParticipantEntry),
 		seenMessages:        make(map[string]*RelayAck),
+		acceptedProtocol:    make(map[string]*RelayAck),
 		history:             make([]*DeliveryRecord, 0, MaxHistoryItems),
 		messageHandlers:     make(map[string]func(msg *RelayMessage) error),
 		httpClient: &http.Client{
@@ -140,6 +142,19 @@ func (r *RelayRouter) RegisterTrustedParticipant(p membership.ParticipantEntry) 
 	if r.p2pMgr != nil {
 		r.p2pMgr.RegisterTrustedParticipant(p)
 	}
+}
+
+// TrustedSigningKey returns the enrolled signing key for a protocol participant.
+func (r *RelayRouter) TrustedSigningKey(nodeID string) string {
+	nodeID, _ = membership.NormalizeNodeID(nodeID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.trustedParticipants[nodeID].PublicKeyHex
+}
+
+func requiresPrivateChannel(kind string) bool {
+	return strings.HasPrefix(kind, "DKG_") || strings.HasPrefix(kind, "AVSS_") ||
+		strings.HasPrefix(kind, "PROACTIVE_") || strings.HasPrefix(kind, "HYBRID_DKG_")
 }
 
 func (r *RelayRouter) loadSeenMessagesFromDisk() {
@@ -240,6 +255,11 @@ func (r *RelayRouter) cleanupLoop() {
 					changed = true
 				}
 			}
+			for k, ack := range r.acceptedProtocol {
+				if now-ack.Timestamp > 60000 {
+					delete(r.acceptedProtocol, k)
+				}
+			}
 			if changed {
 				r.saveSeenMessagesToDisk()
 			}
@@ -286,6 +306,9 @@ func (r *RelayRouter) Send(req RelaySendRequest) (*DeliveryRecord, error) {
 			return nil, fmt.Errorf("destination payload encryption failed: %w", encErr)
 		}
 	} else {
+		if requiresPrivateChannel(req.Type) {
+			return nil, fmt.Errorf("destination encryption key is required for protocol messages")
+		}
 		var encErr error
 		encPayload, encErr = crypto.EncryptPayload(req.Payload)
 		if encErr != nil {
@@ -467,7 +490,8 @@ func (r *RelayRouter) dispatchWithRetry(url string, msg *RelayMessage, maxRetrie
 				if errDo == nil {
 					defer mResp.Body.Close()
 					var ack RelayAck
-					if decodeErr := json.NewDecoder(mResp.Body).Decode(&ack); decodeErr == nil {
+					if decodeErr := json.NewDecoder(mResp.Body).Decode(&ack); decodeErr == nil &&
+						(!requiresPrivateChannel(msg.Type) || ack.Status == StateAcknowledged || ack.Status == StateDelivered) {
 						return &ack, nil
 					}
 				}
@@ -485,12 +509,15 @@ func (r *RelayRouter) dispatchWithRetry(url string, msg *RelayMessage, maxRetrie
 
 		resp, err := r.httpClient.Do(req)
 		if err == nil {
-			defer resp.Body.Close()
 			var ack RelayAck
-			if decodeErr := json.NewDecoder(resp.Body).Decode(&ack); decodeErr == nil {
+			decodeErr := json.NewDecoder(resp.Body).Decode(&ack)
+			resp.Body.Close()
+			if decodeErr != nil {
+				lastErr = decodeErr
+			} else if !requiresPrivateChannel(msg.Type) || ack.Status == StateAcknowledged || ack.Status == StateDelivered {
 				return &ack, nil
 			} else {
-				lastErr = decodeErr
+				lastErr = fmt.Errorf("protocol handler did not accept message: %s", ack.Error)
 			}
 		} else {
 			lastErr = err
@@ -632,13 +659,17 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		}, nil
 	}
 
-	// 7. Deduplication check (Idempotent response)
-	r.mu.Lock()
-	if prevAck, exists := r.seenMessages[msg.MessageID]; exists {
-		r.mu.Unlock()
+	private := requiresPrivateChannel(msg.Type)
+	acceptedKey := canonicalSender + ":" + msg.MessageID + ":" + msg.SignatureHex
+	r.mu.RLock()
+	prevAck := r.seenMessages[msg.MessageID]
+	if private {
+		prevAck = r.acceptedProtocol[acceptedKey]
+	}
+	r.mu.RUnlock()
+	if prevAck != nil {
 		return prevAck, nil // Idempotent response
 	}
-	r.mu.Unlock()
 
 	// 8. Target Node Verification
 	normTarget, _ := membership.NormalizeNodeID(msg.TargetNode)
@@ -659,7 +690,17 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 	}
 
 	// 8b. Decrypt Destination-Specific Authenticated Payload (Requirement 7)
-	if msg.EncryptedPayload != "" {
+	if private {
+		privateKey := r.idMgr.GetEncryptionPrivateKey()
+		if privateKey == nil || msg.EncryptedPayload == "" {
+			return r.failedProtocolAck(msg, "destination-encrypted protocol payload required", now), nil
+		}
+		payload, err := crypto.DecryptForDestination(privateKey, msg.EncryptedPayload)
+		if err != nil {
+			return r.failedProtocolAck(msg, "protocol payload decryption failed", now), nil
+		}
+		msg.Payload = payload
+	} else if msg.EncryptedPayload != "" {
 		if r.idMgr.GetEncryptionPrivateKey() != nil {
 			decrypted, decErr := crypto.DecryptForDestination(r.idMgr.GetEncryptionPrivateKey(), msg.EncryptedPayload)
 			if decErr == nil {
@@ -702,6 +743,18 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 		}
 	}
 
+	r.mu.RLock()
+	handler := r.messageHandlers[msg.Type]
+	r.mu.RUnlock()
+	if private {
+		if handler == nil {
+			return r.failedProtocolAck(msg, "protocol handler is unavailable", now), nil
+		}
+		if err := handler(&msg); err != nil {
+			return r.failedProtocolAck(msg, err.Error(), now), nil
+		}
+	}
+
 	// 9. Successfully delivered to destination! Create and sign ACK
 	hops := append(msg.Hops, r.idMgr.Identity.NodeID)
 	trace := append(msg.RoutingTrace, HopTraceRecord{
@@ -735,8 +788,14 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 	ack.RecipientSigHex = r.idMgr.Sign(canonicalAck)
 
 	r.mu.Lock()
-	r.seenMessages[msg.MessageID] = ack
-	r.saveSeenMessagesToDisk()
+	if private {
+		// Protocol state is restored independently. Old transport ACKs must
+		// never suppress a necessary replay after process restart.
+		r.acceptedProtocol[acceptedKey] = ack
+	} else {
+		r.seenMessages[msg.MessageID] = ack
+		r.saveSeenMessagesToDisk()
+	}
 	r.mu.Unlock()
 
 	r.appendHistory(&DeliveryRecord{
@@ -756,10 +815,7 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 	log.Printf("[SARAL Node - %s] Delivered relay %s from %s (Latency: %d ms, Hops: %v)",
 		r.domain, msg.MessageID, msg.SourceNode, latency, hops)
 
-	r.mu.RLock()
-	handler, hasHandler := r.messageHandlers[msg.Type]
-	r.mu.RUnlock()
-	if hasHandler && handler != nil {
+	if !private && handler != nil {
 		go func(m RelayMessage) {
 			if err := handler(&m); err != nil {
 				log.Printf("[SARAL Node - %s] Error in registered handler for message type %s: %v", r.domain, m.Type, err)
@@ -768,6 +824,14 @@ func (r *RelayRouter) HandleIncomingRelay(msg RelayMessage) (*RelayAck, error) {
 	}
 
 	return ack, nil
+}
+
+func (r *RelayRouter) failedProtocolAck(msg RelayMessage, reason string, now int64) *RelayAck {
+	return &RelayAck{
+		MessageID: msg.MessageID, TargetNode: r.idMgr.Identity.NodeID, TargetDomain: r.domain,
+		SourceNode: msg.SourceNode, SourceDomain: msg.SourceDomain, Status: StateFailed,
+		Timestamp: now, Error: reason,
+	}
 }
 
 func (r *RelayRouter) appendHistory(record *DeliveryRecord) {

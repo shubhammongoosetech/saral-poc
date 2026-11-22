@@ -1,9 +1,12 @@
 package rpc
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +18,7 @@ import (
 // DKGSessionMeta stores coordinator-level public tracking for a DKG session.
 // STRICT PRIVACY GUARANTEE: Coordinators NEVER receive, handle, or store private secret shares.
 type DKGSessionMeta struct {
+	scope                  walletDKGScope
 	SessionID              string                            `json:"sessionId"`
 	CommitteeID            string                            `json:"committeeId"`
 	Epoch                  uint64                            `json:"epoch"`
@@ -66,13 +70,6 @@ func ValidateDKGParameters(n, k, t int) error {
 
 // handleStartDKG coordinates initialization of a Dealerless DKG across the committee nodes
 func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface{}, *JsonRpcErr) {
-	// Verify operator authorization
-	if s.verifierClient != nil && token != "" {
-		if _, err := s.verifierClient.VerifyTokenWithRole(token, "operator"); err != nil {
-			return nil, &JsonRpcErr{Code: -32001, Message: fmt.Sprintf("Authorization rejected: %s", err.Error())}
-		}
-	}
-
 	var req struct {
 		SessionID   string   `json:"sessionId"`
 		CommitteeID string   `json:"committeeId"`
@@ -86,259 +83,291 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 		Curve       string   `json:"curve"`
 		ChainFamily string   `json:"chainFamily"`
 	}
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, &JsonRpcErr{Code: -32602, Message: "Invalid parameters format"}
-		}
+	if len(params) > 0 && json.Unmarshal(params, &req) != nil {
+		return nil, &JsonRpcErr{Code: -32602, Message: "Invalid parameters format"}
 	}
 
-	// Resolve committee
+	scope := walletDKGScope{
+		user: req.UserID, wallet: req.WalletID, key: req.KeyID, session: req.SessionID,
+		committee: req.CommitteeID, curve: req.Curve, chain: req.ChainFamily, epoch: 1,
+	}
+	walletBound := req.UserID != "" || req.WalletID != "" || req.KeyID != "" || req.ChainFamily != ""
+	if walletBound {
+		if err := s.verifyWalletDKGScope(token, "start_dkg", scope); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := s.verifyDKGOperator(token); err != nil {
+			return nil, err
+		}
+		if req.Curve != "" && req.Curve != "nist-p256" && req.Curve != "NIST P-256" {
+			return nil, &JsonRpcErr{Code: -32602, Message: "Unbound DKG requires the NIST P-256 curve"}
+		}
+		req.Curve = "nist-p256"
+	}
+
 	committee := req.Committee
 	if len(committee) == 0 {
-		if req.N == 5 {
-			for _, n := range s.registry.GetAllNodes() {
-				committee = append(committee, n.NodeID)
-			}
-		} else {
-			allParts := s.monitor.GetAuthorizedParticipants()
-			for id := range allParts {
+		if walletBound {
+			committee = walletCommitteeNodes(s.domain)
+		} else if req.N != 5 {
+			for id := range s.monitor.GetAuthorizedParticipants() {
 				committee = append(committee, id)
 			}
-			if len(committee) == 0 {
-				for _, n := range s.registry.GetAllNodes() {
-					committee = append(committee, n.NodeID)
-				}
+		}
+		if len(committee) == 0 {
+			for _, node := range s.registry.GetAllNodes() {
+				committee = append(committee, node.NodeID)
 			}
 		}
 	}
 
-	normalizedCommittee := make([]string, 0, len(committee))
-	for _, m := range committee {
-		cID, _ := membership.NormalizeNodeID(m)
-		normalizedCommittee = append(normalizedCommittee, cID)
+	normalized := make([]string, 0, len(committee))
+	seen := make(map[string]bool, len(committee))
+	for _, node := range committee {
+		id, _ := membership.NormalizeNodeID(node)
+		if id == "" || seen[id] {
+			return nil, &JsonRpcErr{Code: -32602, Message: "DKG committee must contain distinct node identifiers"}
+		}
+		seen[id] = true
+		normalized = append(normalized, id)
 	}
-	sort.Strings(normalizedCommittee)
-
-	n := len(normalizedCommittee)
-	if req.N > 0 && req.N != n {
-		return nil, &JsonRpcErr{Code: -32602, Message: fmt.Sprintf("specified n=%d does not match committee size %d", req.N, n)}
+	sort.Strings(normalized)
+	if req.N != 0 && req.N != len(normalized) {
+		return nil, &JsonRpcErr{Code: -32602, Message: "DKG committee size and n do not match"}
 	}
-	req.N = n
-
-	// Default threshold parameters:
-	// For n = 15: k = 5, t = 4
-	// For n = 5: strictly 3-of-5 threshold (k = 3, t = 1, polynomial degree k - 1 = 2)
+	req.N = len(normalized)
 	if req.K == 0 && req.T == 0 {
-		if req.N == 15 {
-			req.K = 5
-			req.T = 4
-		} else if req.N == 5 {
-			req.K = 3
-			req.T = 1
+		switch req.N {
+		case 5:
+			req.K, req.T = 3, 1
+		case 15:
+			req.K, req.T = 5, 4
 		}
 	}
-
 	if err := ValidateDKGParameters(req.N, req.K, req.T); err != nil {
 		return nil, &JsonRpcErr{Code: -32602, Message: err.Error()}
 	}
-
+	if walletBound && (req.K != 3 || req.T != 1 || !slices.Equal(normalized, walletCommitteeNodes(s.domain))) {
+		return nil, &JsonRpcErr{Code: -32602, Message: "Wallet DKG requires this domain's canonical 3-of-5 committee"}
+	}
 	if req.SessionID == "" {
 		req.SessionID = fmt.Sprintf("dkg-%s-%d", strings.ToLower(string(s.domain)), time.Now().UnixNano())
 	}
 	if req.CommitteeID == "" {
 		req.CommitteeID = fmt.Sprintf("comm-%d", req.N)
 	}
+	if !walletIdentifier.MatchString(req.SessionID) || !walletIdentifier.MatchString(req.CommitteeID) {
+		return nil, &JsonRpcErr{Code: -32602, Message: "Invalid DKG session or committee identifier"}
+	}
 
-	// Step 1: Initialize session on each committee node with authenticated bindings
-	nodeErrors := make(map[string]string)
-	for _, memberID := range normalizedCommittee {
-		ep := s.getNodeEndpoint(memberID)
-		if ep == "" {
-			nodeErrors[memberID] = "endpoint not resolved"
-			continue
-		}
-
-		initPayload := map[string]interface{}{
-			"sessionId":   req.SessionID,
-			"committeeId": req.CommitteeID,
-			"n":           req.N,
-			"k":           req.K,
-			"t":           req.T,
-			"committee":   normalizedCommittee,
-			"walletId":    req.WalletID,
-			"keyId":       req.KeyID,
-			"userId":      req.UserID,
-			"curve":       req.Curve,
-			"chainFamily": req.ChainFamily,
-		}
-		var initResp map[string]interface{}
-		if err := s.postNodeJSON(ep+"/node/dkg/init", initPayload, &initResp); err != nil {
-			nodeErrors[memberID] = err.Error()
+	startResponse := func(state string) map[string]interface{} {
+		return map[string]interface{}{
+			"success": true, "sessionId": req.SessionID, "committeeId": req.CommitteeID,
+			"state": state, "n": req.N, "k": req.K, "t": req.T, "committee": normalized,
 		}
 	}
 
-	if len(nodeErrors) > req.T {
-		return nil, &JsonRpcErr{
-			Code:    -32000,
-			Message: fmt.Sprintf("Failed to initialize DKG on sufficient nodes (failures: %v)", nodeErrors),
+	s.dkgStartMu.Lock()
+	defer s.dkgStartMu.Unlock()
+	s.avssMu.RLock()
+	existing := s.dkgSessions[req.SessionID]
+	if existing != nil {
+		same := existing.scope == scope && existing.Curve == req.Curve && existing.CommitteeID == req.CommitteeID &&
+			existing.K == req.K && existing.T == req.T && slices.Equal(existing.Committee, normalized)
+		state := existing.State
+		s.avssMu.RUnlock()
+		if !same {
+			return nil, &JsonRpcErr{Code: -32602, Message: "DKG session ID belongs to a different configuration"}
+		}
+		if !walletBound || state == "COMPLETED" {
+			return startResponse(state), nil
+		}
+	} else {
+		s.avssMu.RUnlock()
+	}
+
+	state := "CONTRIBUTIONS_STARTED"
+	var started []string
+	if walletBound {
+		query := "?sessionId=" + req.SessionID + "&keyId=" + req.KeyID
+		started = s.callDKGCommittee(normalized, func(endpoint string) bool {
+			var status struct {
+				State string `json:"state"`
+			}
+			return s.getNodeJSON(endpoint+"/node/dkg/status"+query, &status) == nil && status.State == "COMPLETED"
+		})
+		if len(started) >= req.K {
+			state = "COMPLETED"
 		}
 	}
 
-	// Step 2: Trigger nodes to independently start dealing their contributions
-	var wg sync.WaitGroup
-	for _, memberID := range normalizedCommittee {
-		if _, failed := nodeErrors[memberID]; failed {
-			continue
-		}
-		ep := s.getNodeEndpoint(memberID)
-		wg.Add(1)
-		go func(endpoint, mID string) {
-			defer wg.Done()
-			startPayload := map[string]interface{}{"sessionId": req.SessionID}
-			var startResp map[string]interface{}
-			_ = s.postNodeJSON(endpoint+"/node/dkg/start", startPayload, &startResp)
-		}(ep, memberID)
+	initPayload := map[string]interface{}{
+		"sessionId": req.SessionID, "committeeId": req.CommitteeID, "committee": normalized,
+		"n": req.N, "k": req.K, "t": req.T, "walletId": req.WalletID, "keyId": req.KeyID,
+		"userId": req.UserID, "curve": req.Curve, "chainFamily": req.ChainFamily,
 	}
-	wg.Wait()
+	if state != "COMPLETED" {
+		nodes := s.callDKGCommittee(normalized, func(endpoint string) bool {
+			return s.postNodeJSONWithAuth(endpoint+"/node/dkg/init", initPayload, nil, token) == nil
+		})
+		if len(nodes) < req.N-req.T {
+			return nil, &JsonRpcErr{Code: -32000, Message: "Could not initialize enough DKG committee nodes"}
+		}
+		started = s.callDKGCommittee(nodes, func(endpoint string) bool {
+			return s.postNodeJSONWithAuth(endpoint+"/node/dkg/start", map[string]string{"sessionId": req.SessionID}, nil, token) == nil
+		})
+		if len(started) < req.N-req.T {
+			return nil, &JsonRpcErr{Code: -32000, Message: "Could not start enough DKG committee nodes"}
+		}
+	}
 
 	participants := make(map[string]*DKGParticipantSummary, req.N)
-	for idx, id := range normalizedCommittee {
+	for index, id := range normalized {
 		participants[id] = &DKGParticipantSummary{
-			NodeID:            id,
-			NodeIndex:         idx + 1,
-			ContributionDealt: nodeErrors[id] == "",
-			Status:            "CONTRIBUTIONS_STARTED",
+			NodeID: id, NodeIndex: index + 1, ContributionDealt: slices.Contains(started, id),
+			Status: "CONTRIBUTIONS_STARTED",
 		}
 	}
-
+	now := time.Now().UTC().Format(time.RFC3339)
 	meta := &DKGSessionMeta{
-		SessionID:    req.SessionID,
-		CommitteeID:  req.CommitteeID,
-		Epoch:        1,
-		N:            req.N,
-		K:            req.K,
-		T:            req.T,
-		State:        "CONTRIBUTIONS_STARTED",
-		Committee:    normalizedCommittee,
-		Curve:        "NIST P-256",
-		Participants: participants,
-		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
-		UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
+		SessionID: req.SessionID, CommitteeID: req.CommitteeID, Epoch: 1, N: req.N, K: req.K, T: req.T,
+		State: state, Committee: normalized, Curve: req.Curve, Participants: participants,
+		CreatedAt: now, UpdatedAt: now, scope: scope,
 	}
-
 	s.avssMu.Lock()
 	if s.dkgSessions == nil {
 		s.dkgSessions = make(map[string]*DKGSessionMeta)
 	}
 	s.dkgSessions[req.SessionID] = meta
 	s.avssMu.Unlock()
-
-	return map[string]interface{}{
-		"success":     true,
-		"sessionId":   req.SessionID,
-		"committeeId": req.CommitteeID,
-		"state":       "CONTRIBUTIONS_STARTED",
-		"n":           req.N,
-		"k":           req.K,
-		"t":           req.T,
-		"committee":   normalizedCommittee,
-	}, nil
+	return startResponse(meta.State), nil
 }
 
-// handleGetDKGStatus queries current DKG progress across committee nodes
+func (s *Server) callDKGCommittee(nodes []string, call func(string) bool) []string {
+	var wg sync.WaitGroup
+	success := make(chan string, len(nodes))
+	for _, node := range nodes {
+		endpoint := s.getNodeEndpoint(node)
+		if endpoint == "" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if call(endpoint) {
+				success <- node
+			}
+		}()
+	}
+	wg.Wait()
+	close(success)
+	completed := make([]string, 0, len(nodes))
+	for node := range success {
+		completed = append(completed, node)
+	}
+	return completed
+}
+
 func (s *Server) handleGetDKGStatus(params json.RawMessage) (interface{}, *JsonRpcErr) {
 	var req struct {
 		SessionID string `json:"sessionId"`
 	}
-	if len(params) > 0 {
-		_ = json.Unmarshal(params, &req)
+	if len(params) > 0 && json.Unmarshal(params, &req) != nil {
+		return nil, &JsonRpcErr{Code: -32602, Message: "Invalid parameters format"}
 	}
 
 	s.avssMu.RLock()
-	var meta *DKGSessionMeta
-	if req.SessionID != "" && s.dkgSessions != nil {
-		meta = s.dkgSessions[req.SessionID]
-	} else if s.dkgSessions != nil {
-		for _, m := range s.dkgSessions {
-			meta = m
-			break
+	var stored *DKGSessionMeta
+	if req.SessionID != "" {
+		stored = s.dkgSessions[req.SessionID]
+	} else {
+		for _, candidate := range s.dkgSessions {
+			if candidate.scope.user == "" {
+				stored = candidate
+				break
+			}
 		}
+	}
+	if stored == nil {
+		s.avssMu.RUnlock()
+		return map[string]interface{}{"status": "NO_ACTIVE_DKG_SESSION"}, nil
+	}
+	meta := *stored
+	meta.Participants = make(map[string]*DKGParticipantSummary, len(stored.Participants))
+	for id, participant := range stored.Participants {
+		copy := *participant
+		meta.Participants[id] = &copy
 	}
 	s.avssMu.RUnlock()
 
-	if meta == nil {
-		return map[string]interface{}{
-			"status":  "NO_ACTIVE_DKG_SESSION",
-			"message": "No DKG sessions recorded on coordinator",
-		}, nil
-	}
-
-	// Query each node's local public DKG view
 	type nodeView struct {
-		State                  string                            `json:"state"`
-		MasterSigningPublicKey string                            `json:"masterSigningPublicKey"`
-		MasterSecretCommitment string                            `json:"masterSecretCommitment"`
-		MasterPublicKey        string                            `json:"masterPublicKey"`
-		QualifiedSet           []string                          `json:"qualifiedSet"`
-		Participants           map[string]*DKGParticipantSummary `json:"participants"`
+		State                  string   `json:"state"`
+		MasterSigningPublicKey string   `json:"masterSigningPublicKey"`
+		MasterSecretCommitment string   `json:"masterSecretCommitment"`
+		MasterPublicKey        string   `json:"masterPublicKey"`
+		QualifiedSet           []string `json:"qualifiedSet"`
 	}
-
-	completedCount := 0
-	var agreedPubkey string
-	var agreedSigningKey string
-	var agreedSecretCommit string
-	var agreedQUAL []string
-
-	for _, memberID := range meta.Committee {
-		ep := s.getNodeEndpoint(memberID)
-		if ep == "" {
+	type diagnostics struct {
+		publicKey, signingKey, commitment string
+	}
+	votes := make(map[diagnostics]int)
+	views := make(chan nodeView, len(meta.Committee))
+	query := "?sessionId=" + meta.SessionID
+	if meta.scope.key != "" {
+		query += "&keyId=" + meta.scope.key
+	}
+	finished := s.callDKGCommittee(meta.Committee, func(endpoint string) bool {
+		var view nodeView
+		err := s.getNodeJSON(endpoint+"/node/dkg/status"+query, &view)
+		if err != nil || view.State != "COMPLETED" {
+			return false
+		}
+		views <- view
+		return true
+	})
+	close(views)
+	for _, id := range finished {
+		if participant := meta.Participants[id]; participant != nil {
+			participant.Status = "COMPLETED"
+		}
+	}
+	for view := range views {
+		// Wallet nodes may load authenticated commitments from their vault after restart.
+		if meta.scope.user != "" {
 			continue
 		}
-		var nv nodeView
-		if err := s.getNodeJSON(fmt.Sprintf("%s/node/dkg/status?sessionId=%s", ep, meta.SessionID), &nv); err == nil {
-			if nv.State == "COMPLETED" {
-				completedCount++
-				if agreedPubkey == "" && nv.MasterPublicKey != "" {
-					agreedPubkey = nv.MasterPublicKey
-					agreedSigningKey = nv.MasterSigningPublicKey
-					agreedSecretCommit = nv.MasterSecretCommitment
-					agreedQUAL = nv.QualifiedSet
-				}
-			}
-			if p, ok := meta.Participants[memberID]; ok {
-				if nv.State == "COMPLETED" {
-					p.Status = "COMPLETED"
-					p.InQualifiedSet = true
-				}
-			}
+		key := diagnostics{view.MasterPublicKey, view.MasterSigningPublicKey, view.MasterSecretCommitment}
+		votes[key]++
+		if votes[key] >= meta.N-meta.T && view.MasterPublicKey != "" {
+			meta.State = "COMPLETED"
+			meta.MasterPublicKey = view.MasterPublicKey
+			meta.MasterSigningPublicKey = view.MasterSigningPublicKey
+			meta.MasterSecretCommitment = view.MasterSecretCommitment
+			meta.QualifiedSet = view.QualifiedSet
 		}
 	}
-
-	if completedCount >= meta.N-meta.T {
-		meta.State = "COMPLETED"
-		meta.MasterPublicKey = agreedPubkey
-		meta.MasterSigningPublicKey = agreedSigningKey
-		meta.MasterSecretCommitment = agreedSecretCommit
-		meta.QualifiedSet = agreedQUAL
+	if meta.scope.user != "" {
+		meta.State = "CONTRIBUTIONS_STARTED"
+		if len(finished) >= meta.K {
+			meta.State = "COMPLETED"
+		}
+		// The public key for a wallet is always obtained through the scoped derivation RPC.
 	}
+	s.avssMu.Lock()
+	if original := s.dkgSessions[meta.SessionID]; original == stored {
+		if original.State != "COMPLETED" || meta.State == "COMPLETED" {
+			s.dkgSessions[meta.SessionID] = &meta
+		}
+	}
+	s.avssMu.Unlock()
 
 	return map[string]interface{}{
-		"sessionId":              meta.SessionID,
-		"committeeId":            meta.CommitteeID,
-		"epoch":                  meta.Epoch,
-		"n":                      meta.N,
-		"k":                      meta.K,
-		"t":                      meta.T,
-		"state":                  meta.State,
-		"committee":              meta.Committee,
-		"qualifiedSet":           meta.QualifiedSet,
-		"masterSigningPublicKey": meta.MasterSigningPublicKey,
-		"masterSecretCommitment": meta.MasterSecretCommitment,
-		"masterPublicKey":        meta.MasterPublicKey,
-		"curve":                  meta.Curve,
-		"completedNodes":         completedCount,
-		"totalNodes":             meta.N,
-		"participants":           meta.Participants,
+		"sessionId": meta.SessionID, "committeeId": meta.CommitteeID, "epoch": meta.Epoch,
+		"n": meta.N, "k": meta.K, "t": meta.T, "state": meta.State, "committee": meta.Committee,
+		"qualifiedSet": meta.QualifiedSet, "masterSigningPublicKey": meta.MasterSigningPublicKey,
+		"masterSecretCommitment": meta.MasterSecretCommitment, "masterPublicKey": meta.MasterPublicKey,
+		"curve": meta.Curve, "completedNodes": len(finished), "totalNodes": meta.N, "participants": meta.Participants,
 	}, nil
 }
 
@@ -414,197 +443,162 @@ type DerivePublicKeyParams struct {
 	Epoch        uint64 `json:"epoch"`
 }
 
-// handleDerivePublicKey resolves existing verified distributed DKG shares from committee nodes
-// and mathematically reconstructs the same aggregate signing public key Y = \sum \lambda_i Y_i
-// WITHOUT EVER exposing or reconstructing the master private scalar x.
+// handleDerivePublicKey reconstructs only the public point for an exact wallet key and epoch.
 func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (interface{}, *JsonRpcErr) {
-	// 1. Authorize caller via Verifier
-	if s.verifierClient != nil && token != "" {
-		res, err := s.verifierClient.VerifyTokenWithRole(token, "operator")
-		if err != nil {
-			return nil, &JsonRpcErr{Code: -32001, Message: fmt.Sprintf("Authorization rejected: %s", err.Error())}
-		}
-		// Validate ownership bindings if provided in claims
-		if res != nil && res.Claims != nil {
-			if mfa, ok := res.Claims["mfaVerified"].(bool); !ok || !mfa {
-				return nil, &JsonRpcErr{Code: -32001, Message: "MFA verification claim required"}
-			}
-		}
-	}
-
 	var req DerivePublicKeyParams
-	if len(params) > 0 {
-		_ = json.Unmarshal(params, &req)
+	if json.Unmarshal(params, &req) != nil {
+		return nil, &JsonRpcErr{Code: -32602, Message: "Invalid parameters format"}
 	}
-
-	sessionID := req.DKGSessionID
-	if sessionID == "" {
-		sessionID = req.KeyID
+	scope := walletDKGScope{
+		user: req.UserID, wallet: req.WalletID, key: req.KeyID, session: req.DKGSessionID,
+		committee: req.CommitteeID, curve: req.Curve, chain: req.ChainFamily, epoch: req.Epoch,
 	}
-	committeeID := req.CommitteeID
-	if committeeID == "" {
-		committeeID = "committee-foundation"
+	if err := s.verifyWalletDKGScope(token, "derive_public_key", scope); err != nil {
+		return nil, err
 	}
-	epoch := req.Epoch
-	if epoch == 0 {
-		epoch = 1
-	}
-
 	s.avssMu.RLock()
-	var meta *DKGSessionMeta
-	if s.dkgSessions != nil {
-		if sessionID != "" {
-			meta = s.dkgSessions[sessionID]
-		}
-		if meta == nil && committeeID != "" {
-			for _, m := range s.dkgSessions {
-				if m.CommitteeID == committeeID {
-					meta = m
-					break
-				}
-			}
-		}
-	}
+	meta := s.dkgSessions[scope.session]
+	mismatch := meta != nil && meta.scope != scope
 	s.avssMu.RUnlock()
-
-	var committee []string
-	kThreshold := 0
-	if meta != nil && len(meta.Committee) > 0 {
-		committee = meta.Committee
-		kThreshold = meta.K
-	} else {
-		for _, n := range s.registry.GetAllNodes() {
-			committee = append(committee, n.NodeID)
-		}
-		if len(committee) == 15 {
-			kThreshold = 5
-		} else {
-			// Strictly 3-of-5 threshold for 5-node committees
-			kThreshold = 3
-		}
+	if mismatch {
+		return nil, &JsonRpcErr{Code: -32001, Message: "Wallet DKG session scope mismatch"}
 	}
-
-	curveName := "secp256k1"
-	if req.Curve != "" {
-		curveName = req.Curve
-	} else if meta != nil && meta.Curve != "" {
-		curveName = meta.Curve
-	} else if strings.EqualFold(req.ChainFamily, "solana") {
-		curveName = "ed25519"
-	} else if strings.EqualFold(req.ChainFamily, "evm") || strings.EqualFold(req.ChainFamily, "bitcoin") || strings.EqualFold(req.ChainFamily, "mst") {
-		curveName = "secp256k1"
+	// Domain membership and vault-authenticated scopes remain valid across coordinator restarts.
+	committee := walletCommitteeNodes(s.domain)
+	payload := map[string]interface{}{
+		"userId": scope.user, "walletId": scope.wallet, "keyId": scope.key, "sessionId": scope.session,
+		"committeeId": scope.committee, "curve": scope.curve, "chainFamily": scope.chain, "epoch": scope.epoch,
 	}
-
-	type nodeContribution struct {
-		NodeID                 string `json:"nodeId"`
-		NodeIndex              int    `json:"nodeIndex"`
-		Epoch                  uint64 `json:"epoch"`
-		PublicPoint            string `json:"publicPoint"`
-		PublicSecretCommitment string `json:"publicSecretCommitment"`
-	}
-
-	// Query committee nodes for their public point contributions Y_i = x_i * G
-	type indexedPoint struct {
-		Index int
-		Point *CurvePoint
-	}
-	var validPoints []indexedPoint
-	var pointsMu sync.Mutex
 	var wg sync.WaitGroup
-
-	for _, memberID := range committee {
-		ep := s.getNodeEndpoint(memberID)
-		if ep == "" {
+	responses := make(chan walletPublicContribution, len(committee))
+	for index, node := range committee {
+		endpoint := s.getNodeEndpoint(node)
+		if endpoint == "" {
 			continue
 		}
 		wg.Add(1)
-		go func(endpoint, mID string) {
+		go func() {
 			defer wg.Done()
-			payload := map[string]interface{}{
-				"sessionId":   sessionID,
-				"committeeId": committeeID,
-				"epoch":       epoch,
-				"userId":      req.UserID,
-				"walletId":    req.WalletID,
-				"keyId":       req.KeyID,
-				"curve":       curveName,
-				"chainFamily": req.ChainFamily,
+			var response struct {
+				NodeID                     string `json:"nodeId"`
+				NodeIndex                  int    `json:"nodeIndex"`
+				Epoch                      uint64 `json:"epoch"`
+				PublicPoint                string `json:"publicPoint"`
+				MasterSigningPublicKeyHash string `json:"masterSigningPublicKeyHash"`
 			}
-			var resp nodeContribution
-			if err := s.postNodeJSONWithAuth(endpoint+"/node/dkg/share-contribution", payload, &resp, token); err == nil && resp.PublicPoint != "" {
-				ptBytes, decErr := hex.DecodeString(strings.TrimPrefix(resp.PublicPoint, "0x"))
-				if decErr == nil {
-					cp, parseErr := ParseCurvePointFromBytes(ptBytes)
-					if parseErr == nil && cp != nil {
-						pointsMu.Lock()
-						validPoints = append(validPoints, indexedPoint{
-							Index: resp.NodeIndex,
-							Point: cp,
-						})
-						pointsMu.Unlock()
-					}
-				}
+			err := s.postNodeJSONWithAuth(endpoint+"/node/dkg/share-contribution", payload, &response, token)
+			if err != nil || response.NodeID != node || response.NodeIndex != index+1 || response.Epoch != scope.epoch {
+				return
 			}
-		}(ep, memberID)
+			digest, err := hex.DecodeString(response.MasterSigningPublicKeyHash)
+			if err != nil || len(digest) != sha256.Size {
+				return
+			}
+			point, err := decodeWalletPublicPoint(response.PublicPoint, scope.curve)
+			if err != nil {
+				return
+			}
+			responses <- walletPublicContribution{response.NodeIndex, point, [sha256.Size]byte(digest)}
+		}()
 	}
 	wg.Wait()
-
-	// Strictly require at least threshold k verified node contributions
-	if len(validPoints) < kThreshold {
-		return nil, &JsonRpcErr{
-			Code:    -32000,
-			Message: fmt.Sprintf("insufficient verified node shares: obtained %d valid points, required threshold k=%d", len(validPoints), kThreshold),
-		}
+	close(responses)
+	var contributions []walletPublicContribution
+	for response := range responses {
+		contributions = append(contributions, response)
 	}
-
-	// Sort by node index
-	sort.Slice(validPoints, func(i, j int) bool {
-		return validPoints[i].Index < validPoints[j].Index
-	})
-
-	// Pick exactly k distinct points for Lagrange interpolation at x = 0
-	kPoints := validPoints[:kThreshold]
-	indices := make([]int, kThreshold)
-	points := make([]*CurvePoint, kThreshold)
-	for i := 0; i < kThreshold; i++ {
-		indices[i] = kPoints[i].Index
-		points[i] = kPoints[i].Point
-	}
-
-	reconstructedY, err := InterpolatePublicContributionsAtZeroForCurve(indices, points, curveName)
+	publicKey, _, err := reconstructVerifiedWalletKey(contributions, scope.curve)
 	if err != nil {
-		return nil, &JsonRpcErr{Code: -32000, Message: fmt.Sprintf("failed computing Lagrange interpolation: %v", err)}
+		return nil, &JsonRpcErr{Code: -32000, Message: err.Error()}
 	}
+	return map[string]interface{}{
+		"success": true, "walletId": scope.wallet, "keyId": scope.key, "sessionId": scope.session,
+		"committeeId": scope.committee, "epoch": scope.epoch, "curve": scope.curve,
+		"threshold": 3, "masterPublicKey": publicKey,
+	}, nil
+}
 
-	derivedHex := fmt.Sprintf("04%064x%064x", reconstructedY.X, reconstructedY.Y)
+type walletPublicContribution struct {
+	index  int
+	point  *CurvePoint
+	master [sha256.Size]byte
+}
 
-	// Derive address in RAM only without persistence
-	derivedAddress := ""
-	switch strings.ToLower(req.ChainFamily) {
-	case "mst", "evm", "ethereum":
-		derivedAddress = DeriveEvmAddress(reconstructedY)
-	case "solana", "sol":
-		derivedAddress = DeriveSolanaAddress(reconstructedY)
-	case "bitcoin", "btc":
-		derivedAddress = DeriveBitcoinTaprootAddress(reconstructedY, "tb")
-	default:
-		if strings.Contains(strings.ToLower(curveName), "secp256k1") {
-			derivedAddress = DeriveEvmAddress(reconstructedY)
-		} else if strings.Contains(strings.ToLower(curveName), "ed25519") {
-			derivedAddress = DeriveSolanaAddress(reconstructedY)
+func reconstructVerifiedWalletKey(contributions []walletPublicContribution, curve string) (string, *CurvePoint, error) {
+	// Each matching commitment is attested by at least three distinct registered members.
+	// Try each possible triple so a faulty response cannot displace other usable contributions.
+	for i, first := range contributions {
+		for j := i + 1; j < len(contributions); j++ {
+			second := contributions[j]
+			if first.master != second.master || first.index == second.index {
+				continue
+			}
+			for _, third := range contributions[j+1:] {
+				if first.master != third.master || first.index == third.index || second.index == third.index {
+					continue
+				}
+				point, err := InterpolatePublicContributionsAtZeroForCurve(
+					[]int{first.index, second.index, third.index},
+					[]*CurvePoint{first.point, second.point, third.point},
+					curve,
+				)
+				if err != nil || !validWalletPublicPoint(point, curve) {
+					continue
+				}
+				key := fmt.Sprintf("04%064x%064x", point.X, point.Y)
+				encoded, err := hex.DecodeString(key)
+				if err == nil && sha256.Sum256(encoded) == first.master {
+					return key, point, nil
+				}
+			}
 		}
 	}
+	return "", nil, fmt.Errorf("no threshold of wallet shares matched the verified DKG public key commitment")
+}
 
-	return map[string]interface{}{
-		"success":         true,
-		"walletId":        req.WalletID,
-		"keyId":           req.KeyID,
-		"sessionId":       sessionID,
-		"committeeId":     committeeID,
-		"epoch":           epoch,
-		"curve":           curveName,
-		"threshold":       kThreshold,
-		"masterPublicKey": derivedHex,
-		"derivedAddress":  derivedAddress,
-	}, nil
+func decodeWalletPublicPoint(raw, curve string) (*CurvePoint, error) {
+	if len(raw) != 130 || !strings.HasPrefix(raw, "04") {
+		return nil, fmt.Errorf("invalid wallet public point encoding")
+	}
+	encoded, err := hex.DecodeString(raw)
+	if err != nil {
+		return nil, err
+	}
+	point := &CurvePoint{X: new(big.Int).SetBytes(encoded[1:33]), Y: new(big.Int).SetBytes(encoded[33:])}
+	if !validWalletPublicPoint(point, curve) {
+		return nil, fmt.Errorf("invalid wallet public point for %s", curve)
+	}
+	return point, nil
+}
+
+func validWalletPublicPoint(point *CurvePoint, curve string) bool {
+	if point == nil || point.X == nil || point.Y == nil || point.X.Sign() < 0 || point.Y.Sign() < 0 {
+		return false
+	}
+	x, y := point.X, point.Y
+	x2 := new(big.Int).Mul(x, x)
+	y2 := new(big.Int).Mul(y, y)
+	switch curve {
+	case "secp256k1":
+		if x.Cmp(Secp256k1P) >= 0 || y.Cmp(Secp256k1P) >= 0 {
+			return false
+		}
+		rhs := new(big.Int).Mul(x2, x)
+		rhs.Add(rhs, big.NewInt(7)).Mod(rhs, Secp256k1P)
+		return y2.Mod(y2, Secp256k1P).Cmp(rhs) == 0
+	case "ed25519":
+		if x.Cmp(Ed25519P) >= 0 || y.Cmp(Ed25519P) >= 0 || (x.Sign() == 0 && y.Cmp(big.NewInt(1)) == 0) {
+			return false
+		}
+		lhs := new(big.Int).Sub(y2, x2)
+		lhs.Mod(lhs, Ed25519P)
+		rhs := new(big.Int).Mul(x2, y2)
+		rhs.Mul(rhs, Ed25519D).Add(rhs, big.NewInt(1)).Mod(rhs, Ed25519P)
+		if lhs.Cmp(rhs) != 0 {
+			return false
+		}
+		orderX, orderY := Ed25519ScalarMult(x, y, Ed25519L)
+		return orderX.Sign() == 0 && orderY.Cmp(big.NewInt(1)) == 0
+	}
+	return false
 }

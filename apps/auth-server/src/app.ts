@@ -4,12 +4,14 @@ import helmet from 'helmet';
 import authRoutes from './routes/auth';
 import walletRoutes from './routes/wallet';
 import { errorHandler } from './middleware/errorHandler';
+import { env } from './config/env';
 
 export function createApp(): express.Application {
   const app = express();
 
   app.use(helmet());
-  app.use(cors({ origin: true, credentials: true }));
+  const origins = [new URL(env.FRONTEND_URL).origin];
+  app.use(cors({ origin: origins, credentials: true }));
   app.use(express.json());
 
   // Mount routes

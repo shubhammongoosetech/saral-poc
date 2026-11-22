@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 	"time"
 
@@ -77,11 +78,27 @@ func (e *Engine) CreateSession(
 	n, k, t int,
 	committee []string,
 ) (*Session, error) {
+	return e.CreateSessionForCurve(sessionID, committeeID, dealerID, epoch, n, k, t, committee, cryptography.CurveP256)
+}
+
+func (e *Engine) CreateSessionForCurve(
+	sessionID, committeeID, dealerID string,
+	epoch uint64,
+	n, k, t int,
+	committee []string,
+	curve cryptography.Curve,
+) (*Session, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if _, exists := e.sessions[sessionID]; exists {
-		return e.sessions[sessionID], nil
+	if !vault.ValidRecordID(sessionID) || !vault.ValidRecordID(committeeID) || !vault.ValidRecordID(dealerID) || len(committee) != n || NodeIndexInCommittee(committee, dealerID) < 1 {
+		return nil, fmt.Errorf("invalid AVSS session scope")
+	}
+	if existing := e.sessions[sessionID]; existing != nil {
+		if existing.Curve != curve || existing.CommitteeID != committeeID || existing.DealerID != dealerID || existing.Epoch != epoch || existing.N != n || existing.K != k || existing.T != t || !slices.Equal(existing.Committee, committee) {
+			return nil, fmt.Errorf("AVSS session scope mismatch")
+		}
+		return existing, nil
 	}
 
 	selfIndex := NodeIndexInCommittee(committee, e.NodeID)
@@ -94,6 +111,10 @@ func (e *Engine) CreateSession(
 		return nil, err
 	}
 
+	sess.Curve = curve
+	if err := e.restoreWalletSharing(sess); err != nil {
+		return nil, err
+	}
 	e.sessions[sessionID] = sess
 	return sess, nil
 }
@@ -133,7 +154,12 @@ func (e *Engine) StartDealerSharing(
 		return nil, err
 	}
 
-	// Dispatch private SEND messages to each committee participant via relay
+	e.DispatchDealerPackage(pkg)
+	return pkg, nil
+}
+
+// DispatchDealerPackage delivers a contribution already prepared for a registered session.
+func (e *Engine) DispatchDealerPackage(pkg *DealerPackage) {
 	for targetNode, sendMsg := range pkg.SendMessages {
 		payloadBytes, err := json.Marshal(sendMsg)
 		if err != nil {
@@ -155,30 +181,13 @@ func (e *Engine) StartDealerSharing(
 		}
 	}
 
-	return pkg, nil
 }
 
 // HandleSendMessage processes an incoming AVSS_SEND message
 func (e *Engine) HandleSendMessage(msg *SendMessage) error {
 	sess, err := e.GetSession(msg.SessionID)
 	if err != nil {
-		// Session not yet created; auto-init from message parameters if recipient is in committee
-		// In a standard committee, n = len(msg.Commitments[0]) or known committee
-		// If session not found, create it using dealer message data
-		k := len(msg.Commitments)
-		// Assume dealer sent to known committee or self is recipient
-		// Create session with parameters
-		committee := []string{e.NodeID} // will be resolved if registered
-		n := 15                          // default global POC15 or 5
-		t := 4
-		if k <= 3 {
-			n = 5
-			t = 1
-		}
-		sess, err = e.CreateSession(msg.SessionID, msg.CommitteeID, msg.DealerID, msg.Epoch, n, k, t, committee)
-		if err != nil {
-			return fmt.Errorf("failed to auto-create session for incoming SEND: %w", err)
-		}
+		return err
 	}
 
 	echos, err := sess.ProcessSendMessage(msg)
@@ -186,6 +195,9 @@ func (e *Engine) HandleSendMessage(msg *SendMessage) error {
 		return err
 	}
 
+	if err := e.checkpointWalletSharing(sess); err != nil {
+		return err
+	}
 	// Broadcast ECHOs to all peers in the committee
 	e.broadcastEchos(echos)
 	return nil
@@ -199,7 +211,10 @@ func (e *Engine) HandleEchoMessage(echo *EchoMessage) error {
 	}
 
 	readys, err := sess.ProcessEchoMessage(echo)
-	if err != nil {
+	if err != nil && !(sess.Curve != cryptography.CurveP256 && errors.Is(err, ErrDuplicateMessage)) {
+		return err
+	}
+	if err := e.checkpointWalletSharing(sess); err != nil {
 		return err
 	}
 
@@ -224,8 +239,16 @@ func (e *Engine) HandleReadyMessage(ready *ReadyMessage) error {
 	}
 
 	completed, readysToSend, err := sess.ProcessReadyMessage(ready)
-	if err != nil {
+	if err != nil && !(sess.Curve != cryptography.CurveP256 && errors.Is(err, ErrDuplicateMessage)) {
 		return err
+	}
+	if err := e.checkpointWalletSharing(sess); err != nil {
+		return err
+	}
+	if err != nil {
+		sess.mu.RLock()
+		completed = sess.State == StateSharingCompleted
+		sess.mu.RUnlock()
 	}
 
 	if len(readysToSend) > 0 {
@@ -275,6 +298,13 @@ func (e *Engine) broadcastReadys(readys []*ReadyMessage) {
 }
 
 func (e *Engine) onSharingCompleted(sess *Session) {
+	sess.mu.Lock()
+	if sess.reportedCompletion {
+		sess.mu.Unlock()
+		return
+	}
+	sess.reportedCompletion = true
+	sess.mu.Unlock()
 	log.Printf("[AVSS Engine - %s] SHARING_COMPLETED for session %s (epoch %d, k=%d, t=%d)",
 		e.NodeID, sess.SessionID, sess.Epoch, sess.K, sess.T)
 
@@ -313,6 +343,7 @@ func (e *Engine) onSharingCompleted(sess *Session) {
 			SessionID:              sess.SessionID,
 			NodeID:                 e.NodeID,
 			NodeIndex:              sess.SelfIndex,
+			Curve:                  string(sess.Curve),
 			Epoch:                  sess.Epoch,
 			ShareVersion:           1,
 			State:                  "ACTIVE",
@@ -320,6 +351,9 @@ func (e *Engine) onSharingCompleted(sess *Session) {
 			PublicSecretCommitment: sess.PublicSecretCommitment.Hex(),
 			CreatedAt:              sess.CreatedAt.UnixMilli(),
 			UpdatedAt:              time.Now().UnixMilli(),
+		}
+		if sess.Curve != cryptography.CurveP256 {
+			meta.RecordVersion = 2
 		}
 		if err := e.ShareStore.SaveShare(meta, sess.Share, sess.BlindShare); err != nil {
 			log.Printf("[AVSS Engine - %s] Error persisting share to vault: %v", e.NodeID, err)
@@ -347,6 +381,9 @@ func (e *Engine) ExecuteTestReconstruction(
 		return nil, err
 	}
 
+	if sess.Curve != cryptography.CurveP256 {
+		return nil, errors.New("wallet share reconstruction is unavailable")
+	}
 	if sess.Commitments == nil {
 		return nil, errors.New("cannot reconstruct: session has no commitment matrix")
 	}
@@ -370,4 +407,3 @@ func (e *Engine) ExecuteTestReconstruction(
 
 	return res, nil
 }
-

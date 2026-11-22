@@ -2,8 +2,6 @@ package rpc
 
 import (
 	"encoding/json"
-	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
@@ -37,8 +35,14 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 			Curve       string   `json:"curve"`
 			ChainFamily string   `json:"chainFamily"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"Invalid request payload"}`, http.StatusBadRequest)
+			return
+		}
+		if (req.UserID != "" || req.WalletID != "" || req.KeyID != "") &&
+			!hasDKGScope(r, "start_dkg", req.UserID, req.WalletID, req.KeyID, req.SessionID, req.CommitteeID, req.Curve, req.ChainFamily, 1) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 
@@ -56,7 +60,7 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 			"success":   true,
 			"sessionId": sess.SessionID,
 			"nodeId":    dkgEngine.NodeID,
-			"state":     string(sess.State),
+			"state":     string(sess.GetPublicView().State),
 		})
 	})
 
@@ -79,23 +83,40 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 			return
 		}
 
+		sess, err := dkgEngine.GetSession(req.SessionID)
+		if err != nil {
+			http.Error(w, "DKG session unavailable", http.StatusNotFound)
+			return
+		}
+		if sess.UserBindingID != "" && !hasDKGScope(r, "start_dkg", sess.UserBindingID, sess.WalletID, sess.KeyID,
+			sess.SessionID, sess.CommitteeID, string(sess.Curve), sess.ChainFamily, sess.Epoch) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		if err := dkgEngine.StartContribution(req.SessionID); err != nil {
 			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 			return
 		}
 
-		sess, _ := dkgEngine.GetSession(req.SessionID)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":   true,
 			"sessionId": req.SessionID,
 			"nodeId":    dkgEngine.NodeID,
-			"state":     string(sess.State),
+			"state":     string(sess.GetPublicView().State),
 		})
 	})
 
 	// GET /node/dkg/status — Query public view of a DKG session
 	mux.HandleFunc("/node/dkg/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !auth.ValidateInternalAuth(r) && !auth.ValidateAdminAuth(r) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		sessionID := r.URL.Query().Get("sessionId")
 		if sessionID == "" {
 			// Return all sessions
@@ -108,6 +129,11 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 		}
 
 		sess, err := dkgEngine.GetSession(sessionID)
+		if err != nil && dkgEngine.HasPersistedWalletShare(sessionID, r.URL.Query().Get("keyId")) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"state": dkg.StateCompleted})
+			return
+		}
 		if err != nil {
 			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusNotFound)
 			return
@@ -137,14 +163,10 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 		})
 	})
 
-	// POST /node/dkg/share-contribution — Returns public verification point Y_i = x_i * G
-	// strictly WITHOUT EVER exposing or reconstructing the private scalar share x_i.
-	// Enforces INDEPENDENT NODE-LEVEL OWNERSHIP VERIFICATION (Section 11):
-	// Verifies EdDSA token signature, MFA claim, derive_public_key operation, and
-	// authenticates that token caller user ID matches stored vault user binding.
+	// POST /node/dkg/share-contribution resolves a public point for an exact share.
 	mux.HandleFunc("/node/dkg/share-contribution", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost && r.Method != http.MethodGet {
-			http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
@@ -157,117 +179,58 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 			KeyID       string `json:"keyId"`
 			Curve       string `json:"curve"`
 			ChainFamily string `json:"chainFamily"`
-			Token       string `json:"token"`
 		}
-
-		if r.Method == http.MethodPost {
-			_ = json.NewDecoder(r.Body).Decode(&req)
-		} else {
-			req.SessionID = r.URL.Query().Get("sessionId")
-			req.CommitteeID = r.URL.Query().Get("committeeId")
-			req.KeyID = r.URL.Query().Get("keyId")
-			req.UserID = r.URL.Query().Get("userId")
-			req.WalletID = r.URL.Query().Get("walletId")
-			req.Curve = r.URL.Query().Get("curve")
-			req.ChainFamily = r.URL.Query().Get("chainFamily")
-			req.Token = r.URL.Query().Get("token")
-		}
-
-		if req.SessionID == "" && req.KeyID != "" {
-			req.SessionID = req.KeyID
-		}
-
-		bearerToken := ""
-		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-			bearerToken = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-		}
-		if bearerToken == "" {
-			bearerToken = r.Header.Get("X-Saral-Auth-Token")
-		}
-		if bearerToken == "" {
-			bearerToken = req.Token
-		}
-
-		isInternal := auth.ValidateInternalAuth(r) || auth.ValidateAdminAuth(r)
-
-		// 1. Resolve key share from vault or in-memory engine
-		pointHex, nodeIndex, actualEpoch, commit, meta, err := dkgEngine.GetPublicShareContribution(
-			req.KeyID, req.SessionID, req.CommitteeID, req.Curve, req.Epoch,
-		)
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusNotFound)
+		r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request payload", http.StatusBadRequest)
 			return
 		}
 
-		// 2. INDEPENDENT NODE-LEVEL OWNERSHIP VERIFICATION (Section 11)
-		// If stored share is bound to a user, or caller claims a specific user/wallet identity:
-		if (meta != nil && meta.UserBindingID != "") || req.UserID != "" || req.WalletID != "" {
-			if bearerToken == "" {
-				log.Printf("[SECURITY_ALERT] Missing bearer token for user-bound key %s on node %s", req.KeyID, dkgEngine.NodeID)
-				http.Error(w, `{"error":"SECURITY_ALERT: missing required bearer authorization token for user wallet key"}`, http.StatusForbidden)
+		bound := req.UserID != "" || req.WalletID != "" || req.KeyID != ""
+		if bound {
+			if !hasDKGScope(r, "derive_public_key", req.UserID, req.WalletID, req.KeyID, req.SessionID, req.CommitteeID, req.Curve, req.ChainFamily, req.Epoch) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}
+		} else if !auth.ValidateInternalAuth(r) && !auth.ValidateAdminAuth(r) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 
-			verifier := auth.GetNodeTokenVerifier()
-			claims, verifyErr := verifier.VerifyScopedToken(bearerToken)
-			if verifyErr != nil {
-				log.Printf("[SECURITY_ALERT] Invalid token signature/expiry on node %s: %v", dkgEngine.NodeID, verifyErr)
-				http.Error(w, fmt.Sprintf(`{"error":"SECURITY_ALERT: invalid caller authorization: %s"}`, verifyErr.Error()), http.StatusForbidden)
-				return
-			}
-
-			// Verify required claims:
-			if claims.Operation != "" && claims.Operation != "derive_public_key" {
-				log.Printf("[SECURITY_ALERT] Invalid operation '%s' requested on node %s", claims.Operation, dkgEngine.NodeID)
-				http.Error(w, `{"error":"SECURITY_ALERT: unauthorized operation claim"}`, http.StatusForbidden)
-				return
-			}
-
-			if !claims.MFAVerified {
-				log.Printf("[SECURITY_ALERT] MFA not verified in token on node %s", dkgEngine.NodeID)
-				http.Error(w, `{"error":"SECURITY_ALERT: MFA verification required"}`, http.StatusForbidden)
-				return
-			}
-
-			tokenUser := claims.UserID
-			if tokenUser == "" {
-				tokenUser = claims.Sub
-			}
-
-			// STRICT OWNERSHIP BINDING: Token user MUST match stored vault user binding!
-			if meta != nil && meta.UserBindingID != "" {
-				if tokenUser != meta.UserBindingID {
-					log.Printf("[SECURITY_ALERT] UNAUTHORIZED SHARE CONTRIBUTION ATTEMPT on node %s: caller %s does not match stored binding %s for key %s",
-						dkgEngine.NodeID, tokenUser, meta.UserBindingID, meta.KeyID)
-					http.Error(w, `{"error":"SECURITY_ALERT: unauthorized share contribution attempt: user ownership binding mismatch"}`, http.StatusForbidden)
-					return
-				}
-			}
-
-			if req.UserID != "" && tokenUser != req.UserID {
-				log.Printf("[SECURITY_ALERT] User ID parameter mismatch on node %s: token %s vs req %s", dkgEngine.NodeID, tokenUser, req.UserID)
-				http.Error(w, `{"error":"SECURITY_ALERT: user ID parameter does not match token subject"}`, http.StatusForbidden)
-				return
-			}
-
-			if meta != nil && meta.WalletID != "" && claims.WalletID != "" && claims.WalletID != meta.WalletID {
-				log.Printf("[SECURITY_ALERT] Wallet ID mismatch on node %s: token %s vs stored %s", dkgEngine.NodeID, claims.WalletID, meta.WalletID)
-				http.Error(w, `{"error":"SECURITY_ALERT: wallet binding mismatch"}`, http.StatusForbidden)
-				return
-			}
-		} else if !isInternal {
-			http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		point, nodeIndex, epoch, commitment, meta, err := dkgEngine.GetPublicShareContribution(
+			req.KeyID, req.SessionID, req.CommitteeID, req.Curve, req.Epoch,
+		)
+		if err != nil {
+			http.Error(w, "Verified DKG share unavailable", http.StatusNotFound)
+			return
+		}
+		if meta.UserBindingID != req.UserID || meta.WalletID != req.WalletID || meta.ChainFamily != req.ChainFamily {
+			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":                true,
-			"nodeId":                 dkgEngine.NodeID,
-			"nodeIndex":              nodeIndex,
-			"epoch":                  actualEpoch,
-			"publicPoint":            pointHex,
-			"publicSecretCommitment": commit,
+			"success":                    true,
+			"nodeId":                     meta.NodeID,
+			"nodeIndex":                  nodeIndex,
+			"epoch":                      epoch,
+			"publicPoint":                point,
+			"publicSecretCommitment":     commitment,
+			"masterSigningPublicKeyHash": meta.MasterSigningPublicKeyHash,
 		})
 	})
+}
+
+func hasDKGScope(r *http.Request, operation, userID, walletID, keyID, sessionID, committeeID, curve, chain string, epoch uint64) bool {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || userID == "" || walletID == "" || keyID == "" || sessionID == "" || committeeID == "" ||
+		curve == "" || chain == "" || epoch == 0 {
+		return false
+	}
+	claims, err := auth.GetNodeTokenVerifier().VerifyScopedToken(token)
+	return err == nil && claims.Operation == operation && claims.MFAVerified && claims.PolicySatisfied &&
+		claims.Sub == userID && claims.UserID == userID && claims.WalletID == walletID && claims.KeyID == keyID &&
+		claims.DKGSessionID == sessionID && claims.CommitteeID == committeeID && claims.Curve == curve &&
+		claims.ChainFamily == chain && claims.Epoch == epoch
 }

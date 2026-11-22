@@ -33,7 +33,7 @@ func (p *Polynomial) Degree() int {
 // Evaluate evaluates P(x) at x using Horner's method.
 func (p *Polynomial) Evaluate(x *cryptography.FieldElement) *cryptography.FieldElement {
 	if len(p.Coeffs) == 0 {
-		return cryptography.NewFieldElement(0)
+		return x.Curve().Scalar(0)
 	}
 	res := p.Coeffs[len(p.Coeffs)-1]
 	for i := len(p.Coeffs) - 2; i >= 0; i-- {
@@ -52,16 +52,17 @@ func InterpolateUnivariate(xs []*cryptography.FieldElement, ys []*cryptography.F
 		return nil, ErrInsufficientPoints
 	}
 
+	curve := xs[0].Curve()
 	// Resulting polynomial coefficients initialized to 0
 	resCoeffs := make([]*cryptography.FieldElement, k)
 	for i := 0; i < k; i++ {
-		resCoeffs[i] = cryptography.NewFieldElement(0)
+		resCoeffs[i] = curve.Scalar(0)
 	}
 
 	for i := 0; i < k; i++ {
 		// Compute basis polynomial \ell_i(x) = \prod_{j \ne i} \frac{x - x_j}{x_i - x_j}
-		basis := []*cryptography.FieldElement{cryptography.NewFieldElement(1)}
-		den := cryptography.NewFieldElement(1)
+		basis := []*cryptography.FieldElement{curve.Scalar(1)}
+		den := curve.Scalar(1)
 
 		for j := 0; j < k; j++ {
 			if i == j {
@@ -77,7 +78,7 @@ func InterpolateUnivariate(xs []*cryptography.FieldElement, ys []*cryptography.F
 			// basis = basis * x - basis * xs[j]
 			newBasis := make([]*cryptography.FieldElement, len(basis)+1)
 			for idx := range newBasis {
-				newBasis[idx] = cryptography.NewFieldElement(0)
+				newBasis[idx] = curve.Scalar(0)
 			}
 			negXj := xs[j].Neg()
 			for bIdx, bVal := range basis {
@@ -147,7 +148,7 @@ func SampleRandomBivariatePolynomial(deg int, secret *cryptography.FieldElement)
 			if j == 0 && l == 0 {
 				continue
 			}
-			val, err := cryptography.RandScalar()
+			val, err := secret.Curve().RandomScalar()
 			if err != nil {
 				return nil, err
 			}
@@ -165,12 +166,13 @@ func SampleRandomBivariatePolynomial(deg int, secret *cryptography.FieldElement)
 
 // Evaluate evaluates F(x, y) at specific coordinates.
 func (bp *BivariatePolynomial) Evaluate(x, y *cryptography.FieldElement) *cryptography.FieldElement {
-	res := cryptography.NewFieldElement(0)
-	xPow := cryptography.NewFieldElement(1)
+	curve := x.Curve()
+	res := curve.Scalar(0)
+	xPow := curve.Scalar(1)
 
 	for j := 0; j <= bp.DegX; j++ {
-		yPow := cryptography.NewFieldElement(1)
-		rowSum := cryptography.NewFieldElement(0)
+		yPow := curve.Scalar(1)
+		rowSum := curve.Scalar(0)
 		for l := 0; l <= bp.DegY; l++ {
 			term := bp.Coeffs[j][l].Mul(yPow)
 			rowSum = rowSum.Add(term)
@@ -186,10 +188,11 @@ func (bp *BivariatePolynomial) Evaluate(x, y *cryptography.FieldElement) *crypto
 // RowPolynomial computes a_i(y) = F(i, y).
 // Degree is <= DegY.
 func (bp *BivariatePolynomial) RowPolynomial(i *cryptography.FieldElement) *Polynomial {
+	curve := i.Curve()
 	rowCoeffs := make([]*cryptography.FieldElement, bp.DegY+1)
 	for l := 0; l <= bp.DegY; l++ {
-		coeffL := cryptography.NewFieldElement(0)
-		iPow := cryptography.NewFieldElement(1)
+		coeffL := curve.Scalar(0)
+		iPow := curve.Scalar(1)
 		for j := 0; j <= bp.DegX; j++ {
 			term := bp.Coeffs[j][l].Mul(iPow)
 			coeffL = coeffL.Add(term)
@@ -203,10 +206,11 @@ func (bp *BivariatePolynomial) RowPolynomial(i *cryptography.FieldElement) *Poly
 // ColPolynomial computes b_i(x) = F(x, i).
 // Degree is <= DegX.
 func (bp *BivariatePolynomial) ColPolynomial(i *cryptography.FieldElement) *Polynomial {
+	curve := i.Curve()
 	colCoeffs := make([]*cryptography.FieldElement, bp.DegX+1)
 	for j := 0; j <= bp.DegX; j++ {
-		coeffJ := cryptography.NewFieldElement(0)
-		iPow := cryptography.NewFieldElement(1)
+		coeffJ := curve.Scalar(0)
+		iPow := curve.Scalar(1)
 		for l := 0; l <= bp.DegY; l++ {
 			term := bp.Coeffs[j][l].Mul(iPow)
 			coeffJ = coeffJ.Add(term)
@@ -216,4 +220,3 @@ func (bp *BivariatePolynomial) ColPolynomial(i *cryptography.FieldElement) *Poly
 	}
 	return &Polynomial{Coeffs: colCoeffs}
 }
-

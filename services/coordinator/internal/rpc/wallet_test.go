@@ -101,8 +101,12 @@ func TestWalletCreationCurveValidation(t *testing.T) {
 		t.Fatalf("failed retrieving wallet list from coordinator store")
 	}
 
-	// Step 8: Verify dispatch routing
-	dispatchRes, dErr := srv.dispatch("saral_getWalletById", []byte(`{"walletId":"`+record.WalletID+`"}`), "")
+	// Unauthenticated lookups may not read wallet metadata through the dispatcher.
+	lookup := []byte(`{"walletId":"` + record.WalletID + `"}`)
+	if _, err := srv.dispatch("saral_getWalletById", lookup, ""); err == nil || err.Code != -32001 {
+		t.Fatalf("expected unauthorized wallet lookup, got: %v", err)
+	}
+	dispatchRes, dErr := srv.handleGetWalletById(lookup)
 	if dErr != nil {
 		t.Fatalf("dispatch error: %v", dErr)
 	}

@@ -30,9 +30,9 @@ export interface InboundTransaction {
 }
 
 export interface MultiChainBalances {
-  mst: string;        // MSTC
-  solana: string;     // SOL
-  bitcoin: string;    // BTC
+  mst: string | null;
+  solana: string | null;
+  bitcoin: string | null;
   lastRefreshedAt: string;
 }
 
@@ -43,8 +43,8 @@ const MST_RPC_URL = process.env.MST_RPC_URL || 'https://testnetrpc.mstblockchain
 const MST_EXPLORER_API = 'https://testnet.mstscan.com/api';
 const MST_EXPLORER_TX = 'https://testnet.mstscan.com/tx';
 
-export async function getMstBalance(address: string): Promise<string> {
-  if (!address || !address.startsWith('0x')) return '0.0000';
+export async function getMstBalance(address: string): Promise<string | null> {
+  if (!/^0x[0-9a-f]{40}$/i.test(address)) return null;
   try {
     const res = await fetch(MST_RPC_URL, {
       method: 'POST',
@@ -57,20 +57,20 @@ export async function getMstBalance(address: string): Promise<string> {
         params: [address.trim(), 'latest'],
       }),
     });
+    if (!res.ok) return null;
     const data = (await res.json()) as any;
-    if (data?.result && typeof data.result === 'string') {
+    if (typeof data?.result === 'string' && /^0x[0-9a-f]+$/i.test(data.result)) {
       const wei = BigInt(data.result);
       // Format 18 decimals into human readable ether
       const divisor = 10n ** 18n;
       const whole = wei / divisor;
       const rem = wei % divisor;
-      const remStr = rem.toString().padStart(18, '0').slice(0, 4);
+      const remStr = rem.toString().padStart(18, '0').replace(/0+$/, '') || '0';
       return `${whole}.${remStr}`;
     }
-    return '0.0000';
-  } catch (err: any) {
-    console.warn('[chainService] MST getBalance RPC warning:', err.message);
-    return '0.0000';
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -117,8 +117,8 @@ export async function getMstTransactions(address: string): Promise<InboundTransa
 // -------------------------------------------------------------
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 
-export async function getSolanaBalance(address: string): Promise<string> {
-  if (!address || address.length < 32) return '0.0000';
+export async function getSolanaBalance(address: string): Promise<string | null> {
+  if (!address || address.length < 32) return null;
   try {
     const res = await fetch(SOLANA_RPC_URL, {
       method: 'POST',
@@ -131,15 +131,17 @@ export async function getSolanaBalance(address: string): Promise<string> {
         params: [address.trim()],
       }),
     });
+    if (!res.ok) return null;
     const data = (await res.json()) as any;
     const lamports = data?.result?.value;
-    if (typeof lamports === 'number') {
-      return (lamports / 1e9).toFixed(4);
+    if (Number.isSafeInteger(lamports) && lamports >= 0) {
+      const units = BigInt(lamports);
+      const divisor = 1_000_000_000n;
+      return `${units / divisor}.${(units % divisor).toString().padStart(9, '0')}`;
     }
-    return '0.0000';
-  } catch (err: any) {
-    console.warn('[chainService] Solana getBalance RPC warning:', err.message);
-    return '0.0000';
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -221,9 +223,9 @@ export async function getSolanaTransactions(address: string): Promise<InboundTra
 const BTC_TESTNET_API = 'https://blockstream.info/testnet/api';
 const BTC_MEMPOOL_API = 'https://mempool.space/testnet/api';
 
-export async function getBitcoinBalance(address: string): Promise<string> {
+export async function getBitcoinBalance(address: string): Promise<string | null> {
   if (!address || (!address.startsWith('tb1') && !address.startsWith('bc1') && !address.startsWith('m') && !address.startsWith('2'))) {
-    return '0.00000000';
+    return null;
   }
   try {
     let res = await fetch(`${BTC_TESTNET_API}/address/${encodeURIComponent(address.trim())}`, {
@@ -236,17 +238,19 @@ export async function getBitcoinBalance(address: string): Promise<string> {
     }
     if (res.ok) {
       const data = (await res.json()) as any;
-      const chainStats = data.chain_stats || {};
-      const mempoolStats = data.mempool_stats || {};
-      const funded = (Number(chainStats.funded_txo_sum) || 0) + (Number(mempoolStats.funded_txo_sum) || 0);
-      const spent = (Number(chainStats.spent_txo_sum) || 0) + (Number(mempoolStats.spent_txo_sum) || 0);
-      const satoshis = Math.max(0, funded - spent);
-      return (satoshis / 1e8).toFixed(8);
+      const chain = data.chain_stats;
+      const mempool = data.mempool_stats;
+      const values = [chain?.funded_txo_sum, chain?.spent_txo_sum, mempool?.funded_txo_sum, mempool?.spent_txo_sum];
+      if (!values.every((value) => Number.isSafeInteger(value) && value >= 0)) return null;
+      const [funded, spent, pendingFunded, pendingSpent] = values.map(BigInt);
+      const satoshis = funded + pendingFunded - spent - pendingSpent;
+      if (satoshis < 0n) return null;
+      const divisor = 100_000_000n;
+      return `${satoshis / divisor}.${(satoshis % divisor).toString().padStart(8, '0')}`;
     }
-    return '0.00000000';
-  } catch (err: any) {
-    console.warn('[chainService] Bitcoin getBalance warning:', err.message);
-    return '0.00000000';
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -313,9 +317,9 @@ export async function getLiveBalances(addresses: {
   bitcoin?: string;
 }): Promise<MultiChainBalances> {
   const [mst, solana, bitcoin] = await Promise.all([
-    addresses.mst ? getMstBalance(addresses.mst) : Promise.resolve('0.0000'),
-    addresses.solana ? getSolanaBalance(addresses.solana) : Promise.resolve('0.0000'),
-    addresses.bitcoin ? getBitcoinBalance(addresses.bitcoin) : Promise.resolve('0.00000000'),
+    addresses.mst ? getMstBalance(addresses.mst) : null,
+    addresses.solana ? getSolanaBalance(addresses.solana) : null,
+    addresses.bitcoin ? getBitcoinBalance(addresses.bitcoin) : null,
   ]);
 
   return {

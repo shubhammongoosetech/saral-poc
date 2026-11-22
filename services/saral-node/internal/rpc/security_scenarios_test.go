@@ -22,6 +22,15 @@ import (
 )
 
 func generateNodeTestToken(priv ed25519.PrivateKey, claims map[string]interface{}) string {
+	claims["iss"] = "saral-auth-server"
+	claims["aud"] = "saral-domain-coordinators"
+	claims["domainRole"] = "operator"
+	claims["dkgSessionId"] = "dkg_sess_001"
+	claims["committeeId"] = "comm_foundation_5"
+	claims["chainFamily"] = "mst"
+	claims["curve"] = "secp256k1"
+	claims["epoch"] = 1
+	claims["policySatisfied"] = true
 	header := map[string]string{"alg": "EdDSA", "typ": "JWT", "kid": "node-test-kid"}
 	hBytes, _ := json.Marshal(header)
 	pBytes, _ := json.Marshal(claims)
@@ -58,23 +67,24 @@ func TestNodeSecurity_ComprehensiveScenarios(t *testing.T) {
 
 	// Save Alice's key share in the vault
 	aliceMeta := vault.ShareRecordMetadata{
-		WalletID:          "wal_alice_1",
-		KeyID:             "key_mst_alice",
-		UserBindingID:     "usr_alice_123",
-		DKGSessionID:      "dkg_sess_001",
-		CommitteeID:       "comm_foundation_5",
-		ParticipantID:     "node-foundation-1",
-		NodeIndex:         1,
-		ChainFamily:       "evm",
-		Curve:             "secp256k1",
-		Threshold:         3,
-		ShareEpoch:        1,
-		State:             "ACTIVE",
-		CreationTimestamp: time.Now().UnixMilli(),
-		RecordVersion:     1,
+		WalletID:                   "wal_alice_1",
+		KeyID:                      "key_mst_alice",
+		UserBindingID:              "usr_alice_123",
+		DKGSessionID:               "dkg_sess_001",
+		CommitteeID:                "comm_foundation_5",
+		ParticipantID:              "node-foundation-1",
+		NodeIndex:                  1,
+		ChainFamily:                "mst",
+		Curve:                      "secp256k1",
+		Threshold:                  3,
+		ShareEpoch:                 1,
+		State:                      "ACTIVE",
+		CreationTimestamp:          time.Now().UnixMilli(),
+		RecordVersion:              2,
+		MasterSigningPublicKeyHash: strings.Repeat("a", 64),
 	}
-	aliceShare := cryptography.NewFieldElement(11223344)
-	aliceBlind := cryptography.NewFieldElement(55667788)
+	aliceShare := cryptography.CurveSecp256k1.Scalar(11223344)
+	aliceBlind := cryptography.CurveSecp256k1.Scalar(55667788)
 	if err := shareStore.SaveKeyShare(aliceMeta, aliceShare, aliceBlind); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +166,7 @@ func TestNodeSecurity_ComprehensiveScenarios(t *testing.T) {
 		}
 		token := generateNodeTestToken(priv, expiredClaims)
 
-		reqBody := `{"keyId":"key_mst_alice","userId":"usr_alice_123"}`
+		reqBody := `{"keyId":"key_mst_alice","userId":"usr_alice_123","walletId":"wal_alice_1","sessionId":"dkg_sess_001","committeeId":"comm_foundation_5","curve":"secp256k1","chainFamily":"mst","epoch":1}`
 		req := httptest.NewRequest("POST", "/node/dkg/share-contribution", strings.NewReader(reqBody))
 		req.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
@@ -184,7 +194,7 @@ func TestNodeSecurity_ComprehensiveScenarios(t *testing.T) {
 		}
 		eveToken := generateNodeTestToken(priv, eveClaims)
 
-		reqBody := `{"keyId":"key_mst_alice","userId":"usr_eve_attacker"}`
+		reqBody := `{"keyId":"key_mst_alice","userId":"usr_eve_attacker","walletId":"wal_alice_1","sessionId":"dkg_sess_001","committeeId":"comm_foundation_5","curve":"secp256k1","chainFamily":"mst","epoch":1}`
 		req := httptest.NewRequest("POST", "/node/dkg/share-contribution", strings.NewReader(reqBody))
 		req.Header.Set("Authorization", "Bearer "+eveToken)
 		w := httptest.NewRecorder()
@@ -200,7 +210,7 @@ func TestNodeSecurity_ComprehensiveScenarios(t *testing.T) {
 	// SCENARIO 17: UNAUTHENTICATED ACCESS DENIAL
 	// -------------------------------------------------------------
 	t.Run("Scenario 17: Unauthenticated Access Denial", func(t *testing.T) {
-		reqBody := `{"keyId":"key_mst_alice","userId":"usr_alice_123"}`
+		reqBody := `{"keyId":"key_mst_alice","userId":"usr_alice_123","walletId":"wal_alice_1","sessionId":"dkg_sess_001","committeeId":"comm_foundation_5","curve":"secp256k1","chainFamily":"mst","epoch":1}`
 		req := httptest.NewRequest("POST", "/node/dkg/share-contribution", strings.NewReader(reqBody))
 		// No Authorization header!
 		w := httptest.NewRecorder()
@@ -228,7 +238,7 @@ func TestNodeSecurity_ComprehensiveScenarios(t *testing.T) {
 		}
 		token := generateNodeTestToken(priv, noMfaClaims)
 
-		reqBody := `{"keyId":"key_mst_alice","userId":"usr_alice_123"}`
+		reqBody := `{"keyId":"key_mst_alice","userId":"usr_alice_123","walletId":"wal_alice_1","sessionId":"dkg_sess_001","committeeId":"comm_foundation_5","curve":"secp256k1","chainFamily":"mst","epoch":1}`
 		req := httptest.NewRequest("POST", "/node/dkg/share-contribution", strings.NewReader(reqBody))
 		req.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
@@ -256,7 +266,7 @@ func TestNodeSecurity_ComprehensiveScenarios(t *testing.T) {
 		}
 		token := generateNodeTestToken(priv, validClaims)
 
-		reqBody := `{"keyId":"key_mst_alice","userId":"usr_alice_123","curve":"secp256k1"}`
+		reqBody := `{"keyId":"key_mst_alice","userId":"usr_alice_123","walletId":"wal_alice_1","sessionId":"dkg_sess_001","committeeId":"comm_foundation_5","curve":"secp256k1","chainFamily":"mst","epoch":1}`
 		req := httptest.NewRequest("POST", "/node/dkg/share-contribution", strings.NewReader(reqBody))
 		req.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
@@ -277,4 +287,3 @@ func TestNodeSecurity_ComprehensiveScenarios(t *testing.T) {
 		t.Logf("✅ Authorized Alice successfully received public point contribution Y_i: %s...", ptHex[:32])
 	})
 }
-

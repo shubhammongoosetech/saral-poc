@@ -44,8 +44,8 @@ export const WorkingPolicy: React.FC = () => {
         if (p.startTime || p.start_time) setStartTime(p.startTime || p.start_time || '09:00');
         if (p.endTime || p.end_time) setEndTime(p.endTime || p.end_time || '18:00');
         if (p.city) setCity(p.city);
-        if (p.lat) setLat(p.lat);
-        if (p.lng) setLng(p.lng);
+        if (p.lat != null) setLat(p.lat);
+        if (p.lng != null) setLng(p.lng);
         if (p.radiusKm) setRadiusKm(p.radiusKm);
       })
       .catch(() => {});
@@ -59,6 +59,10 @@ export const WorkingPolicy: React.FC = () => {
       setLocating(true);
       setError(null);
       const coords = await getCurrentCoords();
+      if (!coords) {
+        setError('Allow location access to detect your working location.');
+        return;
+      }
       setLat(coords.lat);
       setLng(coords.lng);
       try {

@@ -4,7 +4,7 @@ import { useSession } from '@/features/auth/useSession';
 import { useBreakpoint } from '@/shared/hooks/useBreakpoint';
 import { useTheme } from '@/shared/hooks/useTheme';
 import { walletApi } from '@/shared/api/endpoints';
-import { getCurrentCoords } from '@/shared/hooks/useLocation';
+import { mapApiError } from '@/shared/lib/format';
 import { Avatar } from '@/shared/ui/Avatar';
 import {
   IconWallet,
@@ -27,12 +27,13 @@ export const AppLayout: React.FC = () => {
   const handleRetryAccess = async () => {
     try {
       setRetryingAccess(true);
-      const coords = await getCurrentCoords();
-      const res = await walletApi.checkAccess(coords.lat, coords.lng);
+      const res = await walletApi.checkAccess();
       setLastAccessCheck(res);
       if (res.allowed) {
         navigate('/wallet');
       }
+    } catch (error: unknown) {
+      setLastAccessCheck({ allowed: false, reason: mapApiError(error, 'Unable to verify access.') });
     } finally {
       setRetryingAccess(false);
     }

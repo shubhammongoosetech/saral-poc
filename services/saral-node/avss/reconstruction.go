@@ -46,6 +46,7 @@ func ReconstructSecret(
 			ErrThresholdNotMet, len(shares), k)
 	}
 
+	curve := commitMatrix.SecretCommitment().Curve()
 	// 1. Validate distinct indices and verify individual shares against commitments
 	seenIndices := make(map[int]bool)
 	validShares := make([]*ReconstructionShare, 0, len(shares))
@@ -60,7 +61,7 @@ func ReconstructSecret(
 		}
 		seenIndices[sh.NodeIndex] = true
 
-		xFE := cryptography.NewFieldElement(int64(sh.NodeIndex))
+		xFE := curve.Scalar(int64(sh.NodeIndex))
 		// Verify share against C(i, 0)
 		if !commitMatrix.VerifyShare(xFE, sh.Share, sh.BlindShare) {
 			return nil, fmt.Errorf("%w for node %s (index %d)", ErrInvalidShareCommitment, sh.NodeID, sh.NodeIndex)
@@ -79,9 +80,9 @@ func ReconstructSecret(
 	kShares := validShares[:k]
 	kX := allX[:k]
 
-	xTarget := cryptography.NewFieldElement(0)
-	reconstructedSecret := cryptography.NewFieldElement(0)
-	reconstructedBlind := cryptography.NewFieldElement(0)
+	xTarget := curve.Scalar(0)
+	reconstructedSecret := curve.Scalar(0)
+	reconstructedBlind := curve.Scalar(0)
 
 	for i := 0; i < k; i++ {
 		lambda, err := cryptography.LagrangeCoefficient(xTarget, kX[i], kX)
@@ -112,4 +113,3 @@ func ReconstructSecret(
 		ThresholdRequired: k,
 	}, nil
 }
-

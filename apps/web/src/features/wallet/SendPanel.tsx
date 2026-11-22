@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { walletApi } from '@/shared/api/endpoints';
-import { getCurrentCoords } from '@/shared/hooks/useLocation';
-import { mapApiError } from '@/shared/lib/format';
+import { getExplorerTxUrl, mapApiError } from '@/shared/lib/format';
 import { Card } from '@/shared/ui/Card';
 import { Button } from '@/shared/ui/Button';
 import { Input } from '@/shared/ui/Input';
@@ -38,7 +37,6 @@ export const SendPanel: React.FC<SendPanelProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [explorerUrl, setExplorerUrl] = useState<string | null>(null);
 
   const isSolana = network === 'solana-devnet';
   const isPolygon = network === 'polygon-amoy';
@@ -115,17 +113,14 @@ export const SendPanel: React.FC<SendPanelProps> = ({
     try {
       setSubmitting(true);
       setError(null);
-      const coords = await getCurrentCoords();
       const res = await walletApi.signTransaction({
         chain: network,
         toAddress: to.trim(),
         amount: amount.trim(),
-        lat: coords.lat,
-        lng: coords.lng,
       });
 
+      if (!res.broadcasted || !res.txHash) throw new Error('Unable to confirm transaction broadcast.');
       setTxHash(res.txHash);
-      if (res.explorerUrl) setExplorerUrl(res.explorerUrl);
       onSent?.();
     } catch (err: unknown) {
       setError(mapApiError(err, 'Transaction failed'));
@@ -141,12 +136,12 @@ export const SendPanel: React.FC<SendPanelProps> = ({
     setAmountError(null);
     setError(null);
     setTxHash(null);
-    setExplorerUrl(null);
     setIsConfirming(false);
   };
 
   // Render Post-Broadcast Success State
   if (txHash) {
+    const explorerUrl = getExplorerTxUrl(network, txHash);
     return (
       <Card className="flex flex-col gap-4">
         <div className="flex items-center justify-between">

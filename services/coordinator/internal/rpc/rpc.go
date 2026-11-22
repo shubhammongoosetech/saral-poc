@@ -52,6 +52,7 @@ type Server struct {
 	dkgSessions    map[string]*DKGSessionMeta
 	wallets        map[string]*WalletRecord
 	avssMu         sync.RWMutex
+	dkgStartMu     sync.Mutex
 	walletMu       sync.RWMutex
 }
 
@@ -144,7 +145,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
 		s.writeError(w, nil, -32700, "Parse error reading request body")
 		return
@@ -222,29 +223,49 @@ func (s *Server) dispatch(method string, params json.RawMessage, token string) (
 	case "saral_startDkg":
 		return s.handleStartDKG(params, token)
 	case "saral_getDkgStatus":
+		if _, err := s.verifyDKGOperator(token); err != nil {
+			return nil, err
+		}
 		return s.handleGetDKGStatus(params)
 	case "saral_getDkgParticipants":
+		if _, err := s.verifyDKGOperator(token); err != nil {
+			return nil, err
+		}
 		return s.handleGetDKGParticipants(params)
 	case "saral_getDkgPublicKey", "saral_getPublicKey":
+		if _, err := s.verifyDKGOperator(token); err != nil {
+			return nil, err
+		}
 		return s.handleGetDKGPublicKey(params)
 	case "saral_derivePublicKey", "saral_reconstructPublicKey":
 		return s.handleDerivePublicKey(params, token)
 	case "saral_getDkgVerificationStatus":
+		if _, err := s.verifyDKGOperator(token); err != nil {
+			return nil, err
+		}
 		return s.handleGetDKGVerificationStatus(params)
 	case "saral_createWallet":
+		if _, err := s.verifyDKGOperator(token); err != nil {
+			return nil, err
+		}
 		return s.handleCreateWallet(params, token)
 	case "saral_getWallets":
+		if _, err := s.verifyDKGOperator(token); err != nil {
+			return nil, err
+		}
 		return s.handleGetWallets(params)
 	case "saral_getWalletById":
+		if _, err := s.verifyDKGOperator(token); err != nil {
+			return nil, err
+		}
 		return s.handleGetWalletById(params)
 	case "saral_getWalletAddress":
-		return s.handleGetWalletAddress(params)
-	// Cryptographic Stubs - Explicitly NOT_IMPLEMENTED as per Section 8
-	case "saral_signTransaction":
-		return nil, &JsonRpcErr{
-			Code:    -32000,
-			Message: "NOT_IMPLEMENTED: Cryptographic signing and threshold transaction signing are scheduled for future phases.",
+		if _, err := s.verifyDKGOperator(token); err != nil {
+			return nil, err
 		}
+		return s.handleGetWalletAddress(params)
+	case "saral_signTransaction":
+		return s.handleSignTransaction(params, token)
 	default:
 		return nil, &JsonRpcErr{Code: -32601, Message: fmt.Sprintf("Method not found: %s", method)}
 	}

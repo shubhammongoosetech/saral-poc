@@ -11,12 +11,19 @@
 
 import crypto from 'crypto';
 import { DataStore, UserRecord } from '../storage/store';
-import { KeyManager } from '../auth/token';
+import { createAccountSession } from '../auth/accountSession';
+import { verifyGoogleIdentity } from '../auth/google';
+import { canDisplayDevOtp } from '../config/auth';
 
 const store = DataStore.getInstance();
-const keyManager = KeyManager.getInstance();
 
 const PEPPER = process.env.OTP_PEPPER || 'saral-otp-cryptographic-pepper-2026';
+
+export class PhoneAuthError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+  }
+}
 
 export function hashOtp(code: string, userId: string, purpose: string): string {
   return crypto
@@ -30,45 +37,49 @@ export function hashOtp(code: string, userId: string, purpose: string): string {
  * Defaults to India (+91) if 10 digits provided.
  */
 export function normalizeE164(raw: string): string {
-  const digits = raw.replace(/\D/g, '');
-  if (digits.length === 10) {
-    return `+91${digits}`;
-  }
-  if (digits.length === 12 && digits.startsWith('91')) {
-    return `+${digits}`;
-  }
-  if (raw.startsWith('+')) {
-    return `+${digits}`;
-  }
-  return `+91${digits.slice(-10)}`;
+  const phone = raw.trim().replace(/[\s()-]/g, '');
+  if (/^\+[1-9]\d{7,14}$/.test(phone)) return phone;
+  if (/^\d{10}$/.test(phone)) return `+91${phone}`;
+  if (/^91\d{10}$/.test(phone)) return `+${phone}`;
+  throw new PhoneAuthError('Valid mobile number required', 400);
 }
 
 // Track resend cooldowns in-memory
 const cooldowns = new Map<string, number>();
+let cooldownCleanupAt = 0;
 
 export function checkOtpCooldown(mobile: string): void {
-  const lastSent = cooldowns.get(mobile);
   const now = Date.now();
+  if (now >= cooldownCleanupAt) {
+    for (const [number, sentAt] of cooldowns) {
+      if (now - sentAt >= 30_000) cooldowns.delete(number);
+    }
+    cooldownCleanupAt = now + 30_000;
+  }
+  const lastSent = cooldowns.get(mobile);
   if (lastSent && now - lastSent < 30 * 1000) {
     const remaining = Math.ceil((30 * 1000 - (now - lastSent)) / 1000);
-    throw new Error(`Please wait ${remaining} seconds before requesting a new OTP.`);
+    throw new PhoneAuthError(`Please wait ${remaining} seconds before requesting a new OTP.`, 429);
   }
+  cooldowns.delete(mobile);
 }
 
 /**
  * Requests a mobile login OTP.
  */
-export function requestPhoneOtp(mobileRaw: string): {
+export async function requestPhoneOtp(mobileRaw: string): Promise<{
   success: boolean;
   mobile: string;
   cooldownSeconds: number;
   devOtp?: string;
-} {
+}> {
+  if (!canDisplayDevOtp()) throw new PhoneAuthError('SMS code delivery is unavailable', 503);
   const mobile = normalizeE164(mobileRaw);
   checkOtpCooldown(mobile);
+  cooldowns.set(mobile, Date.now());
 
   // 1. Resolve or create user identity
-  let user = store.findUserByMobile(mobile);
+  let user = await store.findPersistedUser({ mobile });
   if (!user) {
     user = {
       id: crypto.randomUUID(),
@@ -77,7 +88,7 @@ export function requestPhoneOtp(mobileRaw: string): {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    store.saveUser(user);
+    await store.saveUser(user);
   }
 
   // 2. Generate cryptographically secure 6-digit OTP
@@ -87,12 +98,12 @@ export function requestPhoneOtp(mobileRaw: string): {
   // Invalidate any old OTPs for this purpose
   const existingOtp = store.getActiveOtp(user.id, 'login');
   if (existingOtp) {
-    store.markOtpUsed(existingOtp.id);
+    await store.markOtpUsed(existingOtp.id);
   }
 
   // Save new OTP challenge
   const otpId = crypto.randomUUID();
-  store.saveOtp({
+  await store.saveOtp({
     id: otpId,
     userId: user.id,
     mobile,
@@ -103,11 +114,6 @@ export function requestPhoneOtp(mobileRaw: string): {
     attempts: 0,
     createdAt: Date.now(),
   });
-
-  cooldowns.set(mobile, Date.now());
-
-  // In development, expose devOtp for automated test fixtures & local developer UI
-  const isDev = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' || !process.env.NODE_ENV;
 
   store.logSecurity({
     id: crypto.randomUUID(),
@@ -122,24 +128,25 @@ export function requestPhoneOtp(mobileRaw: string): {
     success: true,
     mobile,
     cooldownSeconds: 30,
-    devOtp: isDev ? otpCode : undefined,
+    devOtp: otpCode,
   };
 }
 
 /**
  * Verifies mobile phone OTP.
  */
-export function verifyPhoneOtp(
+export async function verifyPhoneOtp(
   mobileRaw: string,
   code: string
-): {
+): Promise<{
   user: UserRecord;
   token: string;
   mfaEnrolled: boolean;
   mfaVerified: boolean;
   hasPolicy: boolean;
   hasWallet: boolean;
-} {
+}> {
+  if (!canDisplayDevOtp()) throw new PhoneAuthError('SMS code delivery is unavailable', 503);
   const mobile = normalizeE164(mobileRaw);
   const user = store.findUserByMobile(mobile);
   if (!user) {
@@ -152,7 +159,7 @@ export function verifyPhoneOtp(
   }
 
   if (activeOtp.attempts >= 5) {
-    store.markOtpUsed(activeOtp.id);
+    await store.markOtpUsed(activeOtp.id);
     throw new Error('Too many failed attempts. This OTP is now invalidated.');
   }
 
@@ -168,15 +175,15 @@ export function verifyPhoneOtp(
   }
 
   // Success: mark used
-  store.markOtpUsed(activeOtp.id);
+  if (!await store.markOtpUsed(activeOtp.id)) throw new Error('Invalid or expired OTP code');
 
   // Check user status
-  const mfa = store.getMfa(user.id);
-  const policy = store.getPolicy(user.id);
-  const wallet = store.getWalletByUserId(user.id);
+  const [mfa, policy, wallet] = await Promise.all([
+    store.findPersistedMfa(user.id), store.loadPolicy(user.id), store.loadWallet(user.id),
+  ]);
 
   // Issue temporary primary auth token (mfaVerified: false until MFA completes)
-  const token = keyManager.issueToken(user.id, 'operator', false);
+  const token = await createAccountSession(user.id, false);
 
   store.logSecurity({
     id: crypto.randomUUID(),
@@ -199,45 +206,20 @@ export function verifyPhoneOtp(
 /**
  * Google Sign-In verification.
  */
-export function verifyGoogleToken(idToken: string): {
+export async function verifyGoogleToken(idToken: string, nonce?: string): Promise<{
   user: UserRecord;
   token: string;
   mfaEnrolled: boolean;
   mfaVerified: boolean;
   hasPolicy: boolean;
   hasWallet: boolean;
-} {
-  if (!idToken || typeof idToken !== 'string') {
-    throw new Error('Invalid Google credential token');
-  }
-
-  let googleId = '';
-  let email = '';
-  let name = '';
-
-  // In test or local dev without Google credentials, support simulated JWT format
-  try {
-    const parts = idToken.split('.');
-    if (parts.length === 3) {
-      const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
-      googleId = payload.sub || payload.id || `google-user-${crypto.randomBytes(4).toString('hex')}`;
-      email = payload.email || `${googleId}@saral.network`;
-      name = payload.name || 'SARAL Operator';
-    } else {
-      googleId = `google-${crypto.createHash('sha256').update(idToken).digest('hex').substring(0, 16)}`;
-      email = `${googleId}@example.com`;
-      name = 'Google User';
-    }
-  } catch (_) {
-    googleId = `google-${crypto.createHash('sha256').update(idToken).digest('hex').substring(0, 16)}`;
-    email = `${googleId}@example.com`;
-    name = 'Google User';
-  }
-
-  // Find by googleId or email
-  let user = store.findUserByGoogleId(googleId) || (email ? store.findUserByEmail(email) : null);
+}> {
+  const { subject: googleId, email, name } = await verifyGoogleIdentity(idToken, nonce);
+  let user = await store.findPersistedUser({ googleId });
 
   if (!user) {
+    const emailOwner = email ? await store.findPersistedUser({ email }) : null;
+    if (emailOwner) throw new Error('This email is already associated with a different account');
     user = {
       id: crypto.randomUUID(),
       name,
@@ -247,21 +229,20 @@ export function verifyGoogleToken(idToken: string): {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    store.saveUser(user);
-  } else {
-    // Update missing fields
-    if (!user.googleId) user.googleId = googleId;
-    if (!user.email && email) user.email = email;
-    if (!user.name && name) user.name = name;
-    user.updatedAt = new Date().toISOString();
-    store.saveUser(user);
+    try {
+      await store.saveUser(user);
+    } catch (err) {
+      if (typeof err !== 'object' || !err || !('code' in err) || err.code !== 'P2002') throw err;
+      user = await store.findPersistedUser({ googleId });
+      if (!user) throw err;
+    }
   }
 
-  const mfa = store.getMfa(user.id);
-  const policy = store.getPolicy(user.id);
-  const wallet = store.getWalletByUserId(user.id);
+  const [mfa, policy, wallet] = await Promise.all([
+    store.findPersistedMfa(user.id), store.loadPolicy(user.id), store.loadWallet(user.id),
+  ]);
 
-  const token = keyManager.issueToken(user.id, 'operator', false);
+  const token = await createAccountSession(user.id, false);
 
   store.logSecurity({
     id: crypto.randomUUID(),
@@ -284,31 +265,18 @@ export function verifyGoogleToken(idToken: string): {
 /**
  * Links an additional authentication method (Google or Phone) to an existing user.
  */
-export function linkAccount(
+export async function linkAccount(
   userId: string,
   targetMethod: 'google' | 'mobile',
   identifier: string
-): { success: boolean; user: UserRecord } {
-  const user = store.findUserById(userId);
-  if (!user) throw new Error('User not found');
-
-  if (targetMethod === 'google') {
-    const existing = store.findUserByGoogleId(identifier);
-    if (existing && existing.id !== userId) {
-      throw new Error('This Google account is already linked to another SARAL identity.');
-    }
-    user.googleId = identifier;
-  } else if (targetMethod === 'mobile') {
-    const mobile = normalizeE164(identifier);
-    const existing = store.findUserByMobile(mobile);
-    if (existing && existing.id !== userId) {
-      throw new Error('This mobile number is already linked to another SARAL identity.');
-    }
-    user.mobile = mobile;
+): Promise<{ success: boolean; user: UserRecord }> {
+  if (targetMethod !== 'google') throw new Error('Mobile account linking requires verified SMS delivery');
+  const { subject } = await verifyGoogleIdentity(identifier);
+  const existing = await store.findPersistedUser({ googleId: subject });
+  if (existing && existing.id !== userId) {
+    throw new Error('This Google account is already linked to another SARAL identity.');
   }
-
-  user.updatedAt = new Date().toISOString();
-  store.saveUser(user);
+  const user = await store.attachGoogleIdentity(userId, subject);
 
   store.logSecurity({
     id: crypto.randomUUID(),

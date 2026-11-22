@@ -18,6 +18,9 @@ import (
 
 // ScopedTokenClaims represents verified claims in an authorization token
 type ScopedTokenClaims struct {
+	Issuer          string `json:"iss"`
+	Audience        string `json:"aud"`
+	Role            string `json:"domainRole"`
 	Sub             string `json:"sub"`
 	UserID          string `json:"userId"`
 	WalletID        string `json:"walletId"`
@@ -26,6 +29,7 @@ type ScopedTokenClaims struct {
 	CommitteeID     string `json:"committeeId"`
 	ChainFamily     string `json:"chainFamily"`
 	Curve           string `json:"curve"`
+	Epoch           uint64 `json:"epoch"`
 	Operation       string `json:"operation"`
 	MFAVerified     bool   `json:"mfaVerified"`
 	PolicySatisfied bool   `json:"policySatisfied"`
@@ -108,10 +112,10 @@ func (v *NodeTokenVerifier) LoadPublicKey() error {
 		}
 		for _, ep := range endpoints {
 			resp, err := client.Get(ep)
-			if err == nil && resp.StatusCode == http.StatusOK {
-				body, _ := io.ReadAll(resp.Body)
+			if err == nil {
+				body, readErr := io.ReadAll(io.LimitReader(resp.Body, 65537))
 				resp.Body.Close()
-				if len(body) > 0 {
+				if resp.StatusCode == http.StatusOK && readErr == nil && len(body) > 0 && len(body) <= 65536 {
 					keyBytes = body
 					break
 				}
@@ -138,6 +142,7 @@ func (v *NodeTokenVerifier) LoadPublicKey() error {
 			} `json:"keys"`
 		}
 		if err := json.Unmarshal(keyBytes, &jwks); err == nil && len(jwks.Keys) > 0 {
+			keys := make(map[string]ed25519.PublicKey)
 			for _, k := range jwks.Keys {
 				if k.Kty == "OKP" && strings.EqualFold(k.Crv, "Ed25519") {
 					raw, decErr := base64.RawURLEncoding.DecodeString(k.X)
@@ -146,17 +151,17 @@ func (v *NodeTokenVerifier) LoadPublicKey() error {
 					}
 					if decErr == nil && len(raw) == ed25519.PublicKeySize {
 						pub := ed25519.PublicKey(raw)
-						kid := k.Kid
-						if kid == "" {
-							kid = "saral-auth-ed25519-2026-01"
-						}
-						v.keysByKid[kid] = pub
-						if len(v.defaultKey) == 0 {
-							v.defaultKey = pub
+						if k.Kid != "" {
+							keys[k.Kid] = pub
 						}
 					}
 				}
 			}
+			if len(keys) == 0 {
+				return errors.New("JWKS contains no trusted Ed25519 keys")
+			}
+			v.keysByKid = keys
+			v.defaultKey = nil
 			v.lastLoaded = time.Now()
 			return nil
 		}
@@ -261,12 +266,20 @@ func (v *NodeTokenVerifier) VerifyScopedToken(tokenStr string) (*ScopedTokenClai
 		return nil, errors.New("invalid EdDSA token signature")
 	}
 
-	// 5. Check expiry (with 10-second grace window)
+	// 5. Check that the token belongs to this service and has a valid lifetime.
 	now := time.Now().Unix()
-	if claims.Exp != 0 && claims.Exp < now-10 {
-		return nil, errors.New("token expired")
+	issuer := os.Getenv("SARAL_JWT_ISSUER")
+	if issuer == "" {
+		issuer = "saral-auth-server"
+	}
+	audience := os.Getenv("SARAL_JWT_AUDIENCE")
+	if audience == "" {
+		audience = "saral-domain-coordinators"
+	}
+	if claims.Issuer != issuer || claims.Audience != audience || claims.Role != "operator" ||
+		claims.Exp <= now || claims.Iat <= 0 || claims.Iat > now+5 || claims.Exp <= claims.Iat {
+		return nil, errors.New("invalid token scope or lifetime")
 	}
 
 	return &claims, nil
 }
-

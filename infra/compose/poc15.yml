@@ -10,13 +10,22 @@ services:
     environment:
       PORT: 3001
       NODE_ENV: development
-      ENABLE_DEV_AUTH: "true"
+      ENABLE_DEV_AUTH: "${ENABLE_DEV_AUTH:-false}"
+      COORDINATOR_URL: http://coordinator-foundation:9001
+      COORDINATOR_PUBLIC_URL: http://coordinator-public:9002
+      COORDINATOR_PRIVATE_URL: http://coordinator-private:9003
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      MFA_ENCRYPTION_KEY: "${MFA_ENCRYPTION_KEY:-}"
+      KEY_DIR: /run/secrets
       DATABASE_URL: "postgresql://saral:saral_secret@host.docker.internal:5432/saral"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     secrets: [saral_admin_key]
+    volumes:
+      - '../../infra/config/auth_ed25519_private_key.pem:/run/secrets/auth_ed25519_private_key.pem:ro'
+      - '../../infra/config/auth_ed25519_public_key.pem:/run/secrets/auth_ed25519_public_key.pem:ro'
     ports:
-      - '3001:3001'
+      - '127.0.0.1:3001:3001'
     networks:
       - saral-mesh
     healthcheck:
@@ -104,7 +113,7 @@ services:
       PEER_NODES: http://node-f2:8001,http://node-p1:8001,http://node-r1:8001
     volumes: ['node_f1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro']
     ports:
-      - '8443:8443'
+      - '127.0.0.1:8443:8443'
     secrets: [saral_internal_token, saral_admin_key, saral_genesis_participants, auth_ed25519_pub]
     networks: [saral-mesh]
     healthcheck:
@@ -427,7 +436,7 @@ services:
       PEER_COORDINATORS: http://coordinator-public:9002,http://coordinator-private:9003
       NODE_ADDRS: http://node-f1:8001,http://node-f2:8001,http://node-f3:8001,http://node-f4:8001,http://node-f5:8001
     ports:
-      - '9001:9001'
+      - '127.0.0.1:9001:9001'
       - '9443:9443'
     depends_on:
       verifier-foundation:
@@ -456,7 +465,7 @@ services:
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-private:9003
       NODE_ADDRS: http://node-p1:8001,http://node-p2:8001,http://node-p3:8001,http://node-p4:8001,http://node-p5:8001
     ports:
-      - '9002:9002'
+      - '127.0.0.1:9002:9002'
       - '9444:9443'
     depends_on:
       verifier-public:
@@ -485,7 +494,7 @@ services:
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-public:9002
       NODE_ADDRS: http://node-r1:8001,http://node-r2:8001,http://node-r3:8001,http://node-r4:8001,http://node-r5:8001
     ports:
-      - '9003:9003'
+      - '127.0.0.1:9003:9003'
       - '9445:9443'
     depends_on:
       verifier-private:
@@ -509,7 +518,7 @@ services:
     container_name: saral-web
     restart: unless-stopped
     ports:
-      - '3000:80'
+      - '127.0.0.1:3000:80'
     depends_on:
       auth-server:
         condition: service_healthy

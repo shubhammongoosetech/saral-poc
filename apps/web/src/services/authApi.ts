@@ -7,7 +7,15 @@ export interface RequestOtpResponse {
   message?: string;
 }
 
+export interface LoginOptions {
+  googleClientId: string | null;
+  developmentOtpEnabled: boolean;
+}
+
 export const authApi = {
+  getLoginOptions: (signal?: AbortSignal): Promise<LoginOptions> =>
+    httpClient.get('/auth/login-options', { signal }),
+
   loginWithGoogle: async (credential: string): Promise<AuthResponse> => {
     return httpClient.post<AuthResponse>('/auth/google', { credential });
   },
@@ -26,9 +34,9 @@ export const authApi = {
 
   logout: async (): Promise<void> => {
     try {
-      await httpClient.post('/auth/logout');
+      await httpClient.post('/auth/logout', undefined, { keepalive: true });
     } catch {
-      // Backend uses stateless JWT session
+      // Local sign-out remains available if the server cannot be reached.
     }
   },
 };

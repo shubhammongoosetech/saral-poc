@@ -1,26 +1,13 @@
 import crypto from 'crypto';
+import { decodeSecp256k1Point } from './secp256k1';
 
 // secp256k1 curve parameters
 const P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2Fn;
 const N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n;
-const Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798n;
-const Gy = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8n;
 
 function mod(a: bigint, m: bigint = P): bigint {
   const r = a % m;
   return r >= 0n ? r : r + m;
-}
-
-function modPow(base: bigint, exp: bigint, m: bigint = P): bigint {
-  let res = 1n;
-  let b = base % m;
-  let e = exp;
-  while (e > 0n) {
-    if (e & 1n) res = (res * b) % m;
-    b = (b * b) % m;
-    e >>= 1n;
-  }
-  return res;
 }
 
 function modInverse(k: bigint, m: bigint = P): bigint {
@@ -57,21 +44,6 @@ function pointAdd(p1: Point | null, p2: Point | null): Point | null {
   const x3 = mod(m * m - p1.x - p2.x);
   const y3 = mod(m * (p1.x - x3) - p1.y);
   return { x: x3, y: y3 };
-}
-
-function scalarMult(k: bigint, pt: Point = { x: Gx, y: Gy }): Point {
-  let res: Point | null = null;
-  let curr: Point | null = pt;
-  let n = mod(k, N);
-  while (n > 0n) {
-    if (n & 1n) {
-      res = pointAdd(res, curr);
-    }
-    curr = pointAdd(curr, curr);
-    n >>= 1n;
-  }
-  if (!res) throw new Error('Result of scalar multiplication is point at infinity');
-  return res;
 }
 
 // BIP-340 / BIP-341 Tagged Hash: SHA256(SHA256(tag) || SHA256(tag) || msg)
@@ -158,36 +130,9 @@ export function deriveBitcoinTaprootAddressFromPublicKey(
   pubKey: Buffer | string,
   hrp: string = 'tb'
 ): string {
-  let buf: Buffer;
-  if (typeof pubKey === 'string') {
-    buf = Buffer.from(pubKey.replace(/^0x/, ''), 'hex');
-  } else {
-    buf = pubKey;
-  }
-
-  let px: bigint;
-  let py: bigint;
-
-  if (buf.length === 65 && buf[0] === 0x04) {
-    px = BigInt('0x' + buf.subarray(1, 33).toString('hex'));
-    py = BigInt('0x' + buf.subarray(33, 65).toString('hex'));
-  } else if (buf.length === 64) {
-    px = BigInt('0x' + buf.subarray(0, 32).toString('hex'));
-    py = BigInt('0x' + buf.subarray(32, 64).toString('hex'));
-  } else if (buf.length === 33 && (buf[0] === 0x02 || buf[0] === 0x03)) {
-    px = BigInt('0x' + buf.subarray(1, 33).toString('hex'));
-    // Recover y from curve equation y^2 = x^3 + 7 (mod p)
-    const ySq = mod(px * px * px + 7n);
-    let y = modPow(ySq, (P + 1n) / 4n, P); // p = 3 (mod 4)
-    if ((y & 1n) !== BigInt(buf[0] & 1)) {
-      y = mod(P - y);
-    }
-    py = y;
-  } else {
-    throw new Error(
-      `Invalid secp256k1 public key for Taproot derivation: expected 64-byte raw coordinates, 65-byte uncompressed point, or 33-byte compressed point. Got ${buf.length} bytes. Arbitrary byte buffers are strictly rejected.`
-    );
-  }
+  const point = decodeSecp256k1Point(pubKey);
+  const px = BigInt('0x' + point.subarray(1, 33).toString('hex'));
+  let py = BigInt('0x' + point.subarray(33).toString('hex'));
 
   // Lift X: If Y is odd, negate Y so P has even Y coordinate (BIP-340 / BIP-341 convention)
   if ((py & 1n) === 1n) {
@@ -198,9 +143,16 @@ export function deriveBitcoinTaprootAddressFromPublicKey(
   const tweakBytes = taggedHash('TapTweak', pxBuf);
   const tweakScalar = BigInt('0x' + tweakBytes.toString('hex'));
 
-  // Q = P + t * G
-  const tG = scalarMult(tweakScalar);
-  const Q = pointAdd({ x: px, y: py }, tG);
+  if (tweakScalar >= N) throw new Error('Taproot tweak scalar is outside the group order');
+  if (tweakScalar === 0n) return encodeTaprootAddress(hrp, pxBuf);
+
+  const ecdh = crypto.createECDH('secp256k1');
+  ecdh.setPrivateKey(tweakBytes);
+  const tG = ecdh.getPublicKey();
+  const Q = pointAdd({ x: px, y: py }, {
+    x: BigInt('0x' + tG.subarray(1, 33).toString('hex')),
+    y: BigInt('0x' + tG.subarray(33).toString('hex')),
+  });
   if (!Q) {
     throw new Error('Taproot tweak resulted in point at infinity');
   }

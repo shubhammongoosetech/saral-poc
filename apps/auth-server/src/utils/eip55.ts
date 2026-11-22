@@ -1,30 +1,11 @@
-import crypto from 'crypto';
-
-const P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2Fn;
-
-function mod(a: bigint, m: bigint = P): bigint {
-  const r = a % m;
-  return r >= 0n ? r : r + m;
-}
-
-function modPow(base: bigint, exp: bigint, m: bigint = P): bigint {
-  let res = 1n;
-  let b = base % m;
-  let e = exp;
-  while (e > 0n) {
-    if (e & 1n) res = (res * b) % m;
-    b = (b * b) % m;
-    e >>= 1n;
-  }
-  return res;
-}
+import { keccak_256 } from '@noble/hashes/sha3';
+import { decodeSecp256k1Point } from './secp256k1';
 
 /**
- * Computes standard Keccak-256 hash. Strictly fails closed if keccak-256 is unavailable.
- * Never falls back to SHA-256.
+ * Computes legacy Keccak-256, as required for EVM addresses and EIP-55.
  */
 export function keccak256(data: Buffer | string): Buffer {
-  return crypto.createHash('keccak-256').update(data).digest();
+  return Buffer.from(keccak_256(data));
 }
 
 /**
@@ -62,37 +43,7 @@ export function toEip55Checksum(addrLower: string): string {
  * Never accepts arbitrary 32-byte hashes or seeds.
  */
 export function deriveEvmAddressFromPublicKey(pubKey: Buffer | string): string {
-  let buf: Buffer;
-  if (typeof pubKey === 'string') {
-    buf = Buffer.from(pubKey.replace(/^0x/, ''), 'hex');
-  } else {
-    buf = pubKey;
-  }
-
-  // 65-byte uncompressed point (0x04 || X || Y)
-  if (buf.length === 65 && buf[0] === 0x04) {
-    buf = buf.subarray(1);
-  } else if (buf.length === 33 && (buf[0] === 0x02 || buf[0] === 0x03)) {
-    // 33-byte compressed point: decompress Y using curve equation y^2 = x^3 + 7 (mod p)
-    const prefix = buf[0];
-    const px = BigInt('0x' + buf.subarray(1, 33).toString('hex'));
-    const ySq = mod(px * px * px + 7n);
-    let py = modPow(ySq, (P + 1n) / 4n, P);
-    if ((py & 1n) !== BigInt(prefix & 1)) {
-      py = mod(P - py);
-    }
-    const xBuf = Buffer.from(px.toString(16).padStart(64, '0'), 'hex');
-    const yBuf = Buffer.from(py.toString(16).padStart(64, '0'), 'hex');
-    buf = Buffer.concat([xBuf, yBuf]);
-  }
-
-  if (buf.length !== 64) {
-    throw new Error(
-      `Invalid secp256k1 public key length ${buf.length} bytes: expected 64-byte raw coordinates, 65-byte uncompressed point (0x04), or 33-byte compressed point (0x02/0x03). Arbitrary seeds are strictly prohibited.`
-    );
-  }
-
-  const h = keccak256(buf);
+  const h = keccak256(decodeSecp256k1Point(pubKey).subarray(1));
   const rawAddr = h.subarray(12, 32).toString('hex');
   return toEip55Checksum(rawAddr);
 }

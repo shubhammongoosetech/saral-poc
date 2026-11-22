@@ -17,7 +17,7 @@ export class MfaRepository {
     verifiedAt?: Date;
   }): Promise<MFAEnrollment> {
     return prisma.mFAEnrollment.upsert({
-      where: { userId: data.userId },
+      where: { userId: data.userId, verifiedAt: null },
       create: {
         userId: data.userId,
         type: data.type || 'totp',
@@ -51,18 +51,12 @@ export class MfaRepository {
   }
 
   public async consumeRecoveryCode(mfaId: string, codeHash: string): Promise<boolean> {
-    const code = await prisma.mFARecoveryCode.findFirst({
-      where: { mfaId, codeHash, used: false },
-    });
-
-    if (!code) return false;
-
-    await prisma.mFARecoveryCode.update({
-      where: { id: code.id },
+    const updated = await prisma.mFARecoveryCode.updateMany({
+      where: { mfaId, codeHash, used: false, mfa: { recoveryCodesHashed: { has: codeHash } } },
       data: { used: true, usedAt: new Date() },
     });
 
-    return true;
+    return updated.count === 1;
   }
 }
 

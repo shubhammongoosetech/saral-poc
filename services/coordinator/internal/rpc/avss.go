@@ -89,6 +89,10 @@ func (s *Server) getNodeEndpoint(nodeID string) string {
 }
 
 // postNodeJSON dispatches an authenticated HTTP POST request to a node endpoint
+func noNodeRedirect(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 func (s *Server) postNodeJSON(url string, reqBody interface{}, respDest interface{}) error {
 	return s.postNodeJSONWithAuth(url, reqBody, respDest, "")
 }
@@ -100,7 +104,7 @@ func (s *Server) postNodeJSONWithAuth(url string, reqBody interface{}, respDest 
 		return err
 	}
 
-	client := &http.Client{Timeout: 6 * time.Second}
+	client := &http.Client{Timeout: 6 * time.Second, CheckRedirect: noNodeRedirect}
 	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
 	if err != nil {
 		return err
@@ -132,7 +136,7 @@ func (s *Server) postNodeJSONWithAuth(url string, reqBody interface{}, respDest 
 
 // getNodeJSON dispatches an authenticated HTTP GET request to a node endpoint
 func (s *Server) getNodeJSON(url string, respDest interface{}) error {
-	client := &http.Client{Timeout: 6 * time.Second}
+	client := &http.Client{Timeout: 6 * time.Second, CheckRedirect: noNodeRedirect}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
@@ -284,11 +288,11 @@ func (s *Server) handleCreateAVSSSession(params json.RawMessage, token string) (
 	}
 
 	var dealerResp struct {
-		Success          bool        `json:"success"`
-		SessionID        string      `json:"sessionId"`
-		Commitments      [][]string  `json:"commitments"`
-		SecretCommitment string      `json:"secretCommitment"`
-		Error            string      `json:"error,omitempty"`
+		Success          bool       `json:"success"`
+		SessionID        string     `json:"sessionId"`
+		Commitments      [][]string `json:"commitments"`
+		SecretCommitment string     `json:"secretCommitment"`
+		Error            string     `json:"error,omitempty"`
 	}
 
 	if err := s.postNodeJSON(dealerEp+"/node/avss/dealer/start", dealerPayload, &dealerResp); err != nil {

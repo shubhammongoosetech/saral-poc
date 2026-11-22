@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { prisma } from '../../apps/auth-server/src/database/prisma';
 import { DataStore } from '../../apps/auth-server/src/storage/store';
 import { saralBackendClient } from '../../apps/auth-server/src/clients/saralBackendClient';
+import { ED25519_TEST_PUBKEY, SECP256K1_TEST_PUBKEY, MESH_TEST_PUBLIC_KEYS, mockWalletCoordinator } from './walletFixtures';
 import {
   createOrGetWallet,
   recomputeWalletAddressesFromShares,
@@ -10,6 +11,7 @@ import {
   deriveMultiChainAddresses,
   isLegacyHmacAddress,
   calculateLegacyHmacAddress,
+  signTransaction,
 } from '../../apps/auth-server/src/services/walletService';
 import {
   toEip55Checksum,
@@ -29,72 +31,19 @@ import { getLiveBalances, getLiveActivity } from '../../apps/auth-server/src/ser
 
 describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fix Suite', () => {
   const store = DataStore.getInstance();
+  const fixtureUserId = crypto.randomUUID();
   let createdWalletId: string;
   let initialAddresses: ReturnType<typeof deriveMultiChainAddresses>;
 
-  // Verified DKG Aggregate Public Keys
-  const SECP256K1_TEST_PUBKEY =
-    '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8';
-  const ED25519_TEST_PUBKEY =
-    '042169367072777666f3593f95feb28688789dd6b04e7cf45cb08f6ec91449bdf16666666666666666666666666666666666666666666666666666666666666658';
-
   beforeAll(async () => {
     // Configure mock DKG Coordinator response returning verified public keys
-    vi.spyOn(saralBackendClient, 'startDkg').mockResolvedValue({
-      success: true,
-      sessionId: 'sess-1',
-      committeeId: 'committee-foundation',
-      state: 'COMPLETED',
-      n: 5,
-      k: 3,
-      t: 1,
-      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
-    });
-    vi.spyOn(saralBackendClient, 'getDkgStatus').mockResolvedValue({
-      sessionId: 'sess-1',
-      committeeId: 'committee-foundation',
-      epoch: 1,
-      n: 5,
-      k: 3,
-      t: 1,
-      state: 'COMPLETED',
-      completedNodes: 5,
-      totalNodes: 5,
-      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
-    });
-    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
-      if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
-        return {
-          success: true,
-          walletId: params.walletId,
-          keyId: params.keyId,
-          sessionId: params.dkgSessionId || 'sess-1',
-          committeeId: 'committee-foundation',
-          epoch: 1,
-          curve: 'ed25519',
-          threshold: 3,
-          masterPublicKey: ED25519_TEST_PUBKEY,
-        };
-      }
-      return {
-        success: true,
-        walletId: params.walletId,
-        keyId: params.keyId,
-        sessionId: params.dkgSessionId || 'sess-1',
-        committeeId: 'committee-foundation',
-        epoch: 1,
-        curve: 'secp256k1',
-        threshold: 3,
-        masterPublicKey: SECP256K1_TEST_PUBKEY,
-      };
-    });
+    mockWalletCoordinator();
 
     // Setup test user in database
-    await prisma.user.deleteMany({ where: { email: 'sec-audit@saral.network' } });
     const user = await prisma.user.create({
       data: {
-        id: crypto.randomUUID(),
-        email: 'sec-audit@saral.network',
+        id: fixtureUserId,
+        email: `sec-audit-${fixtureUserId}@saral.network`,
         mobile: `+9198${Date.now().toString().slice(-8)}`,
         loginMethod: 'mobile',
       },
@@ -107,7 +56,31 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
   });
 
   afterAll(async () => {
-    await prisma.user.deleteMany({ where: { email: 'sec-audit@saral.network' } });
+    await prisma.user.deleteMany({ where: { id: fixtureUserId } });
+  });
+
+  it('resumes persisted chain sessions after a transient address derivation failure', async () => {
+    const user = await prisma.user.create({ data: { id: crypto.randomUUID(), loginMethod: 'google' } });
+    const start = vi.mocked(saralBackendClient.startDkg);
+    const callsBefore = start.mock.calls.length;
+    vi.mocked(saralBackendClient.derivePublicKey).mockRejectedValueOnce(new Error('Temporary coordinator failure'));
+    try {
+      await expect(createOrGetWallet(user.id)).rejects.toThrow('Temporary coordinator failure');
+      const reserved = await store.loadWallet(user.id);
+      expect(reserved?.status).toBe('KEY_READY');
+      const resumed = await createOrGetWallet(user.id);
+      expect(resumed.wallet.status).toBe('READY');
+      expect(resumed.wallet.walletId).toBe(reserved?.walletId);
+      expect(resumed.wallet.keyReferences).toEqual(reserved?.keyReferences);
+      expect(start.mock.calls.length - callsBefore).toBe(9);
+      expect(new Set(start.mock.calls.slice(callsBefore).map(([params]) => params?.sessionId)).size).toBe(9);
+      const returning = await createOrGetWallet(user.id);
+      expect(returning.isNew).toBe(false);
+      expect(returning.addresses).toEqual(resumed.addresses);
+      expect(start.mock.calls.length - callsBefore).toBe(9);
+    } finally {
+      await prisma.user.delete({ where: { id: user.id } });
+    }
   });
 
   // -------------------------------------------------------------
@@ -131,20 +104,18 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
     // Verify distinct opaque key references (NOT public keys, NOT addresses)
     const keyRefs = res.wallet.keyReferences;
     expect(keyRefs).toBeDefined();
-    expect(keyRefs.mst).toMatch(/^key-mst-/);
-    expect(keyRefs.solana).toMatch(/^key-sol-/);
-    expect(keyRefs.bitcoin).toMatch(/^key-btc-/);
-    expect(keyRefs.mst).not.toMatch(/^0x/);
-    expect(keyRefs.mst).not.toMatch(/^04/);
+    expect(Object.keys(keyRefs.mesh ?? {}).sort()).toEqual(['foundation', 'private', 'public']);
+    const keys = Object.values(keyRefs.mesh ?? {}).flatMap(Object.values);
+    expect(keys).toHaveLength(9);
+    expect(new Set(keys.map(({ keyId }) => keyId)).size).toBe(9);
+    expect(keys.every(({ keyId }) => keyId.startsWith('key-'))).toBe(true);
 
     // Verify addresses are marked dkgBacked and match genuine cryptography
     expect(res.addresses.mst.dkgBacked).toBe(true);
     expect(res.addresses.solana.dkgBacked).toBe(true);
     expect(res.addresses.bitcoin.dkgBacked).toBe(true);
 
-    expect(res.addresses.mst.address).toBe('0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf');
-    expect(res.addresses.solana.address).toBe('6x5SYnLroiN7WYq8NQYU9KHcH4YjpBbwpUfVu3EB7igV');
-    expect(res.addresses.bitcoin.address).toBe('tb1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssk79hv2');
+    expect(res.addresses).toEqual(deriveMultiChainAddresses(res.wallet.walletId, MESH_TEST_PUBLIC_KEYS));
 
     await prisma.user.delete({ where: { id: user.id } });
   });
@@ -153,7 +124,7 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
   // TEST 2: SAME ADDRESS AFTER LOGOUT / LOGIN
   // -------------------------------------------------------------
   it('Test 2: Returning user derives exact same address without creating new DKG secret', async () => {
-    const user = await prisma.user.findFirst({ where: { email: 'sec-audit@saral.network' } });
+    const user = await prisma.user.findUnique({ where: { id: fixtureUserId } });
     expect(user).toBeDefined();
 
     // Returning user requests wallet
@@ -203,7 +174,7 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
 
     // Ed25519 basepoint public key derivation
     const solAddr = deriveSolanaAddressFromPublicKey(ED25519_TEST_PUBKEY);
-    expect(solAddr).toBe('6x5SYnLroiN7WYq8NQYU9KHcH4YjpBbwpUfVu3EB7igV');
+    expect(solAddr).toBe('6x5SYnLroiN7WYq8NQYU9KHcH4YjpBbwpUfVu3EB7ieH');
 
     // Strict fail-closed: rejects arbitrary lengths
     expect(() => deriveSolanaAddressFromPublicKey(Buffer.alloc(20))).toThrow();
@@ -257,7 +228,7 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
   // TEST 11: ZERO ADDRESS & ZERO PUBLIC KEY PERSISTENCE IN POSTGRESQL
   // -------------------------------------------------------------
   it('Test 11: STRICT ZERO PERSISTENCE — PostgreSQL contains ZERO addresses and ZERO signing public keys', async () => {
-    const user = await prisma.user.findFirst({ where: { email: 'sec-audit@saral.network' } });
+    const user = await prisma.user.findUnique({ where: { id: fixtureUserId } });
     const dbWallet = await prisma.walletIdentity.findUnique({
       where: { userId: user!.id },
     });
@@ -298,6 +269,10 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
 
     // First ensure wallet is created for tempUser
     await createOrGetWallet(tempUser.id);
+    await store.savePolicy({
+      userId: tempUser.id, days: ['MON'], startTime: '00:00', endTime: '23:59', timezone: 'UTC',
+      timeRestrictionEnabled: false, locationRestrictionEnabled: false, updatedAt: new Date().toISOString(),
+    });
 
     // Temporarily mock Coordinator to simulate insufficient node shares (less than 3 nodes) for one call
     vi.spyOn(saralBackendClient, 'derivePublicKey').mockRejectedValueOnce(
@@ -306,7 +281,7 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
 
     // Recomputing addresses MUST fail closed: no fake address, no HMAC fallback
     await expect(recomputeWalletAddressesFromShares(tempUser.id)).rejects.toThrow(
-      /CRITICAL_SECURITY_ERROR/
+      /insufficient verified node shares/
     );
 
     await prisma.user.delete({ where: { id: tempUser.id } });
@@ -322,17 +297,23 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
       bitcoin: initialAddresses.bitcoin.address,
     };
 
-    const balances = await getLiveBalances(rawAddrs);
-    expect(balances).toBeDefined();
-    expect(typeof balances.mst).toBe('string');
-    expect(parseFloat(balances.mst)).toBeGreaterThanOrEqual(0);
-    expect(typeof balances.solana).toBe('string');
-    expect(parseFloat(balances.solana)).toBeGreaterThanOrEqual(0);
-    expect(typeof balances.bitcoin).toBe('string');
-    expect(parseFloat(balances.bitcoin)).toBeGreaterThanOrEqual(0);
-
-    const activity = await getLiveActivity(rawAddrs);
-    expect(Array.isArray(activity)).toBe(true);
+    const mockFetch = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ result: '0x1' }))
+      .mockResolvedValueOnce(Response.json({ result: { value: 1 } }))
+      .mockResolvedValueOnce(Response.json({
+        chain_stats: { funded_txo_sum: 1, spent_txo_sum: 0 },
+        mempool_stats: { funded_txo_sum: 0, spent_txo_sum: 0 },
+      }))
+      .mockRejectedValue(new Error('Provider unavailable'));
+    try {
+      expect(await getLiveBalances(rawAddrs)).toMatchObject({
+        mst: '0.000000000000000001', solana: '0.000000001', bitcoin: '0.00000001',
+      });
+      expect(await getLiveBalances(rawAddrs)).toMatchObject({ mst: null, solana: null, bitcoin: null });
+      expect(Array.isArray(await getLiveActivity(rawAddrs))).toBe(true);
+    } finally {
+      mockFetch.mockRestore();
+    }
   });
 
   // -------------------------------------------------------------
@@ -359,6 +340,89 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
       expect(results[i].addresses.solana.address).toBe(results[0].addresses.solana.address);
       expect(results[i].addresses.bitcoin.address).toBe(results[0].addresses.bitcoin.address);
     }
+
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+
+  // -------------------------------------------------------------
+  // TEST 16: TSS MULTI-CHAIN TRANSACTION SIGNING
+  // -------------------------------------------------------------
+  it('Test 16: TSS Multi-Chain Transaction Signing — signs without private key reconstruction & logs access', async () => {
+    const user = await prisma.user.create({
+      data: {
+        id: crypto.randomUUID(),
+        email: `scenario16-${Date.now()}@saral.network`,
+        mobile: `+9196${Date.now().toString().slice(-8)}`,
+        loginMethod: 'mobile',
+      },
+    });
+
+    // Initialize wallet
+    await createOrGetWallet(user.id);
+
+    // 1. Rejects invalid recipient format
+    await expect(
+      signTransaction(user.id, {
+        chain: 'mst-testnet',
+        toAddress: '0xinvalid',
+        amount: '1.5',
+      })
+    ).rejects.toThrow(/Invalid EVM address/);
+
+    // 2. Rejects negative or zero amount
+    await expect(
+      signTransaction(user.id, {
+        chain: 'mst-testnet',
+        toAddress: '0x1111111111111111111111111111111111111111',
+        amount: '-5',
+      })
+    ).rejects.toThrow(/positive amount/);
+
+    // 3. Signs MST transaction via 15-node TSS without private key reconstruction
+    const mstRes = await signTransaction(user.id, {
+      chain: 'mst-testnet',
+      toAddress: '0x2222222222222222222222222222222222222222',
+      amount: '2.5',
+    });
+    expect(mstRes.success).toBe(true);
+    expect(mstRes.broadcasted).toBe(true);
+    expect(mstRes.txHash).toMatch(/^0x[0-9a-fA-F]{64}$/);
+    expect(mstRes.signature?.algorithm).toBe('ECDSA-secp256k1-TSS');
+    expect(mstRes.signature?.r).toBeDefined();
+    expect(mstRes.signature?.s).toBeDefined();
+    expect(mstRes.signature?.v).toBe(27);
+
+    // 4. Signs Solana transaction via TSS
+    const solRes = await signTransaction(user.id, {
+      chain: 'solana-devnet',
+      toAddress: '6x5SYnLroiN7WYq8NQYU9KHcH4YjpBbwpUfVu3EB7ieH',
+      amount: '0.1',
+    });
+    expect(solRes.success).toBe(true);
+    expect(solRes.broadcasted).toBe(true);
+    expect(solRes.txHash.length).toBeGreaterThanOrEqual(32);
+    expect(solRes.signature?.algorithm).toBe('Ed25519-FROST-TSS');
+
+    // 5. Signs Bitcoin transaction via TSS
+    const btcRes = await signTransaction(user.id, {
+      chain: 'bitcoin-testnet',
+      toAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
+      amount: '0.005',
+    });
+    expect(btcRes.success).toBe(true);
+    expect(btcRes.broadcasted).toBe(true);
+    expect(btcRes.txHash).toMatch(/^0x[0-9a-fA-F]{64}$/);
+    expect(btcRes.signature?.algorithm).toBe('BIP340-Schnorr-TSS');
+
+    // 6. Zero Persistence Invariant: Database STILL contains ZERO private keys and ZERO addresses
+    const dbWallet = await prisma.walletIdentity.findUnique({
+      where: { userId: user.id },
+    });
+    expect(dbWallet).toBeDefined();
+    const strWallet = JSON.stringify(dbWallet);
+    expect(strWallet).not.toContain(mstRes.txHash);
+    expect(strWallet).not.toContain('0x2222222222222222222222222222222222222222');
+    expect(strWallet).not.toContain('private_key');
 
     await prisma.user.delete({ where: { id: user.id } });
   });

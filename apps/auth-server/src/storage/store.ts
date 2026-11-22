@@ -10,7 +10,9 @@
  */
 
 import crypto from 'crypto';
+import type { Prisma, WalletIdentity, WorkingPolicy } from '@prisma/client';
 import { prisma } from '../database/prisma';
+import type { WalletMeshReferences } from '../config/wallet';
 
 export function toPrismaUuid(id: string): string {
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
@@ -76,6 +78,10 @@ export interface WalletMetadataRecord {
     solana?: string;
     bitcoin?: string;
     dkgSessionId?: string;
+    mstSessionId?: string;
+    solanaSessionId?: string;
+    bitcoinSessionId?: string;
+    mesh?: WalletMeshReferences;
   };
   createdAt: string;
   updatedAt: string;
@@ -214,69 +220,72 @@ export class DataStore {
       // Sync Policies via Prisma
       const policies = await prisma.workingPolicy.findMany();
       for (const p of policies) {
-        this.data.policies[p.userId] = {
-          userId: p.userId,
-          timeRestrictionEnabled: p.timeRestrictionEnabled,
-          startTime: p.startTime || '00:00',
-          endTime: p.endTime || '23:59',
-          days: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'],
-          timezone: p.timezone || 'Asia/Kolkata',
-          locationRestrictionEnabled: p.locationRestrictionEnabled,
-          allowedRegion: p.city,
-          geofenceEnabled: p.geofenceEnabled,
-          lat: p.lat,
-          lng: p.lng,
-          radiusMeters: (p.radiusKm || 25) * 1000,
-          updatedAt: p.setAt.toISOString(),
-        };
+        this.cachePolicy(p.userId, p);
       }
 
       // Sync Wallets via Prisma
       const wallets = await prisma.walletIdentity.findMany();
       for (const w of wallets) {
-        this.data.wallets[w.userId] = {
-          userId: w.userId,
-          walletId: w.walletId,
-          status: (w.status as any) || 'READY',
-          keyReferences: (w.keyReferences as any) || {},
-          createdAt: w.createdAt.toISOString(),
-          updatedAt: w.updatedAt.toISOString(),
-        };
+        this.cacheWallet(w.userId, w);
       }
 
       console.log(
         `[DataStore] Prisma ORM synced: ${users.length} users, ${wallets.length} wallets, ${mfas.length} MFAs`
       );
     } catch (err: any) {
-      console.warn('[DataStore] Warning syncing from Prisma:', err.message);
+      throw new Error('Could not load the auth server data from PostgreSQL', { cause: err });
     }
   }
 
-  public saveUser(user: UserRecord): void {
-    this.data.users[user.id] = user;
-    this.persist();
-
+  public async saveUser(user: UserRecord): Promise<void> {
     const prismaId = toPrismaUuid(user.id);
-    prisma.user
-      .upsert({
-        where: { id: prismaId },
-        create: {
-          id: prismaId,
-          name: user.name,
-          googleId: user.googleId,
-          email: user.email,
-          mobile: user.mobile,
-          loginMethod: user.loginMethod,
-        },
-        update: {
-          name: user.name,
-          googleId: user.googleId,
-          email: user.email,
-          mobile: user.mobile,
-          loginMethod: user.loginMethod,
-        },
-      })
-      .catch((e) => console.warn('[Prisma] saveUser warning:', e.message));
+    await prisma.user.upsert({
+      where: { id: prismaId },
+      create: {
+        id: prismaId,
+        name: user.name,
+        googleId: user.googleId,
+        email: user.email,
+        mobile: user.mobile,
+        loginMethod: user.loginMethod,
+      },
+      update: {
+        name: user.name,
+        googleId: user.googleId,
+        email: user.email,
+        mobile: user.mobile,
+        loginMethod: user.loginMethod,
+      },
+    });
+    this.data.users[user.id] = user;
+  }
+
+  public async findPersistedUser(where: Prisma.UserWhereUniqueInput): Promise<UserRecord | null> {
+    const user = await prisma.user.findUnique({ where });
+    if (!user) return null;
+    const record: UserRecord = {
+      id: user.id,
+      name: user.name ?? undefined,
+      email: user.email ?? undefined,
+      googleId: user.googleId ?? undefined,
+      mobile: user.mobile ?? undefined,
+      loginMethod: user.loginMethod as UserRecord['loginMethod'],
+      createdAt: user.createdAt.toISOString(),
+      updatedAt: user.createdAt.toISOString(),
+    };
+    this.data.users[record.id] = record;
+    return record;
+  }
+
+  public async attachGoogleIdentity(userId: string, googleId: string): Promise<UserRecord> {
+    const result = await prisma.user.updateMany({
+      where: { id: toPrismaUuid(userId), OR: [{ googleId: null }, { googleId }] },
+      data: { googleId },
+    });
+    if (result.count !== 1) throw new Error('A Google identity is already linked to this account');
+    const user = await this.findPersistedUser({ id: toPrismaUuid(userId) });
+    if (!user) throw new Error('User not found');
+    return user;
   }
 
   // --- MFA ---
@@ -284,45 +293,64 @@ export class DataStore {
     return this.data.mfa[userId] || null;
   }
 
-  public saveMfa(record: MfaRecord): void {
+  public async findPersistedMfa(userId: string): Promise<MfaRecord | null> {
+    const mfa = await prisma.mFAEnrollment.findUnique({ where: { userId: toPrismaUuid(userId) } });
+    if (!mfa) {
+      delete this.data.mfa[userId];
+      return null;
+    }
+    const record: MfaRecord = {
+      userId,
+      type: mfa.type as MfaRecord['type'],
+      verifiedAt: mfa.verifiedAt?.toISOString(),
+      totpSecretEncrypted: mfa.totpSecretEncrypted ?? undefined,
+      recoveryCodesHashed: mfa.recoveryCodesHashed,
+      updatedAt: mfa.verifiedAt?.toISOString() ?? new Date().toISOString(),
+    };
+    this.data.mfa[userId] = record;
+    return record;
+  }
+
+  public async saveMfa(record: MfaRecord): Promise<void> {
+    const userId = toPrismaUuid(record.userId);
+    const data = {
+      type: record.type,
+      totpSecretEncrypted: record.totpSecretEncrypted,
+      recoveryCodesHashed: record.recoveryCodesHashed ?? [],
+    };
+    const pending = await prisma.mFAEnrollment.updateMany({ where: { userId, verifiedAt: null }, data });
+    if (pending.count === 0) {
+      try {
+        await prisma.mFAEnrollment.create({ data: { userId, ...data } });
+      } catch (err) {
+        if (typeof err === 'object' && err && 'code' in err && err.code === 'P2002') {
+          throw new Error('MFA is already enrolled or another setup request is in progress');
+        }
+        throw err;
+      }
+    }
     this.data.mfa[record.userId] = record;
-    this.persist();
+  }
 
-    const prismaUserId = toPrismaUuid(record.userId);
-    const user = this.data.users[record.userId] || { name: 'SARAL User', loginMethod: 'google' as const };
-    const ensureUser = prisma.user.upsert({
-      where: { id: prismaUserId },
-      create: {
-        id: prismaUserId,
-        name: user.name || 'SARAL User',
-        googleId: user.googleId,
-        email: user.email,
-        mobile: user.mobile,
-        loginMethod: user.loginMethod || 'google',
+  public async saveVerifiedMfa(previous: MfaRecord, verifiedAt: Date, recoveryCodes: string[], usedRecoveryCode?: string): Promise<boolean> {
+    const result = await prisma.mFAEnrollment.updateMany({
+      where: {
+        userId: toPrismaUuid(previous.userId),
+        totpSecretEncrypted: previous.totpSecretEncrypted ?? null,
+        verifiedAt: previous.verifiedAt ? new Date(previous.verifiedAt) : null,
+        recoveryCodesHashed: { equals: previous.recoveryCodesHashed ?? [] },
+        recoveryCodeRecords: usedRecoveryCode ? { none: { codeHash: usedRecoveryCode, used: true } } : undefined,
       },
-      update: {},
+      data: { verifiedAt, recoveryCodesHashed: recoveryCodes },
     });
-
-    ensureUser
-      .then(() =>
-        prisma.mFAEnrollment.upsert({
-          where: { userId: prismaUserId },
-          create: {
-            userId: prismaUserId,
-            type: record.type,
-            totpSecretEncrypted: record.totpSecretEncrypted,
-            recoveryCodesHashed: record.recoveryCodesHashed || [],
-            verifiedAt: record.verifiedAt ? new Date(record.verifiedAt) : undefined,
-          },
-          update: {
-            type: record.type,
-            totpSecretEncrypted: record.totpSecretEncrypted,
-            recoveryCodesHashed: record.recoveryCodesHashed || [],
-            verifiedAt: record.verifiedAt ? new Date(record.verifiedAt) : undefined,
-          },
-        })
-      )
-      .catch((e) => console.warn('[Prisma] saveMfa warning:', e.message));
+    if (result.count !== 1) return false;
+    this.data.mfa[previous.userId] = {
+      ...previous,
+      verifiedAt: verifiedAt.toISOString(),
+      recoveryCodesHashed: recoveryCodes,
+      updatedAt: new Date().toISOString(),
+    };
+    return true;
   }
 
   // --- Working Policy ---
@@ -330,59 +358,59 @@ export class DataStore {
     return this.data.policies[userId] || null;
   }
 
-  public savePolicy(policy: WorkingPolicyRecord): void {
-    this.data.policies[policy.userId] = policy;
-    this.persist();
+  private cachePolicy(userId: string, row: WorkingPolicy): WorkingPolicyRecord {
+    const policy: WorkingPolicyRecord = {
+      userId,
+      timeRestrictionEnabled: row.timeRestrictionEnabled,
+      startTime: row.startTime,
+      endTime: row.endTime,
+      days: row.days,
+      timezone: row.timezone,
+      expiresAt: row.expiresAt?.toISOString(),
+      locationRestrictionEnabled: row.locationRestrictionEnabled,
+      allowedRegion: row.city,
+      geofenceEnabled: row.geofenceEnabled,
+      lat: row.lat,
+      lng: row.lng,
+      radiusMeters: row.radiusKm * 1000,
+      updatedAt: row.setAt.toISOString(),
+    };
+    this.data.policies[userId] = policy;
+    return policy;
+  }
 
-    const prismaUserId = toPrismaUuid(policy.userId);
-    const user = this.data.users[policy.userId] || { name: 'SARAL User', loginMethod: 'google' as const };
-    const ensureUser = prisma.user.upsert({
-      where: { id: prismaUserId },
-      create: {
-        id: prismaUserId,
-        name: user.name || 'SARAL User',
-        googleId: user.googleId,
-        email: user.email,
-        mobile: user.mobile,
-        loginMethod: user.loginMethod || 'google',
-      },
-      update: {},
+  public async loadPolicy(userId: string): Promise<WorkingPolicyRecord | null> {
+    const row = await prisma.workingPolicy.findUnique({ where: { userId: toPrismaUuid(userId) } });
+    if (!row) {
+      delete this.data.policies[userId];
+      return null;
+    }
+    return this.cachePolicy(userId, row);
+  }
+
+  public async savePolicy(policy: WorkingPolicyRecord): Promise<void> {
+    const userId = toPrismaUuid(policy.userId);
+    const data = {
+      startTime: policy.startTime,
+      endTime: policy.endTime,
+      timezone: policy.timezone,
+      city: policy.allowedRegion ?? 'Primary Workspace',
+      lat: policy.lat ?? 0,
+      lng: policy.lng ?? 0,
+      radiusKm: (policy.radiusMeters ?? 25000) / 1000,
+      timeRestrictionEnabled: policy.timeRestrictionEnabled,
+      locationRestrictionEnabled: policy.locationRestrictionEnabled,
+      geofenceEnabled: policy.geofenceEnabled ?? false,
+      days: policy.days,
+      expiresAt: policy.expiresAt ? new Date(policy.expiresAt) : null,
+      setAt: new Date(),
+    };
+    const row = await prisma.workingPolicy.upsert({
+      where: { userId },
+      create: { userId, ...data },
+      update: data,
     });
-
-    const radiusKm = policy.radiusMeters ? policy.radiusMeters / 1000 : 25;
-    ensureUser
-      .then(() =>
-        prisma.workingPolicy.upsert({
-          where: { userId: prismaUserId },
-          create: {
-            userId: prismaUserId,
-            startTime: policy.startTime || '00:00',
-            endTime: policy.endTime || '23:59',
-            timezone: policy.timezone || 'Asia/Kolkata',
-            city: policy.allowedRegion || 'Indore',
-            lat: policy.lat || 22.7196,
-            lng: policy.lng || 75.8577,
-            radiusKm,
-            timeRestrictionEnabled: policy.timeRestrictionEnabled ?? true,
-            locationRestrictionEnabled: policy.locationRestrictionEnabled ?? false,
-            geofenceEnabled: policy.geofenceEnabled ?? false,
-          },
-          update: {
-            startTime: policy.startTime || '00:00',
-            endTime: policy.endTime || '23:59',
-            timezone: policy.timezone || 'Asia/Kolkata',
-            city: policy.allowedRegion || 'Indore',
-            lat: policy.lat || 22.7196,
-            lng: policy.lng || 75.8577,
-            radiusKm,
-            timeRestrictionEnabled: policy.timeRestrictionEnabled ?? true,
-            locationRestrictionEnabled: policy.locationRestrictionEnabled ?? false,
-            geofenceEnabled: policy.geofenceEnabled ?? false,
-            setAt: new Date(),
-          },
-        })
-      )
-      .catch((e) => console.warn('[Prisma] savePolicy warning:', e.message));
+    this.cachePolicy(policy.userId, row);
   }
 
   // --- Wallet Metadata (One-User-One-Wallet) ---
@@ -390,43 +418,69 @@ export class DataStore {
     return this.data.wallets[userId] || null;
   }
 
-  public async saveWallet(record: WalletMetadataRecord): Promise<void> {
-    this.data.wallets[record.userId] = record;
-    this.persist();
+  private cacheWallet(userId: string, row: WalletIdentity): WalletMetadataRecord {
+    const wallet: WalletMetadataRecord = {
+      userId,
+      walletId: row.walletId,
+      status: row.status,
+      keyReferences: (row.keyReferences || {}) as WalletMetadataRecord['keyReferences'],
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+    this.data.wallets[userId] = wallet;
+    return wallet;
+  }
 
-    const prismaUserId = toPrismaUuid(record.userId);
-    const user = this.data.users[record.userId] || { name: 'SARAL User', loginMethod: 'google' as const };
+  public async loadWallet(userId: string): Promise<WalletMetadataRecord | null> {
+    const row = await prisma.walletIdentity.findUnique({ where: { userId: toPrismaUuid(userId) } });
+    if (!row) {
+      delete this.data.wallets[userId];
+      return null;
+    }
+    return this.cacheWallet(userId, row);
+  }
+
+  public async reserveWallet(record: WalletMetadataRecord): Promise<WalletMetadataRecord> {
+    const userId = await this.ensureUserInPrisma(record.userId);
+    if (!userId) throw new Error('Could not resolve the wallet owner.');
     try {
-      await prisma.user.upsert({
-        where: { id: prismaUserId },
-        create: {
-          id: prismaUserId,
-          name: user.name || 'SARAL User',
-          googleId: user.googleId,
-          email: user.email,
-          mobile: user.mobile,
-          loginMethod: user.loginMethod || 'google',
-        },
-        update: {},
-      });
-
-      await prisma.walletIdentity.upsert({
-        where: { userId: prismaUserId },
-        create: {
-          userId: prismaUserId,
+      const row = await prisma.walletIdentity.create({
+        data: {
+          userId,
           walletId: record.walletId,
           status: record.status,
           keyReferences: record.keyReferences,
         },
-        update: {
-          status: record.status,
-          keyReferences: record.keyReferences,
-          updatedAt: new Date(),
-        },
       });
-    } catch (e: any) {
-      console.warn('[Prisma] saveWallet warning:', e.message);
+      return this.cacheWallet(record.userId, row);
+    } catch (error) {
+      // Another request may have won the unique user_id reservation.
+      if ((error as { code?: string }).code === 'P2002') {
+        const existing = await this.loadWallet(record.userId);
+        if (existing) return existing;
+      }
+      throw error;
     }
+  }
+
+  public async transitionWallet(
+    wallet: WalletMetadataRecord,
+    expectedStatuses: string[],
+    status: string,
+  ): Promise<WalletMetadataRecord> {
+    await prisma.walletIdentity.updateMany({
+      where: {
+        userId: toPrismaUuid(wallet.userId),
+        walletId: wallet.walletId,
+        status: { in: expectedStatuses },
+      },
+      data: { status, updatedAt: new Date() },
+    });
+    const updated = await this.loadWallet(wallet.userId);
+    if (!updated || updated.walletId !== wallet.walletId) {
+      throw new Error('Could not resolve the reserved wallet.');
+    }
+    return updated;
   }
 
   // --- OTP Management ---
@@ -440,39 +494,34 @@ export class DataStore {
     return null;
   }
 
-  public saveOtp(record: OtpRecord): void {
-    this.data.otps[record.id] = record;
-    this.persist();
-
-    const prismaId = toPrismaUuid(record.id);
+  public async saveOtp(record: OtpRecord): Promise<void> {
     const prismaUserId = toPrismaUuid(record.userId);
-    prisma.oTPChallenge
-      .create({
-        data: {
-          id: prismaId,
-          userId: prismaUserId,
-          code: record.codeHash,
-          purpose: record.purpose,
-          expiresAt: new Date(record.expiresAt),
-          used: record.used,
-        },
-      })
-      .catch((e) => console.warn('[Prisma] saveOtp warning:', e.message));
+    await prisma.oTPChallenge.create({
+      data: {
+        id: toPrismaUuid(record.id),
+        userId: prismaUserId,
+        code: record.codeHash,
+        purpose: record.purpose,
+        expiresAt: new Date(record.expiresAt),
+        used: record.used,
+      },
+    });
+    const now = Date.now();
+    for (const previous of Object.values(this.data.otps)) {
+      if (previous.used || previous.expiresAt <= now) delete this.data.otps[previous.id];
+    }
+    this.data.otps[record.id] = record;
   }
 
-  public markOtpUsed(id: string): void {
-    if (this.data.otps[id]) {
-      this.data.otps[id].used = true;
-      this.persist();
-
-      const prismaId = toPrismaUuid(id);
-      prisma.oTPChallenge
-        .update({
-          where: { id: prismaId },
-          data: { used: true },
-        })
-        .catch((e) => console.warn('[Prisma] markOtpUsed warning:', e.message));
-    }
+  public async markOtpUsed(id: string): Promise<boolean> {
+    const otp = this.data.otps[id];
+    if (!otp || otp.used) return false;
+    otp.used = true;
+    const result = await prisma.oTPChallenge.updateMany({
+      where: { id: toPrismaUuid(id), used: false, expiresAt: { gt: new Date() } },
+      data: { used: true },
+    });
+    return result.count === 1;
   }
 
   public incrementOtpAttempts(id: string): number {

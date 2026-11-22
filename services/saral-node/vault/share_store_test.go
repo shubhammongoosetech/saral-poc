@@ -3,6 +3,7 @@ package vault
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +54,7 @@ func TestShareStore_SaveAndLoadKeyShare(t *testing.T) {
 	if err != nil {
 		t.Fatalf("share file not found on disk: %v", err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("expected 0600 permissions, got %v", info.Mode().Perm())
 	}
 
@@ -103,4 +104,3 @@ func TestShareStore_SaveAndLoadKeyShare(t *testing.T) {
 		t.Fatalf("expected decryption failure with wrong vault key, but succeeded!")
 	}
 }
-

@@ -9,38 +9,38 @@ import (
 type DKGState string
 
 const (
-	StateCreated                 DKGState = "CREATED"
-	StateParticipantsRegistered  DKGState = "PARTICIPANTS_REGISTERED"
-	StateContributionsStarted    DKGState = "CONTRIBUTIONS_STARTED"
-	StateAVSSSharing             DKGState = "AVSS_SHARING"
-	StateContributionsVerified   DKGState = "CONTRIBUTIONS_VERIFIED"
-	StateQualifiedSetAgreement   DKGState = "QUALIFIED_SET_AGREEMENT"
-	StateSharesAggregated        DKGState = "SHARES_AGGREGATED"
-	StatePublicKeyVerified       DKGState = "PUBLIC_KEY_VERIFIED"
-	StateCompleted               DKGState = "COMPLETED"
-	StateFailed                  DKGState = "FAILED"
+	StateCreated                DKGState = "CREATED"
+	StateParticipantsRegistered DKGState = "PARTICIPANTS_REGISTERED"
+	StateContributionsStarted   DKGState = "CONTRIBUTIONS_STARTED"
+	StateAVSSSharing            DKGState = "AVSS_SHARING"
+	StateContributionsVerified  DKGState = "CONTRIBUTIONS_VERIFIED"
+	StateQualifiedSetAgreement  DKGState = "QUALIFIED_SET_AGREEMENT"
+	StateSharesAggregated       DKGState = "SHARES_AGGREGATED"
+	StatePublicKeyVerified      DKGState = "PUBLIC_KEY_VERIFIED"
+	StateCompleted              DKGState = "COMPLETED"
+	StateFailed                 DKGState = "FAILED"
 )
 
 // DKG Protocol Relay Message Types
 const (
-	MessageTypeDKGInit           = "DKG_INIT"
-	MessageTypeDKGContribution   = "DKG_CONTRIBUTION"
-	MessageTypeDKGAVSSComplete   = "DKG_AVSS_COMPLETE"
-	MessageTypeDKGQualifiedSet   = "DKG_QUALIFIED_SET"
-	MessageTypeDKGAgreement      = "DKG_AGREEMENT"
-	MessageTypeDKGPublicKey      = "DKG_PUBLIC_KEY"
-	MessageTypeDKGComplete       = "DKG_COMPLETE"
-	MessageTypeDKGAbort          = "DKG_ABORT"
+	MessageTypeDKGInit         = "DKG_INIT"
+	MessageTypeDKGContribution = "DKG_CONTRIBUTION"
+	MessageTypeDKGAVSSComplete = "DKG_AVSS_COMPLETE"
+	MessageTypeDKGQualifiedSet = "DKG_QUALIFIED_SET"
+	MessageTypeDKGAgreement    = "DKG_AGREEMENT"
+	MessageTypeDKGPublicKey    = "DKG_PUBLIC_KEY"
+	MessageTypeDKGComplete     = "DKG_COMPLETE"
+	MessageTypeDKGAbort        = "DKG_ABORT"
 )
 
 var (
-	ErrDKGAlreadyRunning       = errors.New("dkg session already running")
-	ErrDKGSessionNotFound      = errors.New("dkg session not found")
-	ErrInvalidDKGParameters    = errors.New("invalid dkg parameters")
-	ErrInsufficientDealers     = errors.New("insufficient valid dealers for qualified set")
-	ErrDKGPredicateFailed      = errors.New("dkg qualified set agreement predicate failed")
-	ErrPublicKeyMismatch       = errors.New("aggregated public key verification mismatch")
-	ErrUnauthorizedDKGRequest  = errors.New("unauthorized dkg operation")
+	ErrDKGAlreadyRunning      = errors.New("dkg session already running")
+	ErrDKGSessionNotFound     = errors.New("dkg session not found")
+	ErrInvalidDKGParameters   = errors.New("invalid dkg parameters")
+	ErrInsufficientDealers    = errors.New("insufficient valid dealers for qualified set")
+	ErrDKGPredicateFailed     = errors.New("dkg qualified set agreement predicate failed")
+	ErrPublicKeyMismatch      = errors.New("aggregated public key verification mismatch")
+	ErrUnauthorizedDKGRequest = errors.New("unauthorized dkg operation")
 )
 
 // ValidateDKGParameters validates the cryptographic parameter constraints for DKG:
@@ -85,7 +85,9 @@ type DKGContributionMessage struct {
 	CommitteeID         string     `json:"committeeId"`
 	DealerID            string     `json:"dealerId"`
 	DealerIndex         int        `json:"dealerIndex"`
-	SecretCommitment    string     `json:"secretCommitment"`    // C_{0,0} hex (Pedersen: z_i*G + z'_i*H)
+	SecretCommitment    string     `json:"secretCommitment"` // C_{0,0} hex (Pedersen: z_i*G + z'_i*H)
+	ProofAnnouncement   string     `json:"proofAnnouncement,omitempty"`
+	ProofResponse       string     `json:"proofResponse,omitempty"`
 	PublicKeyCommitment string     `json:"publicKeyCommitment"` // V_i hex (Feldman/signing: z_i*G)
 	CommitmentMatrix    [][]string `json:"commitmentMatrix"`    // hex matrix
 	Timestamp           int64      `json:"timestamp"`
@@ -111,13 +113,13 @@ type DKGQualifiedSetMessage struct {
 
 // DKGPublicKeyMessage broadcasts a node's derived public share commitment and master public key
 type DKGPublicKeyMessage struct {
-	SessionID        string `json:"sessionId"`
-	CommitteeID      string `json:"committeeId"`
-	NodeID           string `json:"nodeId"`
-	NodeIndex        int    `json:"nodeIndex"`
+	SessionID         string `json:"sessionId"`
+	CommitteeID       string `json:"committeeId"`
+	NodeID            string `json:"nodeId"`
+	NodeIndex         int    `json:"nodeIndex"`
 	PublicShareCommit string `json:"publicShareCommit"`
-	MasterPublicKey  string `json:"masterPublicKey"`
-	Timestamp        int64  `json:"timestamp"`
+	MasterPublicKey   string `json:"masterPublicKey"`
+	Timestamp         int64  `json:"timestamp"`
 }
 
 // DKGCompleteNotification notifies coordinators that a node has successfully finalized DKG
@@ -132,15 +134,15 @@ type DKGCompleteNotification struct {
 
 // DKGParticipantStatus records public participant progress
 type DKGParticipantStatus struct {
-	NodeID             string `json:"nodeId"`
-	NodeIndex          int    `json:"nodeIndex"`
-	ContributionDealt  bool   `json:"contributionDealt"`
-	SecretCommitment   string `json:"secretCommitment,omitempty"`
-	CompletedSharings  int    `json:"completedSharings"`
-	InQualifiedSet     bool   `json:"inQualifiedSet"`
-	ShareAggregated    bool   `json:"shareAggregated"`
-	PublicShareCommit  string `json:"publicShareCommit,omitempty"`
-	Status             string `json:"status"` // PENDING | CONTRIBUTED | QUALIFIED | FINALIZED | FAILED
+	NodeID            string `json:"nodeId"`
+	NodeIndex         int    `json:"nodeIndex"`
+	ContributionDealt bool   `json:"contributionDealt"`
+	SecretCommitment  string `json:"secretCommitment,omitempty"`
+	CompletedSharings int    `json:"completedSharings"`
+	InQualifiedSet    bool   `json:"inQualifiedSet"`
+	ShareAggregated   bool   `json:"shareAggregated"`
+	PublicShareCommit string `json:"publicShareCommit,omitempty"`
+	Status            string `json:"status"` // PENDING | CONTRIBUTED | QUALIFIED | FINALIZED | FAILED
 }
 
 // DKGSessionPublicView represents public session metadata exposed over RPC / SDK

@@ -18,6 +18,7 @@ export interface MfaStatusResponse {
   enrolled: boolean;
   type?: string;
   verified?: boolean;
+  developmentOtpEnabled?: boolean;
 }
 
 export interface MfaEnrollResponse {
@@ -77,14 +78,14 @@ export interface ChainInfo {
 
 export interface WalletData {
   walletId?: string;
-  status?: string;
+  status: 'DKG_IN_PROGRESS' | 'KEY_READY' | 'ERROR' | 'READY' | 'UNAVAILABLE';
   error?: string;
-  address: string;
-  balance: string;
+  address?: string;
+  balance?: string | null;
   solanaAddress?: string;
-  solanaBalance?: string;
+  solanaBalance?: string | null;
   bitcoinAddress?: string;
-  bitcoinBalance?: string;
+  bitcoinBalance?: string | null;
   addresses?: {
     mst?: string;
     solana?: string;
@@ -105,6 +106,7 @@ export interface WalletResponse {
 export interface AccessCheckResponse {
   allowed: boolean;
   reason?: string;
+  code?: string;
 }
 
 export interface SignResponse {
@@ -113,6 +115,9 @@ export interface SignResponse {
   txHash: string;
   explorerUrl?: string;
   message?: string;
+  chain?: string;
+  toAddress?: string;
+  amount?: string;
 }
 
 export interface Transaction {

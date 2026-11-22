@@ -168,22 +168,43 @@ func Ed25519Add(x1, y1, x2, y2 *big.Int) (*big.Int, *big.Int) {
 // Ed25519ScalarMult computes k * (x, y) on Ed25519
 func Ed25519ScalarMult(x, y, k *big.Int) (*big.Int, *big.Int) {
 	kMod := new(big.Int).Mod(k, Ed25519L)
-	if kMod.Sign() == 0 {
-		return big.NewInt(0), big.NewInt(1) // identity point
-	}
+	return ed25519ScalarMultUnreduced(x, y, kMod)
+}
 
-	rx := big.NewInt(0)
-	ry := big.NewInt(1)
-	bx := new(big.Int).Set(x)
-	by := new(big.Int).Set(y)
+type edwardsPoint struct {
+	x, y, z, t *big.Int
+}
 
-	for i := 0; i < kMod.BitLen(); i++ {
-		if kMod.Bit(i) == 1 {
-			rx, ry = Ed25519Add(rx, ry, bx, by)
+func edFieldMul(a, b *big.Int) *big.Int {
+	product := new(big.Int).Mul(a, b)
+	return product.Mod(product, Ed25519P)
+}
+
+func edwardsAdd(p, q edwardsPoint) edwardsPoint {
+	a := edFieldMul(new(big.Int).Sub(p.y, p.x), new(big.Int).Sub(q.y, q.x))
+	b := edFieldMul(new(big.Int).Add(p.y, p.x), new(big.Int).Add(q.y, q.x))
+	c := edFieldMul(edFieldMul(p.t, q.t), Ed25519D)
+	c.Lsh(c, 1)
+	d := edFieldMul(p.z, q.z)
+	d.Lsh(d, 1)
+	e := new(big.Int).Sub(b, a)
+	f := new(big.Int).Sub(d, c)
+	g := new(big.Int).Add(d, c)
+	h := new(big.Int).Add(b, a)
+	return edwardsPoint{edFieldMul(e, f), edFieldMul(g, h), edFieldMul(f, g), edFieldMul(e, h)}
+}
+
+func ed25519ScalarMultUnreduced(x, y, k *big.Int) (*big.Int, *big.Int) {
+	result := edwardsPoint{big.NewInt(0), big.NewInt(1), big.NewInt(1), big.NewInt(0)}
+	addend := edwardsPoint{x, y, big.NewInt(1), edFieldMul(x, y)}
+	for i := 0; i < k.BitLen(); i++ {
+		if k.Bit(i) == 1 {
+			result = edwardsAdd(result, addend)
 		}
-		bx, by = Ed25519Add(bx, by, bx, by)
+		addend = edwardsAdd(addend, addend)
 	}
-	return rx, ry
+	inverse := new(big.Int).ModInverse(result.z, Ed25519P)
+	return edFieldMul(result.x, inverse), edFieldMul(result.y, inverse)
 }
 
 // Ed25519ScalarBaseMult computes k * B on Ed25519
@@ -240,4 +261,3 @@ func ComputePublicContributionPoint(curve string, scalarHex string) (string, err
 
 	return hex.EncodeToString(ptBytes), nil
 }
-

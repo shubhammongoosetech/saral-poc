@@ -1,12 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
-import { KeyManager } from '../auth/token';
-
-const keyManager = KeyManager.getInstance();
+import { InvalidAccountSession, validateAccountSession } from '../auth/accountSession';
 
 export interface AuthenticatedUser {
   userId: string;
   role: string;
   mfaVerified: boolean;
+  sessionId: string;
 }
 
 declare global {
@@ -17,7 +16,7 @@ declare global {
   }
 }
 
-export function authenticate(req: Request, res: Response, next: NextFunction): void {
+export async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({ success: false, error: 'Unauthorized: Missing Bearer token' });
@@ -26,15 +25,21 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
 
   const token = authHeader.substring(7).trim();
   try {
-    const decoded = keyManager.verifyToken(token) as any;
+    const decoded = await validateAccountSession(token);
 
     req.user = {
-      userId: decoded.userId || decoded.sub,
-      role: decoded.domainRole || decoded.role || 'operator',
-      mfaVerified: !!decoded.mfaVerified,
+      userId: decoded.sub,
+      role: 'operator',
+      mfaVerified: decoded.mfaVerified,
+      sessionId: decoded.nonce!,
     };
-    next();
-  } catch (err: any) {
-    res.status(401).json({ success: false, error: 'Unauthorized: Invalid or expired token' });
+  } catch (error) {
+    if (error instanceof InvalidAccountSession) {
+      res.status(401).json({ success: false, error: 'Unauthorized: Invalid or expired token' });
+    } else {
+      res.status(503).json({ success: false, error: 'The sign-in service is temporarily unavailable' });
+    }
+    return;
   }
+  next();
 }

@@ -12,7 +12,7 @@ services:
       - saral_postgres_data:/var/lib/postgresql/data
       - ../../infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     networks:
       - saral-mesh
     healthcheck:
@@ -32,13 +32,22 @@ services:
     environment:
       PORT: 3001
       NODE_ENV: development
-      ENABLE_DEV_AUTH: "true"
+      ENABLE_DEV_AUTH: "${ENABLE_DEV_AUTH:-false}"
+      COORDINATOR_URL: http://coordinator-foundation:9001
+      COORDINATOR_PUBLIC_URL: http://coordinator-public:9002
+      COORDINATOR_PRIVATE_URL: http://coordinator-private:9003
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      MFA_ENCRYPTION_KEY: "${MFA_ENCRYPTION_KEY:-}"
+      KEY_DIR: /run/secrets
       DATABASE_URL: "postgresql://saral:saral_secret@postgres:5432/saral"
+    volumes:
+      - '../../infra/config/auth_ed25519_private_key.pem:/run/secrets/auth_ed25519_private_key.pem:ro'
+      - '../../infra/config/auth_ed25519_public_key.pem:/run/secrets/auth_ed25519_public_key.pem:ro'
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - '3001:3001'
+      - '127.0.0.1:3001:3001'
     networks:
       - saral-mesh
     healthcheck:
@@ -129,7 +138,7 @@ services:
       PEER_NODES: http://node-f2:8001,http://node-p1:8001,http://node-r1:8001
     volumes: ['node_f1_vault:/vault', '../../infra/tls:/etc/saral/tls:ro', '../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     ports:
-      - '8443:8443'
+      - '127.0.0.1:8443:8443'
     networks: [saral-mesh]
     healthcheck:
       test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8001/node/status']
@@ -434,7 +443,7 @@ services:
       PEER_COORDINATORS: http://coordinator-public:9002,http://coordinator-private:9003
       NODE_ADDRS: http://node-f1:8001,http://node-f2:8001,http://node-f3:8001,http://node-f4:8001,http://node-f5:8001
     ports:
-      - '9001:9001'
+      - '127.0.0.1:9001:9001'
     volumes: ['../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     depends_on:
       verifier-foundation:
@@ -460,7 +469,7 @@ services:
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-private:9003
       NODE_ADDRS: http://node-p1:8001,http://node-p2:8001,http://node-p3:8001,http://node-p4:8001,http://node-p5:8001
     ports:
-      - '9002:9002'
+      - '127.0.0.1:9002:9002'
     volumes: ['../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     depends_on:
       verifier-public:
@@ -486,7 +495,7 @@ services:
       PEER_COORDINATORS: http://coordinator-foundation:9001,http://coordinator-public:9002
       NODE_ADDRS: http://node-r1:8001,http://node-r2:8001,http://node-r3:8001,http://node-r4:8001,http://node-r5:8001
     ports:
-      - '9003:9003'
+      - '127.0.0.1:9003:9003'
     volumes: ['../../infra/secrets/internal_token.secret:/run/secrets/saral_internal_token:ro', '../../infra/config/genesis_participants.json:/run/secrets/saral_genesis_participants.json:ro', '../../infra/config/auth_public_key.pem:/run/secrets/auth_ed25519_pub.pem:ro']
     depends_on:
       verifier-private:
@@ -506,14 +515,11 @@ services:
     build:
       context: ../../apps/web
       dockerfile: Dockerfile
-      args:
-        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-558208753253-gr5lji587t11l5m63d5udea4msbvbcds.apps.googleusercontent.com}
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
     image: saral-web:latest
     container_name: saral-prod-web
     restart: unless-stopped
     ports:
-      - '3000:80'
+      - '127.0.0.1:3000:80'
     depends_on:
       auth-server:
         condition: service_healthy

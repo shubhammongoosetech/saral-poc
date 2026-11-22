@@ -812,7 +812,8 @@ func TestLiveDockerRelay(t *testing.T) {
 		inspectCmd := exec.Command("docker", "inspect", "--format", "{{.State.Health.Status}}", cName)
 		out, err := inspectCmd.Output()
 		if err != nil {
-			t.Fatalf("failed to inspect container %s: %v", cName, err)
+			t.Skipf("Docker POC15 container %s not available: %v", cName, err)
+			return
 		}
 		status := strings.TrimSpace(string(out))
 		if status != "healthy" {

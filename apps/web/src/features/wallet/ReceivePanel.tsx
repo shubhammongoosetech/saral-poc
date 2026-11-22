@@ -3,6 +3,7 @@ import { Card } from '@/shared/ui/Card';
 import { Tabs } from '@/shared/ui/Tabs';
 import { CopyButton } from '@/shared/ui/CopyButton';
 import { Badge } from '@/shared/ui/Badge';
+import { QrCode } from '@/shared/ui/QrCode';
 
 export interface ReceivePanelProps {
   address?: string;
@@ -21,11 +22,6 @@ export const ReceivePanel: React.FC<ReceivePanelProps> = ({
   let activeAddress = address;
   if (network === 'solana-devnet') activeAddress = solanaAddress;
   if (network === 'bitcoin-testnet') activeAddress = bitcoinAddress;
-
-  // Simple QR code representation
-  const qrUrl = activeAddress
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(activeAddress)}`
-    : '';
 
   return (
     <Card className="flex flex-col gap-4">
@@ -46,15 +42,7 @@ export const ReceivePanel: React.FC<ReceivePanelProps> = ({
 
       {/* QR Code Container */}
       {activeAddress && (
-        <div className="flex flex-col items-center justify-center p-4 bg-white rounded-xl border border-border mx-auto">
-          <img
-            src={qrUrl}
-            alt="Address QR Code"
-            className="w-40 h-40 object-contain"
-            loading="lazy"
-          />
-          <span className="text-[11px] text-muted mt-2">Scan to send to this address</span>
-        </div>
+        <QrCode value={activeAddress} label="Receive address QR code" size={180} />
       )}
 
       <div className="flex flex-col gap-1.5">

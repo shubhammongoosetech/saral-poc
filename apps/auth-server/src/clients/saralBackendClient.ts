@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { KeyManager } from '../auth/token';
+import { WalletDomain } from '../config/wallet';
 
 export class SaralBackendError extends Error {
   public code: number;
@@ -40,6 +41,11 @@ export interface DkgStartParams {
   k?: number;
   t?: number;
   committee?: string[];
+  walletId?: string;
+  userId?: string;
+  keyId?: string;
+  curve?: 'secp256k1' | 'ed25519';
+  chainFamily?: 'mst' | 'solana' | 'bitcoin';
 }
 
 export interface DkgStartResponse {
@@ -114,32 +120,39 @@ export interface CoordinatorStatusResponse {
 }
 
 export class SaralBackendClient {
-  private coordinatorUrl: string;
+  private coordinatorUrls: Record<WalletDomain, string>;
   private internalToken: string;
   private timeoutMs: number;
   private reqSeq: number = 1;
 
-  constructor(config: { coordinatorUrl?: string; internalToken?: string; timeoutMs?: number } = {}) {
-    this.coordinatorUrl = (config.coordinatorUrl || process.env.COORDINATOR_URL || 'http://localhost:9001').replace(/\/$/, '');
+  constructor(config: {
+    coordinatorUrl?: string;
+    coordinatorUrls?: Partial<Record<WalletDomain, string>>;
+    internalToken?: string;
+    timeoutMs?: number;
+  } = {}) {
+    this.coordinatorUrls = {
+      foundation: config.coordinatorUrls?.foundation || config.coordinatorUrl || process.env.COORDINATOR_URL || 'http://localhost:9001',
+      public: config.coordinatorUrls?.public || process.env.COORDINATOR_PUBLIC_URL || 'http://localhost:9002',
+      private: config.coordinatorUrls?.private || process.env.COORDINATOR_PRIVATE_URL || 'http://localhost:9003',
+    };
     this.internalToken = config.internalToken || process.env.SARAL_INTERNAL_TOKEN || '';
-    this.timeoutMs = config.timeoutMs || 8000;
+    this.timeoutMs = config.timeoutMs || 15000;
   }
 
   public async rpcCall<T = unknown>(
     method: string,
     params: Record<string, unknown> = {},
-    customToken?: string
+    customToken?: string,
+    maxRetries = 2,
+    domain: WalletDomain = 'foundation',
   ): Promise<T> {
     const correlationId = `corr-${crypto.randomUUID()}`;
-    const endpoint = this.coordinatorUrl.endsWith('/rpc') ? this.coordinatorUrl : `${this.coordinatorUrl}/rpc`;
+    const coordinatorUrl = this.coordinatorUrls[domain].replace(/\/$/, '');
+    const endpoint = coordinatorUrl.endsWith('/rpc') ? coordinatorUrl : `${coordinatorUrl}/rpc`;
 
     // Issue genuine EdDSA token for service authorization
-    let bearerToken = customToken;
-    if (!bearerToken) {
-      try {
-        bearerToken = KeyManager.getInstance().issueToken('auth-server', 'operator', true);
-      } catch (_) {}
-    }
+    const bearerToken = customToken ?? KeyManager.getInstance().issueToken('auth-server', 'operator', true);
 
     const payload: JsonRpcRequest = {
       jsonrpc: '2.0',
@@ -161,7 +174,6 @@ export class SaralBackendClient {
     }
 
     let lastError: Error | null = null;
-    const maxRetries = 2;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const controller = new AbortController();
@@ -171,6 +183,7 @@ export class SaralBackendClient {
         const resp = await fetch(endpoint, {
           method: 'POST',
           headers,
+          redirect: 'error',
           body: JSON.stringify(payload),
           signal: controller.signal,
         });
@@ -216,15 +229,29 @@ export class SaralBackendClient {
   /**
    * Orchestrates first-time DKG across committee nodes.
    */
-  public async startDkg(params: DkgStartParams = {}): Promise<DkgStartResponse> {
-    return this.rpcCall<DkgStartResponse>('saral_startDkg', params as Record<string, unknown>);
+  public async startDkg(params: DkgStartParams = {}, domain: WalletDomain = 'foundation'): Promise<DkgStartResponse> {
+    const token = params.userId && KeyManager.getInstance().issueScopedToken({
+      sub: params.userId,
+      userId: params.userId,
+      walletId: params.walletId,
+      keyId: params.keyId,
+      dkgSessionId: params.sessionId,
+      committeeId: params.committeeId,
+      curve: params.curve,
+      chainFamily: params.chainFamily,
+      operation: 'start_dkg',
+      policySatisfied: true,
+      epoch: 1,
+      exp: Math.floor(Date.now() / 1000) + 120,
+    });
+    return this.rpcCall<DkgStartResponse>('saral_startDkg', params as Record<string, unknown>, token, 0, domain);
   }
 
   /**
    * Retrieves status and node completion counts for an active DKG session.
    */
-  public async getDkgStatus(sessionId: string): Promise<DkgStatusResponse> {
-    return this.rpcCall<DkgStatusResponse>('saral_getDkgStatus', { sessionId });
+  public async getDkgStatus(sessionId: string, domain: WalletDomain = 'foundation'): Promise<DkgStatusResponse> {
+    return this.rpcCall<DkgStatusResponse>('saral_getDkgStatus', { sessionId }, undefined, 0, domain);
   }
 
   /**
@@ -238,7 +265,7 @@ export class SaralBackendClient {
    * Recomputes returning user's aggregate signing public key Y from verified distributed key shares
    * WITHOUT EVER exposing or reconstructing the complete private scalar x.
    */
-  public async derivePublicKey(params: DerivePublicKeyParams): Promise<DerivePublicKeyResponse> {
+  public async derivePublicKey(params: DerivePublicKeyParams, domain: WalletDomain = 'foundation'): Promise<DerivePublicKeyResponse> {
     // Generate scoped authorization token binding user and wallet identities
     const scopedToken = KeyManager.getInstance().issueScopedToken({
       sub: params.userId,
@@ -248,14 +275,19 @@ export class SaralBackendClient {
       dkgSessionId: params.dkgSessionId,
       committeeId: params.committeeId,
       curve: params.curve,
+      chainFamily: params.chainFamily,
       epoch: params.epoch,
       operation: 'derive_public_key',
+      policySatisfied: true,
+      exp: Math.floor(Date.now() / 1000) + 120,
     });
 
     return this.rpcCall<DerivePublicKeyResponse>(
       'saral_derivePublicKey',
       (params as unknown) as Record<string, unknown>,
-      scopedToken
+      scopedToken,
+      0,
+      domain,
     );
   }
 

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,8 +25,19 @@ type Engine struct {
 	AVSSEngine *avss.Engine
 	Relay      avss.RelaySender
 
-	sessions map[string]*Session
-	mu       sync.RWMutex
+	sessions     map[string]*Session
+	mu           sync.RWMutex
+	walletSign   func([]byte) string
+	walletKeyFor func(string) string
+}
+
+// ConfigureWalletAgreement supplies the local identity and the pinned committee keys.
+// Invoke before serving wallet DKG requests.
+func (e *Engine) ConfigureWalletAgreement(sign func([]byte) string, keyFor func(string) string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.walletSign = sign
+	e.walletKeyFor = keyFor
 }
 
 // NewEngine creates a new DKG engine instance
@@ -56,15 +69,61 @@ func (e *Engine) CreateSession(
 
 // CreateSessionWithBinding initializes a new DKG session with authenticated wallet and user ownership bindings
 func (e *Engine) CreateSessionWithBinding(
-	sessionID, committeeID, walletID, keyID, userID, curve, chainFamily string,
+	sessionID, committeeID, walletID, keyID, userID, curveName, chainFamily string,
 	n, k, t int,
 	committee []string,
 ) (*Session, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	curve, err := cryptography.ParseCurve(curveName)
+	if err != nil {
+		return nil, err
+	}
+	bound := walletID != "" || keyID != "" || userID != ""
+	if !vault.ValidRecordID(sessionID) || !vault.ValidRecordID(committeeID) {
+		return nil, fmt.Errorf("invalid DKG session or committee identifier")
+	}
+	if len(committee) != n {
+		return nil, fmt.Errorf("participant count does not match committee")
+	}
+	if bound {
+		validChain := (curve == cryptography.CurveSecp256k1 && (chainFamily == "mst" || chainFamily == "bitcoin")) ||
+			(curve == cryptography.CurveEd25519 && chainFamily == "solana")
+		if !validChain || !vault.ValidRecordID(walletID) || !vault.ValidRecordID(keyID) || !vault.ValidRecordID(userID) {
+			return nil, fmt.Errorf("invalid wallet key binding")
+		}
+		domain := strings.ToLower(e.Domain)
+		if n != 5 || k != 3 || t != 1 || !slices.Contains([]string{"foundation", "public", "private"}, domain) ||
+			committeeID != "committee-"+domain {
+			return nil, fmt.Errorf("wallet DKG requires a 3-of-5 committee in the local domain")
+		}
+		for index, node := range committee {
+			if node != fmt.Sprintf("saral-%s-%d", domain, index+1) {
+				return nil, fmt.Errorf("wallet DKG committee members do not match the local domain")
+			}
+		}
+		if !e.ShareStore.Persistent() {
+			return nil, fmt.Errorf("a persistent share vault is required for wallet DKG")
+		}
+	} else if curve != cryptography.CurveP256 {
+		return nil, fmt.Errorf("wallet curves require a wallet key binding")
+	}
 	if sess, exists := e.sessions[sessionID]; exists {
+		if sess.WalletID != walletID || sess.KeyID != keyID || sess.UserBindingID != userID || sess.Curve != curve ||
+			sess.ChainFamily != chainFamily || sess.CommitteeID != committeeID || sess.N != n || sess.K != k || sess.T != t ||
+			!slices.Equal(sess.Committee, committee) {
+			return nil, fmt.Errorf("existing DKG session has different bindings")
+		}
 		return sess, nil
+	}
+
+	participants := make(map[string]bool, n)
+	for _, member := range committee {
+		if !vault.ValidRecordID(member) || participants[member] {
+			return nil, fmt.Errorf("invalid or duplicate DKG participant")
+		}
+		participants[member] = true
 	}
 
 	selfIndex := avss.NodeIndexInCommittee(committee, e.NodeID)
@@ -83,7 +142,53 @@ func (e *Engine) CreateSessionWithBinding(
 	sess.Curve = curve
 	sess.ChainFamily = chainFamily
 
-	e.sessions[sessionID] = sess
+	if bound {
+		meta, share, blind, err := e.ShareStore.LoadKeyShare(keyID, sess.Epoch)
+		switch {
+		case err == nil:
+			defer share.Zero()
+			defer blind.Zero()
+			if !matchesWalletRecord(meta, sess, e.NodeID) || (meta.State != "ACTIVE" && meta.State != "STAGED") {
+				return nil, fmt.Errorf("existing key share has different bindings")
+			}
+			if meta.State == "STAGED" {
+				if err := sess.activateWalletShare(*meta, share, blind); err != nil {
+					return nil, err
+				}
+			}
+			sess.State = StateCompleted
+		case !errors.Is(err, vault.ErrShareNotFound):
+			return nil, fmt.Errorf("could not check existing wallet key share: %w", err)
+		}
+		if sess.State != StateCompleted {
+			if err := sess.reserveWalletSession(); err != nil {
+				return nil, err
+			}
+			sess.walletAgreement, err = newWalletAgreement(sess, e.walletSign, e.walletKeyFor)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			// A completed share predating the agreement checkpoint keeps its
+			// original identity and remains available for public derivation.
+			if e.walletSign != nil && e.walletKeyFor != nil {
+				a, err := newWalletAgreement(sess, e.walletSign, e.walletKeyFor)
+				if err == nil && a.state.Decision != nil {
+					sess.walletAgreement = a
+				}
+			}
+			if sess.walletAgreement == nil {
+				e.sessions[sessionID] = sess
+				return sess, nil
+			}
+		}
+	}
+	for _, existing := range e.sessions {
+		if bound && existing.KeyID == keyID {
+			return nil, fmt.Errorf("key already belongs to a different DKG session")
+		}
+	}
+
 	log.Printf("[DKG Engine - %s] Session %s created for committee %s (n=%d, k=%d, t=%d, index=%d, wallet=%s, key=%s)",
 		e.NodeID, sessionID, committeeID, n, k, t, selfIndex, walletID, keyID)
 
@@ -91,11 +196,22 @@ func (e *Engine) CreateSessionWithBinding(
 	if e.AVSSEngine != nil {
 		for _, member := range committee {
 			subSessID := fmt.Sprintf("dkg-%s-contrib-%s", sessionID, member)
-			_, _ = e.AVSSEngine.CreateSession(subSessID, committeeID, member, 1, n, k, t, committee)
+			if _, err := e.AVSSEngine.CreateSessionForCurve(subSessID, committeeID, member, 1, n, k, t, committee, curve); err != nil {
+				return nil, err
+			}
 		}
 	}
 
+	e.sessions[sessionID] = sess
 	return sess, nil
+}
+
+func matchesWalletRecord(meta *vault.ShareRecordMetadata, sess *Session, nodeID string) bool {
+	return meta.RecordVersion == 2 && meta.WalletID == sess.WalletID && meta.UserBindingID == sess.UserBindingID &&
+		meta.KeyID == sess.KeyID && meta.DKGSessionID == sess.SessionID && meta.CommitteeID == sess.CommitteeID &&
+		meta.NodeID == nodeID && meta.NodeIndex == sess.SelfIndex && meta.Epoch == sess.Epoch &&
+		meta.Curve == string(sess.Curve) && meta.ChainFamily == sess.ChainFamily && meta.Threshold == sess.K &&
+		meta.MasterSigningPublicKeyHash != ""
 }
 
 // GetSession returns a DKG session by ID
@@ -110,6 +226,21 @@ func (e *Engine) GetSession(sessionID string) (*Session, error) {
 	return sess, nil
 }
 
+func (e *Engine) HasPersistedWalletShare(sessionID, keyID string) bool {
+	if e.ShareStore == nil || !vault.ValidRecordID(sessionID) || !vault.ValidRecordID(keyID) {
+		return false
+	}
+	meta, share, blind, err := e.ShareStore.LoadKeyShare(keyID, 1)
+	if err != nil {
+		return false
+	}
+	share.Zero()
+	blind.Zero()
+	return meta.RecordVersion == 2 && meta.KeyID == keyID && meta.DKGSessionID == sessionID &&
+		meta.UserBindingID != "" && meta.WalletID != "" && meta.NodeID == e.NodeID &&
+		meta.State == "ACTIVE" && meta.MasterSigningPublicKeyHash != ""
+}
+
 // StartContribution deals the local random contribution and broadcasts commitments
 func (e *Engine) StartContribution(sessionID string) error {
 	sess, err := e.GetSession(sessionID)
@@ -120,6 +251,21 @@ func (e *Engine) StartContribution(sessionID string) error {
 	dealerPkg, err := sess.StartContribution()
 	if err != nil {
 		return err
+	}
+
+	if dealerPkg == nil {
+		if sess.walletAgreement == nil {
+			return nil
+		}
+		contribution, err := sess.loadWalletAnnouncement()
+		if err != nil {
+			return err
+		}
+		if sess.walletAgreement.begin() {
+			e.replayWalletAVSS(sess)
+			go e.runWalletAgreement(sess, nil, contribution)
+		}
+		return nil
 	}
 
 	log.Printf("[DKG Engine - %s] Generated local contribution for session %s (SecretCommit: %s)",
@@ -135,66 +281,79 @@ func (e *Engine) StartContribution(sessionID string) error {
 		CommitmentMatrix: dealerPkg.CommitmentMatrix.ToHexMatrix(),
 		Timestamp:        time.Now().UnixMilli(),
 	}
+	if sess.UserBindingID != "" {
+		signing := sess.Curve.BaseMult(dealerPkg.Secret)
+		announcement, response, err := cryptography.ProveSigningCommitment(
+			sessionID+":"+e.NodeID, dealerPkg.CommitmentMatrix.SecretCommitment(), signing, dealerPkg.BlindSecret,
+		)
+		if err != nil {
+			return err
+		}
+		contribMsg.PublicKeyCommitment = signing.Hex()
+		contribMsg.ProofAnnouncement = announcement
+		contribMsg.ProofResponse = response
+		if err := sess.saveWalletAnnouncement(contribMsg); err != nil {
+			return err
+		}
+	}
 	e.broadcastDKG(sess.Committee, MessageTypeDKGContribution, contribMsg)
 
 	// 2. Delegate AVSS distribution to local AVSS engine
-	go func() {
-		subSessionID := fmt.Sprintf("dkg-%s-contrib-%s", sessionID, e.NodeID)
-		_, err := e.AVSSEngine.StartDealerSharing(
-			subSessionID, sess.CommitteeID, sess.Committee, sess.K,
-			sess.LocalSecret, sess.LocalBlind,
-		)
-		if err != nil {
-			log.Printf("[DKG Engine - %s] Error starting AVSS sub-sharing: %v", e.NodeID, err)
-		}
-	}()
+	if e.AVSSEngine != nil {
+		e.AVSSEngine.DispatchDealerPackage(dealerPkg)
+	}
+	if agreement := sess.walletAgreement; agreement != nil && agreement.begin() {
+		e.replayWalletAVSS(sess)
+		go e.runWalletAgreement(sess, dealerPkg, contribMsg)
+	}
 
 	return nil
 }
 
 // OnAVSSSubprotocolCompleted is invoked when an AVSS subprotocol session completes
 func (e *Engine) OnAVSSSubprotocolCompleted(subSessionID string, avssSess *avss.Session) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
+	e.mu.RLock()
+	var matched *Session
 	for _, sess := range e.sessions {
-		expectedPrefix := fmt.Sprintf("dkg-%s-contrib-", sess.SessionID)
-		if len(subSessionID) > len(expectedPrefix) && subSessionID[:len(expectedPrefix)] == expectedPrefix {
-			dealerID := subSessionID[len(expectedPrefix):]
-			sess.RecordCompletedSharing(dealerID, avssSess)
-			log.Printf("[DKG Engine - %s] Recorded completed AVSS contribution from dealer %s in session %s (%d/%d verified)",
-				e.NodeID, dealerID, sess.SessionID, len(sess.CompletedSharings), sess.N-sess.T)
-
-			// If ready to propose qualified set, propose automatically
-			if sess.CanProposeQualifiedSet() && !sess.Agreement.IsDecided && !sess.proposed {
-				sess.proposed = true
-				go func(s *Session) {
-					// If not all N completed yet, wait up to 100ms for peer contributions to arrive
-					if len(s.CompletedSharings) < s.N {
-						time.Sleep(100 * time.Millisecond)
-					}
-					if s.Agreement.IsDecided {
-						return
-					}
-					candidateSet := s.GetCandidateQualifiedSet()
-					propMsg := &proactive.AgreementProposeMessage{
-						SessionID:    s.SessionID,
-						CommitteeID:  s.CommitteeID,
-						Epoch:        s.Epoch,
-						ProposerID:   e.NodeID,
-						CandidateSet: candidateSet,
-					}
-					e.proposeQualifiedSet(s, propMsg)
-				}(sess)
-			}
+		expectedID := fmt.Sprintf("dkg-%s-contrib-%s", sess.SessionID, avssSess.DealerID)
+		if subSessionID == expectedID && sess.Curve == avssSess.Curve && sess.CommitteeID == avssSess.CommitteeID {
+			matched = sess
 			break
 		}
 	}
+	e.mu.RUnlock()
+	if matched != nil {
+		matched.RecordCompletedSharing(avssSess.DealerID, avssSess)
+		e.dealerCompleted(matched, avssSess.DealerID)
+	}
+}
+
+func (e *Engine) maybeProposeQualifiedSet(sess *Session) {
+	if len(sess.GetCandidateQualifiedSet()) < sess.N-sess.T {
+		return
+	}
+	sess.mu.Lock()
+	if sess.proposed {
+		sess.mu.Unlock()
+		return
+	}
+	sess.proposed = true
+	sess.mu.Unlock()
+	go func() {
+		if len(sess.GetCandidateQualifiedSet()) < sess.N {
+			time.Sleep(100 * time.Millisecond)
+		}
+		e.proposeQualifiedSet(sess, &proactive.AgreementProposeMessage{
+			SessionID: sess.SessionID, CommitteeID: sess.CommitteeID, Epoch: sess.Epoch,
+			ProposerID: e.NodeID, CandidateSet: sess.GetCandidateQualifiedSet(),
+		})
+	}()
 }
 
 func (e *Engine) proposeQualifiedSet(sess *Session, propMsg *proactive.AgreementProposeMessage) {
 	echo, err := sess.Agreement.ProcessProposal(propMsg)
 	if err == nil && echo != nil {
+		_ = e.HandleAgreementEcho(echo)
 		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementEcho, echo)
 	}
 	e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementPropose, propMsg)
@@ -236,6 +395,7 @@ func (e *Engine) HandleAgreementPropose(msg *proactive.AgreementProposeMessage) 
 			return
 		}
 		if echo != nil {
+			_ = e.HandleAgreementEcho(echo)
 			e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementEcho, echo)
 		}
 
@@ -266,9 +426,28 @@ func (e *Engine) HandleDKGContribution(msg *DKGContributionMessage) error {
 		return err
 	}
 
-	cm, err := avss.ParseCommitmentMatrixFromHex(msg.CommitmentMatrix)
+	dealerIndex := avss.NodeIndexInCommittee(sess.Committee, msg.DealerID)
+	if msg.CommitteeID != sess.CommitteeID || dealerIndex < 1 || dealerIndex != msg.DealerIndex || len(msg.CommitmentMatrix) != sess.K {
+		return fmt.Errorf("invalid DKG contribution scope")
+	}
+	cm, err := avss.ParseCommitmentMatrixForCurve(msg.CommitmentMatrix, sess.Curve)
 	if err != nil {
 		return fmt.Errorf("failed to parse peer commitment matrix: %w", err)
+	}
+
+	if cm.Cols != sess.K {
+		return fmt.Errorf("invalid DKG commitment dimensions")
+	}
+	if sess.UserBindingID != "" {
+		signing, err := sess.Curve.ParsePoint(msg.PublicKeyCommitment)
+		if err != nil || !cryptography.VerifySigningCommitment(
+			sess.SessionID+":"+msg.DealerID, cm.SecretCommitment(), signing, msg.ProofAnnouncement, msg.ProofResponse,
+		) {
+			return fmt.Errorf("invalid proof of DKG signing commitment")
+		}
+		sess.RecordVerifiedSigningKey(msg.DealerID, cm.SecretCommitment(), signing)
+		e.dealerCompleted(sess, msg.DealerID)
+		return nil
 	}
 
 	sess.RecordPeerCommitment(msg.DealerID, cm)
@@ -287,6 +466,7 @@ func (e *Engine) HandleAgreementEcho(echo *proactive.AgreementEchoMessage) error
 		return err
 	}
 	if ready != nil {
+		_ = e.HandleAgreementReady(ready)
 		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementReady, ready)
 	}
 	return nil
@@ -305,6 +485,7 @@ func (e *Engine) HandleAgreementReady(ready *proactive.AgreementReadyMessage) er
 	}
 
 	if readyToSend != nil {
+		_ = e.HandleAgreementReady(readyToSend)
 		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementReady, readyToSend)
 	}
 
@@ -390,18 +571,20 @@ func (e *Engine) findSession(sessionID, committeeID string) *Session {
 	defer e.mu.RUnlock()
 
 	if sessionID != "" {
-		if sess, exists := e.sessions[sessionID]; exists {
+		if sess := e.sessions[sessionID]; sess != nil && sess.UserBindingID == "" && sess.CommitteeID == committeeID {
 			return sess
 		}
+		return nil
 	}
 
 	for _, sess := range e.sessions {
-		if sess.CommitteeID == committeeID && sess.State != StateCompleted && sess.State != StateFailed {
+		state := sess.GetPublicView().State
+		if sess.UserBindingID == "" && sess.CommitteeID == committeeID && state != StateCompleted && state != StateFailed {
 			return sess
 		}
 	}
 	for _, sess := range e.sessions {
-		if sess.CommitteeID == committeeID {
+		if sess.UserBindingID == "" && sess.CommitteeID == committeeID {
 			return sess
 		}
 	}
@@ -440,103 +623,69 @@ func (e *Engine) GetAllSessionViews() []*DKGSessionPublicView {
 // GetPublicShareContribution computes the node's public share point Y_i = x_i * G from its
 // existing encrypted DKG share, WITHOUT EVER exposing or reconstructing the private scalar x_i.
 func (e *Engine) GetPublicShareContribution(
-	keyID, sessionID, committeeID, curve string,
+	keyID, sessionID, committeeID, curveName string,
 	epoch uint64,
 ) (string, int, uint64, string, *vault.ShareRecordMetadata, error) {
 	if epoch == 0 {
 		epoch = 1
 	}
+	curve, err := cryptography.ParseCurve(curveName)
+	if err != nil {
+		return "", 0, 0, "", nil, err
+	}
+	if !vault.ValidRecordID(sessionID) || (committeeID != "" && !vault.ValidRecordID(committeeID)) ||
+		(keyID != "" && !vault.ValidRecordID(keyID)) || (curve != cryptography.CurveP256 && keyID == "") {
+		return "", 0, 0, "", nil, fmt.Errorf("invalid DKG share scope")
+	}
 
-	// 1. Try loading from encrypted vault
 	if e.ShareStore != nil {
-		idsToTry := []string{}
+		recordID := sessionID
 		if keyID != "" {
-			idsToTry = append(idsToTry, keyID)
+			recordID = keyID
 		}
-		if sessionID != "" {
-			idsToTry = append(idsToTry, sessionID)
-		}
-		if committeeID != "" {
-			idsToTry = append(idsToTry, committeeID)
-		}
-
-		for _, idToTry := range idsToTry {
-			meta, share, _, err := e.ShareStore.LoadShare(idToTry, epoch, 0)
-			if err == nil && share != nil {
-				defer share.Zero()
-
-				usedCurve := curve
-				if usedCurve == "" && meta.Curve != "" {
-					usedCurve = meta.Curve
-				}
-				if usedCurve == "" {
-					usedCurve = "secp256k1"
-				}
-
-				ptHex, err := cryptography.ComputePublicContributionPoint(usedCurve, share.Hex())
-				if err != nil {
-					return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", usedCurve, err)
-				}
-				return ptHex, meta.NodeIndex, meta.Epoch, meta.PublicSecretCommitment, meta, nil
+		meta, share, blind, err := e.ShareStore.LoadShare(recordID, epoch, 0)
+		if err == nil {
+			defer share.Zero()
+			defer blind.Zero()
+			if meta.DKGSessionID != sessionID || meta.CommitteeID != committeeID || meta.Epoch != epoch ||
+				meta.NodeID != e.NodeID || meta.NodeIndex < 1 || meta.State != "ACTIVE" || share.Curve() != curve ||
+				meta.KeyID != keyID || (curve != cryptography.CurveP256 && (meta.RecordVersion != 2 || meta.MasterSigningPublicKeyHash == "")) {
+				return "", 0, 0, "", nil, fmt.Errorf("stored DKG share does not match request")
 			}
-		}
-	}
-
-	// 2. Try loading from active in-memory sessions
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	var matchedSession *Session
-	if sessionID != "" {
-		matchedSession = e.sessions[sessionID]
-	}
-	if matchedSession == nil && keyID != "" {
-		for _, s := range e.sessions {
-			if s.KeyID == keyID {
-				matchedSession = s
-				break
+			point := curve.BaseMult(share)
+			if !point.IsOnCurve() {
+				return "", 0, 0, "", nil, fmt.Errorf("invalid DKG public share")
 			}
+			return point.Hex(), meta.NodeIndex, meta.Epoch, meta.PublicSecretCommitment, meta, nil
 		}
-	}
-	if matchedSession == nil && committeeID != "" {
-		for _, s := range e.sessions {
-			if s.CommitteeID == committeeID {
-				matchedSession = s
-				break
-			}
+		if !errors.Is(err, vault.ErrShareNotFound) {
+			return "", 0, 0, "", nil, err
 		}
 	}
 
-	if matchedSession != nil && matchedSession.FinalShare != nil {
-		usedCurve := curve
-		if usedCurve == "" && matchedSession.Curve != "" {
-			usedCurve = matchedSession.Curve
-		}
-		if usedCurve == "" {
-			usedCurve = "secp256k1"
-		}
-
-		ptHex, err := cryptography.ComputePublicContributionPoint(usedCurve, matchedSession.FinalShare.Hex())
-		if err != nil {
-			return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", usedCurve, err)
-		}
-		commit := ""
-		if matchedSession.MasterSecretCommitment != nil {
-			commit = matchedSession.MasterSecretCommitment.Hex()
-		}
-		meta := &vault.ShareRecordMetadata{
-			WalletID:      matchedSession.WalletID,
-			KeyID:         matchedSession.KeyID,
-			UserBindingID: matchedSession.UserBindingID,
-			DKGSessionID:  matchedSession.SessionID,
-			CommitteeID:   matchedSession.CommitteeID,
-			NodeIndex:     matchedSession.SelfIndex,
-			Curve:         matchedSession.Curve,
-		}
-		return ptHex, matchedSession.SelfIndex, matchedSession.Epoch, commit, meta, nil
+	sess, err := e.GetSession(sessionID)
+	if err != nil {
+		return "", 0, 0, "", nil, err
 	}
-
-	return "", 0, 0, "", nil, fmt.Errorf("no verified DKG share found on node %s for key %s / committee %s / session %s at epoch %d",
-		e.NodeID, keyID, committeeID, sessionID, epoch)
+	sess.mu.RLock()
+	defer sess.mu.RUnlock()
+	if sess.State != StateCompleted || sess.FinalShare == nil || sess.Epoch != epoch ||
+		sess.KeyID != keyID || sess.CommitteeID != committeeID || sess.Curve != curve {
+		return "", 0, 0, "", nil, fmt.Errorf("completed share does not match request")
+	}
+	point := curve.BaseMult(sess.FinalShare)
+	if !point.IsOnCurve() {
+		return "", 0, 0, "", nil, fmt.Errorf("invalid DKG public share")
+	}
+	commitment := sess.MasterSecretCommitment.Hex()
+	meta := &vault.ShareRecordMetadata{
+		WalletID: sess.WalletID, KeyID: sess.KeyID, UserBindingID: sess.UserBindingID,
+		DKGSessionID: sess.SessionID, CommitteeID: sess.CommitteeID,
+		NodeID: sess.SelfID, NodeIndex: sess.SelfIndex, Epoch: sess.Epoch,
+		Curve: string(sess.Curve), ChainFamily: sess.ChainFamily,
+	}
+	if sess.UserBindingID != "" {
+		meta.MasterSigningPublicKeyHash = signingPointHash(sess.MasterSigningPublicKey)
+	}
+	return point.Hex(), sess.SelfIndex, sess.Epoch, commitment, meta, nil
 }
-

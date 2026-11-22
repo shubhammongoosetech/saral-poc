@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { mfaApi, walletApi } from '@/shared/api/endpoints';
+import React, { useState, useEffect, useRef } from 'react';
+import { mfaApi } from '@/shared/api/endpoints';
 import { useSession } from './useSession';
-import { getCurrentCoords } from '@/shared/hooks/useLocation';
 import { SESSION_STORE } from '@/shared/lib/storage';
 import { mapApiError } from '@/shared/lib/format';
 import { AuthLayout } from '@/app/layouts/AuthLayout';
@@ -9,20 +8,25 @@ import { Button } from '@/shared/ui/Button';
 import { Alert } from '@/shared/ui/Alert';
 import { OtpInput } from '@/shared/ui/OtpInput';
 import { CopyButton } from '@/shared/ui/CopyButton';
+import { QrCode } from '@/shared/ui/QrCode';
 
 export const Mfa: React.FC = () => {
-  const { token, handleMfaVerified, logout, setLastAccessCheck } = useSession();
+  const { token, handleMfaVerified, logout } = useSession();
 
   const [enrolled, setEnrolled] = useState<boolean | null>(null);
   const [secret, setSecret] = useState<string>('');
-  const [qrUri, setQrUri] = useState<string>('');
+  const [qrUri, setQrUri] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [code, setCode] = useState('');
   const [recoveryInput, setRecoveryInput] = useState('');
   const [useRecovery, setUseRecovery] = useState(false);
+  const [developmentOtpEnabled, setDevelopmentOtpEnabled] = useState(false);
   const [devOtp, setDevOtp] = useState<string | null>(null);
+  const [loadingDevOtp, setLoadingDevOtp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const verifying = useRef(false);
+  const validRecoveryCode = /^(?:[A-Z0-9]{4}-[A-Z0-9]{4}|[A-F0-9]{4}(?:-[A-F0-9]{4}){4})$/;
 
   // Initialize MFA state: check if user is already enrolled
   useEffect(() => {
@@ -37,16 +41,10 @@ export const Mfa: React.FC = () => {
         const status = await mfaApi.getStatus();
         if (!mounted) return;
 
+        const showDevOtp = import.meta.env.DEV && status.developmentOtpEnabled === true;
+        setDevelopmentOtpEnabled(showDevOtp);
         if (status.enrolled) {
           setEnrolled(true);
-          // Returning user: trigger challenge / fetch dev OTP if configured
-          try {
-            const res = await mfaApi.sendMfaOtp();
-            if (import.meta.env.DEV && res.devOtp) {
-              setDevOtp(res.devOtp);
-              setCode(res.devOtp);
-            }
-          } catch (_) {}
         } else {
           setEnrolled(false);
           // New user: initiate enrollment
@@ -55,10 +53,7 @@ export const Mfa: React.FC = () => {
           setSecret(enrollData.secret);
           setQrUri(enrollData.qrUri);
           setRecoveryCodes(enrollData.recoveryCodes || []);
-          if (import.meta.env.DEV && enrollData.devOtp) {
-            setDevOtp(enrollData.devOtp);
-            setCode(enrollData.devOtp);
-          }
+          if (showDevOtp) setDevOtp(enrollData.devOtp ?? null);
         }
       } catch (err: unknown) {
         if (mounted) {
@@ -76,8 +71,25 @@ export const Mfa: React.FC = () => {
     };
   }, [token]);
 
+  const showDevelopmentCode = async () => {
+    const originalToken = SESSION_STORE.getToken();
+    setLoadingDevOtp(true);
+    setError(null);
+    try {
+      const result = await mfaApi.sendMfaOtp();
+      if (SESSION_STORE.getToken() === originalToken) setDevOtp(result.devOtp ?? null);
+    } catch (error: unknown) {
+      if (SESSION_STORE.getToken() === originalToken) {
+        setError(mapApiError(error, 'Unable to load a development code'));
+      }
+    } finally {
+      setLoadingDevOtp(false);
+    }
+  };
+
   const handleVerify = async (e?: React.FormEvent, directCode?: string) => {
     if (e) e.preventDefault();
+    if (enrolled === null || verifying.current) return;
 
     const codeToVerify = useRecovery ? recoveryInput.trim().toUpperCase() : directCode || code;
 
@@ -85,37 +97,24 @@ export const Mfa: React.FC = () => {
       setError('6 digits required');
       return;
     }
-    if (useRecovery && !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(codeToVerify)) {
-      setError('Recovery code must match XXXX-XXXX format');
+    if (useRecovery && !validRecoveryCode.test(codeToVerify)) {
+      setError('Enter a recovery code exactly as shown in your saved codes.');
       return;
     }
 
+    verifying.current = true;
+    const originalToken = SESSION_STORE.getToken();
     try {
       setLoading(true);
       setError(null);
       const res = await mfaApi.verifyMfaOtp(codeToVerify);
+      if (SESSION_STORE.getToken() !== originalToken) return;
 
-      // Store the upgraded token carrying mfaVerified: true
-      SESSION_STORE.setToken(res.token);
-
-      if (!res.hasPolicy) {
-        await handleMfaVerified(res.token, false);
-        return;
-      }
-
-      // Check access with geolocation before proceeding to wallet
-      const coords = await getCurrentCoords();
-      const check = await walletApi.checkAccess(coords.lat, coords.lng);
-      setLastAccessCheck(check);
-
-      if (check.allowed) {
-        await handleMfaVerified(res.token, true);
-      } else {
-        setError(check.reason || 'Access allowed only during your working time and location.');
-      }
+      await handleMfaVerified(res.token, res.hasPolicy);
     } catch (err: unknown) {
       setError(mapApiError(err, 'Verification failed. Please check the code and try again.'));
     } finally {
+      verifying.current = false;
       setLoading(false);
     }
   };
@@ -129,9 +128,9 @@ export const Mfa: React.FC = () => {
           </h1>
           <p className="text-xs text-muted mt-1">
             {enrolled === false
-              ? 'Scan this QR code with Google Authenticator or your preferred TOTP app.'
+              ? 'Scan the QR code or enter the setup key in your authenticator app.'
               : useRecovery
-              ? 'Enter one of your 8-character backup recovery codes.'
+              ? 'Enter one of your saved recovery codes.'
               : 'Enter the 6-digit verification code from your authenticator app.'}
           </p>
         </div>
@@ -141,16 +140,7 @@ export const Mfa: React.FC = () => {
         {/* First-time Enrollment View */}
         {enrolled === false && (
           <div className="flex flex-col gap-4">
-            {qrUri && (
-              <div className="flex flex-col items-center justify-center p-3 rounded-xl bg-surface-2 border border-border">
-                <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(qrUri)}`}
-                  alt="MFA QR Code"
-                  className="w-40 h-40 rounded-lg bg-white p-2"
-                />
-              </div>
-            )}
-
+            {qrUri && <QrCode value={qrUri} label="Authenticator setup QR code" size={180} />}
             {secret && (
               <div className="flex items-center justify-between p-2.5 rounded-lg bg-surface-2 border border-border text-xs font-mono">
                 <div className="flex flex-col">
@@ -188,14 +178,16 @@ export const Mfa: React.FC = () => {
               value={code}
               onChange={setCode}
               onComplete={(val) => handleVerify(undefined, val)}
-              disabled={loading}
+              disabled={loading || enrolled === null}
             />
           ) : (
             <div>
-              <label className="text-xs font-medium text-muted block mb-1">Backup Recovery Code</label>
+              <label htmlFor="recovery-code" className="text-xs font-medium text-muted block mb-1">Backup Recovery Code</label>
               <input
+                id="recovery-code"
                 type="text"
-                placeholder="XXXX-XXXX"
+                placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"
+                maxLength={23}
                 value={recoveryInput}
                 onChange={(e) => setRecoveryInput(e.target.value.toUpperCase())}
                 disabled={loading}
@@ -204,17 +196,33 @@ export const Mfa: React.FC = () => {
             </div>
           )}
 
-          {import.meta.env.DEV && devOtp && !useRecovery && (
-            <div className="flex items-center gap-2 p-2 rounded bg-surface-2 border border-border text-xs font-mono">
-              <span className="text-accent font-semibold">Dev TOTP:</span>
-              <span className="text-text">{devOtp}</span>
+          {developmentOtpEnabled && !useRecovery && (
+            <div className="flex flex-col gap-2">
+              {enrolled && (
+                <Button type="button" variant="secondary" size="sm" onClick={showDevelopmentCode} loading={loadingDevOtp}>
+                  Show development code
+                </Button>
+              )}
+              {devOtp && (
+                <div
+                  onClick={() => setCode(devOtp)}
+                  className="flex items-center justify-between p-2 rounded bg-surface-2 border border-border text-xs font-mono cursor-pointer hover:border-accent transition-colors"
+                  title="Click to auto-fill code"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-accent font-semibold">Dev MFA Code:</span>
+                    <span className="text-text font-bold tracking-wider">{devOtp}</span>
+                  </div>
+                  <span className="text-[10px] text-muted uppercase">Auto-filled</span>
+                </div>
+              )}
             </div>
           )}
 
           <Button
             type="submit"
             loading={loading}
-            disabled={useRecovery ? recoveryInput.trim().length < 9 : code.length !== 6}
+            disabled={enrolled === null || (useRecovery ? !validRecoveryCode.test(recoveryInput.trim()) : code.length !== 6)}
             fullWidth
           >
             {enrolled === false ? 'Verify and Activate' : 'Verify'}

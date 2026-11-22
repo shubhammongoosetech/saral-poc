@@ -50,10 +50,16 @@ func GenerateDealerSharing(
 	}
 
 	// 1. Generate or use secret
+	curve := cryptography.CurveP256
+	if explicitSecret != nil {
+		curve = explicitSecret.Curve()
+	} else if explicitBlindSecret != nil {
+		curve = explicitBlindSecret.Curve()
+	}
 	secret := explicitSecret
 	if secret == nil {
 		var err error
-		secret, err = cryptography.RandScalar()
+		secret, err = curve.RandomScalar()
 		if err != nil {
 			return nil, fmt.Errorf("failed to sample secret scalar: %w", err)
 		}
@@ -62,10 +68,14 @@ func GenerateDealerSharing(
 	blindSecret := explicitBlindSecret
 	if blindSecret == nil {
 		var err error
-		blindSecret, err = cryptography.RandScalar()
+		blindSecret, err = curve.RandomScalar()
 		if err != nil {
 			return nil, fmt.Errorf("failed to sample blinding scalar: %w", err)
 		}
+	}
+
+	if blindSecret.Curve() != curve {
+		return nil, fmt.Errorf("secret and blind use different curves")
 	}
 
 	// 2. Sample bivariate polynomials
@@ -92,7 +102,7 @@ func GenerateDealerSharing(
 
 	for idx, nodeID := range committee {
 		// Participant index is 1-based: j = 1, 2, ..., n
-		jFE := cryptography.NewFieldElement(int64(idx + 1))
+		jFE := curve.Scalar(int64(idx + 1))
 
 		rowPoly := F.RowPolynomial(jFE)
 		rowBlindPoly := FPrime.RowPolynomial(jFE)

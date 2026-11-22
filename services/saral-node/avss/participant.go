@@ -31,15 +31,27 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.State == StateSharingCompleted {
-		return nil, ErrSessionAlreadyCompleted
-	}
 	if msg.DealerID != s.DealerID {
 		return nil, fmt.Errorf("unexpected dealer: got %s, expected %s", msg.DealerID, s.DealerID)
 	}
+	if !s.messageInScope(msg.SessionID, msg.CommitteeID, msg.RecipientID, msg.Epoch) ||
+		!s.validDimensions(msg.Commitments) || len(msg.RowPoly) != s.K || len(msg.RowBlindPoly) != s.K ||
+		len(msg.ColPoly) != s.K || len(msg.ColBlindPoly) != s.K {
+		return nil, fmt.Errorf("invalid AVSS SEND scope or dimensions")
+	}
+	hash := HashCommitments(msg.Commitments)
+	if s.Curve != cryptography.CurveP256 && (s.SentEcho || s.State == StateSharingCompleted) {
+		if hash != s.CommitmentsHash {
+			return nil, ErrCommitmentMismatch
+		}
+		return s.echoMessages(), nil
+	}
+	if s.State == StateSharingCompleted {
+		return nil, ErrSessionAlreadyCompleted
+	}
 
 	// 1. Parse Commitment Matrix
-	commitMatrix, err := ParseCommitmentMatrixFromHex(msg.Commitments)
+	commitMatrix, err := ParseCommitmentMatrixForCurve(msg.Commitments, s.Curve)
 	if err != nil {
 		s.State = StateSharingFailed
 		s.Error = fmt.Sprintf("invalid commitment matrix: %v", err)
@@ -53,28 +65,28 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 	colBlindCoeffs := make([]*cryptography.FieldElement, len(msg.ColBlindPoly))
 
 	for idx, h := range msg.RowPoly {
-		fe, err := cryptography.NewFieldElementFromHex(h)
+		fe, err := s.Curve.ParseScalar(h)
 		if err != nil {
 			return nil, fmt.Errorf("invalid row poly scalar: %w", err)
 		}
 		rowCoeffs[idx] = fe
 	}
 	for idx, h := range msg.RowBlindPoly {
-		fe, err := cryptography.NewFieldElementFromHex(h)
+		fe, err := s.Curve.ParseScalar(h)
 		if err != nil {
 			return nil, fmt.Errorf("invalid row blind poly scalar: %w", err)
 		}
 		rowBlindCoeffs[idx] = fe
 	}
 	for idx, h := range msg.ColPoly {
-		fe, err := cryptography.NewFieldElementFromHex(h)
+		fe, err := s.Curve.ParseScalar(h)
 		if err != nil {
 			return nil, fmt.Errorf("invalid col poly scalar: %w", err)
 		}
 		colCoeffs[idx] = fe
 	}
 	for idx, h := range msg.ColBlindPoly {
-		fe, err := cryptography.NewFieldElementFromHex(h)
+		fe, err := s.Curve.ParseScalar(h)
 		if err != nil {
 			return nil, fmt.Errorf("invalid col blind poly scalar: %w", err)
 		}
@@ -87,7 +99,7 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 	colBlindPoly := NewPolynomial(colBlindCoeffs)
 
 	// 3. Cryptographic Verification against Commitment Matrix
-	selfIndexFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+	selfIndexFE := s.Curve.Scalar(int64(s.SelfIndex))
 
 	if !commitMatrix.VerifyRowPolynomial(selfIndexFE, rowPoly, rowBlindPoly) {
 		s.State = StateSharingFailed
@@ -114,8 +126,12 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 	}
 
 	// 5. Store verified state
+	if s.CommitmentsHash != "" && s.CommitmentsHash != hash {
+		clear(s.ReceivedEchos)
+		clear(s.ReceivedReadys)
+	}
 	s.Commitments = commitMatrix
-	s.CommitmentsHash = HashCommitments(msg.Commitments)
+	s.CommitmentsHash = hash
 	s.RowPoly = rowPoly
 	s.RowBlindPoly = rowBlindPoly
 	s.ColPoly = colPoly
@@ -123,15 +139,24 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 	s.State = StateEchoCollecting
 	s.UpdatedAt = time.Now()
 
-	// 6. Generate ECHO messages for all participants in the committee
+	s.SentEcho = true
+	return s.echoMessages(), nil
+}
+
+// echoMessages must be called with the session locked.
+func (s *Session) echoMessages() []*EchoMessage {
+	if s.RowPoly == nil {
+		return nil
+	}
 	now := time.Now().UnixMilli()
 	echos := make([]*EchoMessage, len(s.Committee))
+	commitments := s.Commitments.ToHexMatrix()
 
 	for idx, recipientID := range s.Committee {
-		recipientIndexFE := cryptography.NewFieldElement(int64(idx + 1))
+		recipientIndexFE := s.Curve.Scalar(int64(idx + 1))
 		// p_{self, recipient} = a_{self}(recipient)
-		point := rowPoly.Evaluate(recipientIndexFE)
-		blindPoint := rowBlindPoly.Evaluate(recipientIndexFE)
+		point := s.RowPoly.Evaluate(recipientIndexFE)
+		blindPoint := s.RowBlindPoly.Evaluate(recipientIndexFE)
 
 		echos[idx] = &EchoMessage{
 			SessionID:   s.SessionID,
@@ -139,15 +164,13 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 			SenderID:    s.SelfID,
 			RecipientID: recipientID,
 			Epoch:       s.Epoch,
-			Commitments: msg.Commitments,
+			Commitments: commitments,
 			Point:       point.Hex(),
 			BlindPoint:  blindPoint.Hex(),
 			Timestamp:   now,
 		}
 	}
-	s.SentEcho = true
-
-	return echos, nil
+	return echos
 }
 
 // ProcessEchoMessage processes an incoming AVSS_ECHO:
@@ -157,6 +180,9 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if !s.messageInScope(echo.SessionID, echo.CommitteeID, echo.RecipientID, echo.Epoch) || !s.validDimensions(echo.Commitments) {
+		return nil, fmt.Errorf("invalid AVSS ECHO scope or dimensions")
+	}
 	senderIdx := NodeIndexInCommittee(s.Committee, echo.SenderID)
 	if senderIdx == -1 {
 		return nil, ErrInvalidSender
@@ -168,10 +194,10 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 
 	// Check commitment matrix consistency
 	echoHash := HashCommitments(echo.Commitments)
+	matrix := s.Commitments
 	if s.CommitmentsHash == "" {
-		s.CommitmentsHash = echoHash
 		var err error
-		s.Commitments, err = ParseCommitmentMatrixFromHex(echo.Commitments)
+		matrix, err = ParseCommitmentMatrixForCurve(echo.Commitments, s.Curve)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse commitment matrix from echo: %w", err)
 		}
@@ -180,19 +206,19 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 	}
 
 	// Parse points
-	p, err := cryptography.NewFieldElementFromHex(echo.Point)
+	p, err := s.Curve.ParseScalar(echo.Point)
 	if err != nil {
 		return nil, fmt.Errorf("invalid echo point: %w", err)
 	}
-	pPrime, err := cryptography.NewFieldElementFromHex(echo.BlindPoint)
+	pPrime, err := s.Curve.ParseScalar(echo.BlindPoint)
 	if err != nil {
 		return nil, fmt.Errorf("invalid echo blind point: %w", err)
 	}
 
 	// Verify point cryptographically against C: Commit(p, p') == C(sender, self)
-	senderFE := cryptography.NewFieldElement(int64(senderIdx))
-	selfFE := cryptography.NewFieldElement(int64(s.SelfIndex))
-	if !s.Commitments.VerifyPoint(senderFE, selfFE, p, pPrime) {
+	senderFE := s.Curve.Scalar(int64(senderIdx))
+	selfFE := s.Curve.Scalar(int64(s.SelfIndex))
+	if !matrix.VerifyPoint(senderFE, selfFE, p, pPrime) {
 		return nil, ErrPointVerification
 	}
 
@@ -206,6 +232,8 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 		}
 	}
 
+	s.Commitments = matrix
+	s.CommitmentsHash = echoHash
 	s.ReceivedEchos[echo.SenderID] = echo
 
 	// Interpolation Fallback: If SEND was missing, can we interpolate from k valid points?
@@ -216,9 +244,9 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 
 		for sID, e := range s.ReceivedEchos {
 			sIndex := NodeIndexInCommittee(s.Committee, sID)
-			ptVal, _ := cryptography.NewFieldElementFromHex(e.Point)
-			ptBlindVal, _ := cryptography.NewFieldElementFromHex(e.BlindPoint)
-			xs = append(xs, cryptography.NewFieldElement(int64(sIndex)))
+			ptVal, _ := s.Curve.ParseScalar(e.Point)
+			ptBlindVal, _ := s.Curve.ParseScalar(e.BlindPoint)
+			xs = append(xs, s.Curve.Scalar(int64(sIndex)))
 			ys = append(ys, ptVal)
 			ysBlind = append(ysBlind, ptBlindVal)
 			if len(xs) == s.K {
@@ -259,7 +287,7 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 	if s.State != StateSharingCompleted && s.RowPoly != nil && readyCount >= s.K+s.T {
 		s.Share = s.RowPoly.Coeffs[0]
 		s.BlindShare = s.RowBlindPoly.Coeffs[0]
-		selfIndexFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+		selfIndexFE := s.Curve.Scalar(int64(s.SelfIndex))
 		s.PublicShareCommitment = s.Commitments.ComputeShareCommitment(selfIndexFE)
 		s.PublicSecretCommitment = s.Commitments.SecretCommitment()
 		s.State = StateSharingCompleted
@@ -275,6 +303,9 @@ func (s *Session) ProcessReadyMessage(ready *ReadyMessage) (bool, []*ReadyMessag
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if !s.messageInScope(ready.SessionID, ready.CommitteeID, ready.RecipientID, ready.Epoch) || !s.validDimensions(ready.Commitments) {
+		return false, nil, fmt.Errorf("invalid AVSS READY scope or dimensions")
+	}
 	senderIdx := NodeIndexInCommittee(s.Committee, ready.SenderID)
 	if senderIdx == -1 {
 		return false, nil, ErrInvalidSender
@@ -285,17 +316,26 @@ func (s *Session) ProcessReadyMessage(ready *ReadyMessage) (bool, []*ReadyMessag
 	}
 
 	readyHash := HashCommitments(ready.Commitments)
+	matrix := s.Commitments
 	if s.CommitmentsHash == "" {
-		s.CommitmentsHash = readyHash
 		var err error
-		s.Commitments, err = ParseCommitmentMatrixFromHex(ready.Commitments)
+		matrix, err = ParseCommitmentMatrixForCurve(ready.Commitments, s.Curve)
 		if err != nil {
 			return false, nil, fmt.Errorf("failed to parse commitments from ready: %w", err)
 		}
 	} else if s.CommitmentsHash != readyHash {
 		return false, nil, ErrCommitmentMismatch
 	}
-
+	if s.Curve != cryptography.CurveP256 {
+		point, pointErr := s.Curve.ParseScalar(ready.Point)
+		blind, blindErr := s.Curve.ParseScalar(ready.BlindPoint)
+		if pointErr != nil || blindErr != nil || !matrix.VerifyPoint(s.Curve.Scalar(int64(senderIdx)),
+			s.Curve.Scalar(int64(s.SelfIndex)), point, blind) {
+			return false, nil, ErrPointVerification
+		}
+	}
+	s.Commitments = matrix
+	s.CommitmentsHash = readyHash
 	s.ReceivedReadys[ready.SenderID] = ready
 
 	var readyMsgsToSend []*ReadyMessage
@@ -308,7 +348,7 @@ func (s *Session) ProcessReadyMessage(ready *ReadyMessage) (bool, []*ReadyMessag
 	if s.State != StateSharingCompleted && s.RowPoly != nil && len(s.ReceivedReadys) >= s.K+s.T {
 		s.Share = s.RowPoly.Coeffs[0]
 		s.BlindShare = s.RowBlindPoly.Coeffs[0]
-		selfIndexFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+		selfIndexFE := s.Curve.Scalar(int64(s.SelfIndex))
 		s.PublicShareCommitment = s.Commitments.ComputeShareCommitment(selfIndexFE)
 		s.PublicSecretCommitment = s.Commitments.SecretCommitment()
 		s.State = StateSharingCompleted
@@ -319,6 +359,22 @@ func (s *Session) ProcessReadyMessage(ready *ReadyMessage) (bool, []*ReadyMessag
 	return false, readyMsgsToSend, nil
 }
 
+func (s *Session) messageInScope(session, committee, recipient string, epoch uint64) bool {
+	return session == s.SessionID && committee == s.CommitteeID && recipient == s.SelfID && epoch == s.Epoch
+}
+
+func (s *Session) validDimensions(matrix [][]string) bool {
+	if len(matrix) != s.K {
+		return false
+	}
+	for _, row := range matrix {
+		if len(row) != s.K {
+			return false
+		}
+	}
+	return true
+}
+
 // generateReadyMessages creates READY messages for all peers in the committee
 func (s *Session) generateReadyMessages() []*ReadyMessage {
 	now := time.Now().UnixMilli()
@@ -326,7 +382,7 @@ func (s *Session) generateReadyMessages() []*ReadyMessage {
 	hexCommit := s.Commitments.ToHexMatrix()
 
 	for idx, recipientID := range s.Committee {
-		recipientIndexFE := cryptography.NewFieldElement(int64(idx + 1))
+		recipientIndexFE := s.Curve.Scalar(int64(idx + 1))
 		pt := s.RowPoly.Evaluate(recipientIndexFE)
 		blindPt := s.RowBlindPoly.Evaluate(recipientIndexFE)
 
@@ -363,7 +419,7 @@ func (s *Session) ProcessRecoveryRequest(req *RecoveryRequestMessage) (*Recovery
 
 	var ptHex, ptBlindHex string
 	if s.RowPoly != nil && s.RowBlindPoly != nil {
-		reqIndexFE := cryptography.NewFieldElement(int64(reqIdx))
+		reqIndexFE := s.Curve.Scalar(int64(reqIdx))
 		pt := s.RowPoly.Evaluate(reqIndexFE)
 		blindPt := s.RowBlindPoly.Evaluate(reqIndexFE)
 		ptHex = pt.Hex()
@@ -395,10 +451,10 @@ func (s *Session) ProcessRecoveryResponse(resp *RecoveryResponseMessage) error {
 
 	// Verify commitment matrix consistency
 	respHash := HashCommitments(resp.Commitments)
+	matrix := s.Commitments
 	if s.CommitmentsHash == "" {
-		s.CommitmentsHash = respHash
 		var err error
-		s.Commitments, err = ParseCommitmentMatrixFromHex(resp.Commitments)
+		matrix, err = ParseCommitmentMatrixForCurve(resp.Commitments, s.Curve)
 		if err != nil {
 			return fmt.Errorf("failed to parse commitments from recovery response: %w", err)
 		}
@@ -407,18 +463,18 @@ func (s *Session) ProcessRecoveryResponse(resp *RecoveryResponseMessage) error {
 	}
 
 	if resp.Point != "" && resp.BlindPoint != "" {
-		p, err := cryptography.NewFieldElementFromHex(resp.Point)
+		p, err := s.Curve.ParseScalar(resp.Point)
 		if err != nil {
 			return err
 		}
-		pPrime, err := cryptography.NewFieldElementFromHex(resp.BlindPoint)
+		pPrime, err := s.Curve.ParseScalar(resp.BlindPoint)
 		if err != nil {
 			return err
 		}
 
-		senderFE := cryptography.NewFieldElement(int64(respIdx))
-		selfFE := cryptography.NewFieldElement(int64(s.SelfIndex))
-		if !s.Commitments.VerifyPoint(senderFE, selfFE, p, pPrime) {
+		senderFE := s.Curve.Scalar(int64(respIdx))
+		selfFE := s.Curve.Scalar(int64(s.SelfIndex))
+		if !matrix.VerifyPoint(senderFE, selfFE, p, pPrime) {
 			return ErrPointVerification
 		}
 
@@ -438,6 +494,7 @@ func (s *Session) ProcessRecoveryResponse(resp *RecoveryResponseMessage) error {
 		}
 	}
 
+	s.Commitments = matrix
+	s.CommitmentsHash = respHash
 	return nil
 }
-

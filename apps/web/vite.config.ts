@@ -13,8 +13,8 @@ function productionCspPlugin(apiUrl = ''): Plugin {
       const extraConnect = apiUrl.trim() ? ` ${apiUrl.trim()}` : '';
       const cspPolicy = [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-eval' https://accounts.google.com/gsi/client",
-        `connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://accounts.google.com https://nominatim.openstreetmap.org${extraConnect}`,
+        "script-src 'self' https://accounts.google.com/gsi/client",
+        `connect-src 'self' https://accounts.google.com https://nominatim.openstreetmap.org${extraConnect}`,
         "frame-src 'self' https://accounts.google.com",
         "style-src 'self' 'unsafe-inline' https://accounts.google.com",
         "font-src 'self' data:",
@@ -29,7 +29,7 @@ function productionCspPlugin(apiUrl = ''): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(() => {
   const apiUrl = process.env.VITE_API_URL || '';
 
   return {
@@ -55,16 +55,10 @@ export default defineConfig(({ mode }) => {
           target: 'http://localhost:3001',
           changeOrigin: true,
         },
-        '/wallet': {
-          target: 'http://localhost:3001',
-          changeOrigin: true,
-        },
       },
     },
-    esbuild: {
-      drop: [],
-    },
     build: {
+      target: 'es2022',
       sourcemap: false,
     },
   };

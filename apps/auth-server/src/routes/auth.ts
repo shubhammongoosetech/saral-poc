@@ -1,25 +1,38 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { KeyManager } from '../auth/token';
+import { createAccountSession, InvalidAccountSession, revokeAccountSession } from '../auth/accountSession';
+import { getGoogleClientId } from '../auth/google';
 import { DataStore } from '../storage/store';
 import {
   requestPhoneOtp,
   verifyPhoneOtp,
   verifyGoogleToken,
   linkAccount,
+  PhoneAuthError,
 } from '../services/accountService';
 import {
   enrollTotp,
+  MfaChallengeError,
   verifyMfaChallenge,
   decryptTotpSecret,
   computeTotpToken,
 } from '../services/mfaService';
-import { requireAuth } from '../middleware/authGuard';
-import { getAdminSecret, isKnownInsecureSecret, setDynamicAdminSecret } from '../config/auth';
+import { requireAuth, requireMfa } from '../middleware/authGuard';
+import {
+  getAdminSecret, isKnownInsecureSecret, isLocalAuthEnabled, matchesSecret, setDynamicAdminSecret,
+} from '../config/auth';
+import { env } from '../config/env';
+import { ALL_WORKING_DAYS, InvalidWorkingPolicy, parseWorkingPolicy } from '../services/policyService';
 
 const router = Router();
 const keyManager = KeyManager.getInstance();
 const store = DataStore.getInstance();
+
+router.use((_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
 
 // Health endpoint
 const handleHealth = (_req: Request, res: Response) => {
@@ -36,12 +49,6 @@ router.get('/health', handleHealth);
 router.get('/auth/health', handleHealth);
 
 const handleTokenIssuance = (req: Request, res: Response) => {
-  const isLocalDevEnv =
-    process.env.NODE_ENV === 'development' ||
-    process.env.NODE_ENV === 'local' ||
-    process.env.NODE_ENV === 'test' ||
-    !process.env.NODE_ENV;
-  const isDevAuthExplicitlyEnabled = process.env.ENABLE_DEV_AUTH === 'true' && isLocalDevEnv;
   const adminSecret = getAdminSecret();
 
   const subject = req.body?.subject || req.body?.username || 'dev-operator-1';
@@ -56,8 +63,8 @@ const handleTokenIssuance = (req: Request, res: Response) => {
     return;
   }
 
-  if (!isDevAuthExplicitlyEnabled) {
-    if (!adminSecret || !providedKey || providedKey !== adminSecret) {
+  if (!isLocalAuthEnabled()) {
+    if (!matchesSecret(providedKey, adminSecret)) {
       res.status(403).json({
         success: false,
         error: 'Forbidden: Development authentication is disabled. Authenticated administrative credentials required.',
@@ -67,7 +74,7 @@ const handleTokenIssuance = (req: Request, res: Response) => {
   }
 
   if (requestedRole === 'admin') {
-    if (!adminSecret || !providedKey || providedKey !== adminSecret) {
+    if (!matchesSecret(providedKey, adminSecret)) {
       res.status(403).json({
         success: false,
         error: 'Forbidden: Admin role issuance requires authenticated administrative secret credentials.',
@@ -77,7 +84,11 @@ const handleTokenIssuance = (req: Request, res: Response) => {
   }
 
   const validRoles = ['admin', 'operator', 'auditor', 'viewer'];
-  const role = validRoles.includes(requestedRole) ? requestedRole : 'operator';
+  if (typeof subject !== 'string' || !subject.trim() || subject.length > 128 || !validRoles.includes(requestedRole)) {
+    res.status(400).json({ success: false, error: 'Invalid token subject or role' });
+    return;
+  }
+  const role = requestedRole;
 
   const token = keyManager.issueToken(subject, role);
 
@@ -101,19 +112,19 @@ router.post('/api/auth/token', handleTokenIssuance);
 router.post('/auth/rotate-admin-key', (req: Request, res: Response) => {
   const currentSecret = getAdminSecret();
   const providedCurrentKey = req.headers['x-admin-key'] || req.body?.currentKey;
-  const newSecret = req.body?.newKey;
+  const newSecret = typeof req.body?.newKey === 'string' ? req.body.newKey.trim() : '';
 
-  if (!currentSecret || !providedCurrentKey || providedCurrentKey !== currentSecret) {
+  if (!matchesSecret(providedCurrentKey, currentSecret)) {
     res.status(403).json({ success: false, error: 'Forbidden: Invalid current administrative secret' });
     return;
   }
 
-  if (!newSecret || typeof newSecret !== 'string' || isKnownInsecureSecret(newSecret) || newSecret.length < 16) {
+  if (isKnownInsecureSecret(newSecret) || newSecret.length < 16) {
     res.status(400).json({ success: false, error: 'Bad Request: New admin key must be at least 16 characters and secure' });
     return;
   }
 
-  setDynamicAdminSecret(newSecret.trim());
+  setDynamicAdminSecret(newSecret);
   res.json({
     success: true,
     message: 'Administrative secret rotated successfully',
@@ -151,95 +162,103 @@ router.get('/auth/public-key.json', (_req: Request, res: Response) => {
 
 // ─── USER ONBOARDING & AUTHENTICATION ENDPOINTS ─────────────────────────────
 
+router.get('/auth/login-options', (_req, res) => {
+  res.json({ googleClientId: getGoogleClientId(), developmentOtpEnabled: isLocalAuthEnabled() });
+});
+
 // POST /auth/google
-router.post('/auth/google', (req: Request, res: Response) => {
+router.post('/auth/google', async (req: Request, res: Response) => {
   try {
     const credential = req.body?.credential || req.body?.idToken;
-    if (!credential) {
+    if (typeof credential !== 'string' || !credential) {
       res.status(400).json({ success: false, error: 'Missing Google credential or idToken' });
       return;
     }
 
-    const result = verifyGoogleToken(credential);
+    const result = await verifyGoogleToken(credential);
     res.json({
       success: true,
       ...result,
     });
-  } catch (err: any) {
-    res.status(401).json({ success: false, error: err.message || 'Google authentication failed' });
+  } catch {
+    res.status(401).json({ success: false, error: 'Google authentication failed' });
   }
 });
 
-// GET /auth/google/url
+const googleCallbackUrl = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3001/api/auth/google/callback';
+const secureOAuthCookie = googleCallbackUrl.startsWith('https:');
+const oauthCookieName = secureOAuthCookie ? '__Host-saral_google_oauth' : 'saral_google_oauth';
+const oauthCookieOptions = { httpOnly: true, secure: secureOAuthCookie, sameSite: 'lax' as const, path: '/' };
+
 router.get('/auth/google/url', (_req: Request, res: Response) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID || '558208753253-gr5lji587t11l5m63d5udea4msbvbcds.apps.googleusercontent.com';
-  const callbackUrl = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3001/api/auth/google/callback';
-  const state = crypto.randomBytes(16).toString('hex');
-  const nonce = crypto.randomBytes(16).toString('hex');
-
-  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
-    clientId
-  )}&redirect_uri=${encodeURIComponent(
-    callbackUrl
-  )}&response_type=code&scope=openid%20email%20profile&state=${state}&nonce=${nonce}`;
-
-  res.json({
-    success: true,
-    authUrl,
+  const clientId = getGoogleClientId();
+  if (!clientId) {
+    res.status(503).json({ success: false, error: 'Google sign-in is unavailable' });
+    return;
+  }
+  const state = crypto.randomBytes(32).toString('base64url');
+  const nonce = crypto.randomBytes(32).toString('base64url');
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  authUrl.search = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: googleCallbackUrl,
+    response_type: 'code',
+    scope: 'openid email profile',
     state,
-    clientIdConfigured: !!process.env.GOOGLE_CLIENT_ID,
-  });
+    nonce,
+    code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'),
+    code_challenge_method: 'S256',
+  }).toString();
+  res.set('Cache-Control', 'no-store');
+  res.cookie(oauthCookieName, [state, nonce, verifier].join('.'), { ...oauthCookieOptions, maxAge: 300_000 });
+  res.json({ success: true, authUrl: authUrl.href, state, clientIdConfigured: !!process.env.GOOGLE_CLIENT_ID });
 });
 
-// GET /api/auth/google/callback and /auth/google/callback
 const handleGoogleCallback = async (req: Request, res: Response) => {
-  const code = req.query.code as string;
-  const error = req.query.error as string;
+  const cookie = req.headers.cookie?.split(';').map((entry) => entry.trim())
+    .find((entry) => entry.startsWith(oauthCookieName + '='));
+  const [state, nonce, verifier] = cookie?.slice(oauthCookieName.length + 1).split('.') ?? [];
 
-  if (error) {
-    res.redirect(`http://localhost:3000/?error=${encodeURIComponent(error)}`);
+  res.set('Cache-Control', 'no-store');
+  res.set('Referrer-Policy', 'no-referrer');
+  res.clearCookie(oauthCookieName, oauthCookieOptions);
+  if (!state || !nonce || !verifier || !matchesSecret(req.query.state, state) || typeof req.query.code !== 'string') {
+    res.status(400).json({ success: false, error: 'Invalid Google authorization callback' });
     return;
   }
 
-  if (!code) {
-    res.status(400).json({ success: false, error: 'Authorization code missing in Google callback' });
+  const clientId = getGoogleClientId();
+  if (!clientId || !env.GOOGLE_CLIENT_SECRET) {
+    res.status(503).json({ success: false, error: 'Google OAuth is unavailable' });
     return;
   }
 
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  if (!clientSecret) {
-    // Report missing configuration explicitly
-    res.status(503).json({
-      success: false,
-      error: 'Google OAuth configuration missing: GOOGLE_CLIENT_SECRET is not configured on auth-server.',
-      codeReceived: true,
-    });
-    return;
-  }
-
-  // If secret configured, exchange code for tokens
   try {
-    const clientId = process.env.GOOGLE_CLIENT_ID || '558208753253-gr5lji587t11l5m63d5udea4msbvbcds.apps.googleusercontent.com';
-    const callbackUrl = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3001/api/auth/google/callback';
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        code,
+        code: req.query.code,
         client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: callbackUrl,
+        client_secret: env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: googleCallbackUrl,
         grant_type: 'authorization_code',
+        code_verifier: verifier,
       }),
     });
-    const tokenData = (await tokenRes.json()) as any;
-    if (!tokenRes.ok || !tokenData.id_token) {
-      throw new Error(tokenData.error_description || 'Failed to exchange authorization code');
-    }
-    const result = verifyGoogleToken(tokenData.id_token);
-    res.redirect(`http://localhost:3000/?token=${encodeURIComponent(result.token)}`);
-  } catch (err: any) {
-    res.redirect(`http://localhost:3000/?error=${encodeURIComponent(err.message)}`);
+
+    const tokenData = (await tokenRes.json()) as { id_token?: string };
+    if (!tokenRes.ok || !tokenData.id_token) throw new Error('Google OAuth token exchange failed');
+
+    const result = await verifyGoogleToken(tokenData.id_token, nonce);
+    const redirect = new URL('/login', env.FRONTEND_URL);
+    redirect.hash = new URLSearchParams({ token: result.token }).toString();
+    res.redirect(303, redirect.href);
+  } catch {
+    res.status(401).json({ success: false, error: 'Google authentication failed' });
   }
 };
 
@@ -247,7 +266,11 @@ router.get('/auth/google/callback', handleGoogleCallback);
 router.get('/api/auth/google/callback', handleGoogleCallback);
 
 // POST /auth/phone/request-otp & /auth/otp/request & /auth/otp/send
-const handleRequestOtp = (req: Request, res: Response) => {
+const handleRequestOtp = async (req: Request, res: Response) => {
+  if (!isLocalAuthEnabled()) {
+    res.status(503).json({ success: false, error: 'SMS code delivery is unavailable' });
+    return;
+  }
   try {
     const mobile = req.body?.mobile;
     if (!mobile || typeof mobile !== 'string') {
@@ -255,10 +278,12 @@ const handleRequestOtp = (req: Request, res: Response) => {
       return;
     }
 
-    const result = requestPhoneOtp(mobile);
+    const result = await requestPhoneOtp(mobile);
     res.json(result);
-  } catch (err: any) {
-    res.status(429).json({ success: false, error: err.message || 'Failed to dispatch OTP' });
+  } catch (err) {
+    const status = err instanceof PhoneAuthError ? err.status : 503;
+    const error = err instanceof PhoneAuthError ? err.message : 'Unable to dispatch verification code';
+    res.status(status).json({ success: false, error });
   }
 };
 
@@ -267,212 +292,102 @@ router.post('/auth/otp/request', handleRequestOtp);
 router.post('/auth/otp/send', handleRequestOtp);
 
 // POST /auth/phone/verify-otp & /auth/otp/verify
-const handleVerifyOtp = (req: Request, res: Response) => {
+const handleVerifyOtp = async (req: Request, res: Response) => {
+  if (!isLocalAuthEnabled()) {
+    res.status(503).json({ success: false, error: 'SMS code delivery is unavailable' });
+    return;
+  }
   try {
     const mobile = req.body?.mobile;
     const otp = req.body?.otp || req.body?.code;
-    if (!mobile || !otp) {
+    if (typeof mobile !== 'string' || typeof otp !== 'string' || !/^\d{6}$/.test(otp.trim())) {
       res.status(400).json({ success: false, error: 'Mobile and 6-digit OTP code required' });
       return;
     }
 
-    const result = verifyPhoneOtp(mobile, otp);
+    const result = await verifyPhoneOtp(mobile, otp);
     res.json({
       success: true,
       ...result,
     });
-  } catch (err: any) {
-    res.status(400).json({ success: false, error: err.message || 'OTP verification failed' });
+  } catch (err) {
+    const status = err instanceof PhoneAuthError ? err.status : 401;
+    const error = err instanceof PhoneAuthError ? err.message : 'Invalid or expired verification code';
+    res.status(status).json({ success: false, error });
   }
 };
 
 router.post('/auth/phone/verify-otp', handleVerifyOtp);
 router.post('/auth/otp/verify', handleVerifyOtp);
 
-// GET /mfa/status & /auth/mfa/status
-const handleMfaStatus = (req: Request, res: Response) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      res.status(401).json({ success: false, error: 'Authorization token required' });
-      return;
-    }
-    const token = authHeader.replace(/^Bearer\s+/i, '');
-    const decoded = keyManager.verifyToken(token);
-    const userId = decoded.sub;
-    const mfa = store.getMfa(userId);
-
-    const enrolled = !!(mfa && mfa.totpSecretEncrypted && mfa.verifiedAt);
-    res.json({
-      success: true,
-      enrolled,
-      type: mfa?.type || 'totp',
-      verified: !!mfa?.verifiedAt,
-    });
-  } catch (err: any) {
-    res.status(401).json({ success: false, error: err.message || 'Unauthorized' });
-  }
+const handleMfaStatus = async (req: Request, res: Response) => {
+  const mfa = await store.findPersistedMfa(req.user!.userId);
+  const enrolled = !!(mfa?.totpSecretEncrypted && mfa.verifiedAt);
+  res.json({ success: true, enrolled, type: mfa?.type || 'totp', verified: enrolled, developmentOtpEnabled: isLocalAuthEnabled() });
 };
 
-router.get('/mfa/status', handleMfaStatus);
-router.get('/auth/mfa/status', handleMfaStatus);
+router.get('/mfa/status', requireAuth, handleMfaStatus);
+router.get('/auth/mfa/status', requireAuth, handleMfaStatus);
 
-// POST /mfa/enroll & /auth/mfa/enroll (Initial TOTP enrollment for new users)
-const handleMfaEnroll = (req: Request, res: Response) => {
+const handleMfaEnroll = async (req: Request, res: Response) => {
+  const userId = req.user!.userId;
+  if (store.getMfa(userId)?.verifiedAt) {
+    res.status(409).json({ success: false, error: 'MFA is already enrolled' });
+    return;
+  }
+
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      res.status(401).json({ success: false, error: 'Authorization token required' });
-      return;
-    }
-    const token = authHeader.replace(/^Bearer\s+/i, '');
-    const decoded = keyManager.verifyToken(token);
-    const userId = decoded.sub;
     const user = store.findUserById(userId);
-
-    const emailOrPhone = user?.email || user?.mobile || 'saral-user';
-    const enrollment = enrollTotp(userId, emailOrPhone);
-
-    const isDev =
-      process.env.ENABLE_DEV_AUTH === 'true' ||
-      process.env.NODE_ENV === 'development' ||
-      process.env.NODE_ENV === 'test' ||
-      !process.env.NODE_ENV ||
-      process.env.AUTH_DEV_OTP_DISPLAY === 'true';
-
-    const currentStep = Math.floor(Date.now() / 1000 / 30);
-    const devOtp = isDev ? computeTotpToken(enrollment.secret, currentStep) : undefined;
-
-    res.json({
-      success: true,
-      secret: enrollment.secret,
-      qrUri: enrollment.qrUri,
-      recoveryCodes: enrollment.recoveryCodes,
-      devOtp,
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || 'MFA enrollment failed' });
+    const enrollment = await enrollTotp(userId, user?.email || user?.mobile || 'saral-user');
+    const devOtp = isLocalAuthEnabled() ? computeTotpToken(enrollment.secret, Math.floor(Date.now() / 30_000)) : undefined;
+    res.json({ success: true, ...enrollment, devOtp });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.message.startsWith('MFA is already enrolled')) {
+      res.status(409).json({ success: false, error: err.message });
+      return;
+    }
+    res.status(500).json({ success: false, error: 'MFA enrollment failed' });
   }
 };
 
-router.post('/mfa/enroll', handleMfaEnroll);
-router.post('/auth/mfa/enroll', handleMfaEnroll);
+router.post('/mfa/enroll', requireAuth, handleMfaEnroll);
+router.post('/auth/mfa/enroll', requireAuth, handleMfaEnroll);
 
-// POST /mfa/send & /auth/mfa/send (MFA OTP dispatch for returning / phone users)
-const handleMfaSend = (req: Request, res: Response) => {
+// TOTP is generated by the user's authenticator. Local development can display a code explicitly.
+const handleMfaSend = async (req: Request, res: Response) => {
+  const existingMfa = await store.findPersistedMfa(req.user!.userId);
+  if (!existingMfa?.totpSecretEncrypted || !existingMfa.verifiedAt) {
+    res.status(409).json({ success: false, error: 'MFA enrollment is required' });
+    return;
+  }
+
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      res.status(401).json({ success: false, error: 'Authorization token required' });
-      return;
+    let devOtp: string | undefined;
+    if (isLocalAuthEnabled()) {
+      const secret = decryptTotpSecret(existingMfa.totpSecretEncrypted);
+      devOtp = computeTotpToken(secret, Math.floor(Date.now() / 30_000));
     }
-    const token = authHeader.replace(/^Bearer\s+/i, '');
-    const decoded = keyManager.verifyToken(token);
-    const userId = decoded.sub;
-    const user = store.findUserById(userId);
-
-    const mfaOtpCode = crypto.randomInt(100000, 1000000).toString();
-    const codeHash = crypto.createHmac('sha256', 'mfa-salt').update(`${userId}:mfa:${mfaOtpCode}`).digest('hex');
-
-    store.saveOtp({
-      id: crypto.randomUUID(),
-      userId,
-      mobile: user?.mobile || 'mfa-totp',
-      codeHash,
-      purpose: 'mfa',
-      expiresAt: Date.now() + 10 * 60 * 1000,
-      used: false,
-      attempts: 0,
-      createdAt: Date.now(),
-    });
-
-    const isDev =
-      process.env.ENABLE_DEV_AUTH === 'true' ||
-      process.env.NODE_ENV === 'development' ||
-      process.env.NODE_ENV === 'test' ||
-      !process.env.NODE_ENV ||
-      process.env.AUTH_DEV_OTP_DISPLAY === 'true';
-
-    let devOtp: string | undefined = undefined;
-    if (isDev) {
-      const existingMfa = store.getMfa(userId);
-      if (existingMfa?.totpSecretEncrypted) {
-        try {
-          const secret = decryptTotpSecret(existingMfa.totpSecretEncrypted);
-          const currentStep = Math.floor(Date.now() / 1000 / 30);
-          devOtp = computeTotpToken(secret, currentStep);
-        } catch (_) {}
-      }
-      if (!devOtp) {
-        devOtp = mfaOtpCode;
-      }
-    }
-
-    console.log(`[MFA SEND] User ${userId} OTP: ${devOtp || mfaOtpCode}`);
-
-    res.json({
-      success: true,
-      message: 'MFA challenge initiated',
-      devOtp,
-    });
-  } catch (err: any) {
-    res.status(401).json({ success: false, error: err.message || 'Failed to dispatch MFA code' });
+    res.json({ success: true, message: 'Use your authenticator or a backup code', devOtp });
+  } catch {
+    res.status(500).json({ success: false, error: 'MFA challenge unavailable' });
   }
 };
 
-router.post('/mfa/send', handleMfaSend);
-router.post('/auth/mfa/send', handleMfaSend);
+router.post('/mfa/send', requireAuth, handleMfaSend);
+router.post('/auth/mfa/send', requireAuth, handleMfaSend);
 
-// POST /mfa/verify
-const handleMfaVerifyEndpoint = (req: Request, res: Response) => {
+const handleMfaVerifyEndpoint = async (req: Request, res: Response) => {
+  const { userId, sessionId } = req.user!;
+  const code = req.body?.otp || req.body?.code || req.body?.recoveryCode;
+  if (typeof code !== 'string' || !code.trim() || code.length > 32) {
+    res.status(400).json({ success: false, error: 'MFA code required' });
+    return;
+  }
+
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      res.status(401).json({ success: false, error: 'Authorization token required' });
-      return;
-    }
-    const token = authHeader.replace(/^Bearer\s+/i, '');
-    const decoded = keyManager.verifyToken(token);
-    const userId = decoded.sub;
-
-    const code = req.body?.otp || req.body?.code || req.body?.recoveryCode;
-    if (!code) {
-      res.status(400).json({ success: false, error: 'MFA code required' });
-      return;
-    }
-
-    // First check if matching mfa OTP in store
-    const activeMfaOtp = store.getActiveOtp(userId, 'mfa');
-    let verified = false;
-    if (activeMfaOtp) {
-      const computedHash = crypto.createHmac('sha256', 'mfa-salt').update(`${userId}:mfa:${code.trim()}`).digest('hex');
-      if (crypto.timingSafeEqual(Buffer.from(computedHash), Buffer.from(activeMfaOtp.codeHash))) {
-        store.markOtpUsed(activeMfaOtp.id);
-        verified = true;
-      }
-    }
-
-    if (!verified) {
-      // Check TOTP / recovery code challenge
-      verifyMfaChallenge(userId, code);
-      verified = true;
-    }
-
-    // Issue upgraded token with mfaVerified: true
-    const upgradedToken = keyManager.issueToken(userId, 'operator', true);
-    const policy = store.getPolicy(userId);
-    const wallet = store.getWalletByUserId(userId);
-
-    // Save MFA verified
-    const existingMfa = store.getMfa(userId);
-    store.saveMfa({
-      userId,
-      type: existingMfa?.type || 'totp',
-      totpSecretEncrypted: existingMfa?.totpSecretEncrypted,
-      recoveryCodesHashed: existingMfa?.recoveryCodesHashed,
-      verifiedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    const [policy, wallet] = await Promise.all([store.loadPolicy(userId), store.loadWallet(userId)]);
+    await verifyMfaChallenge(userId, code);
+    const upgradedToken = await createAccountSession(userId, true, sessionId);
 
     res.json({
       success: true,
@@ -480,52 +395,63 @@ const handleMfaVerifyEndpoint = (req: Request, res: Response) => {
       hasPolicy: !!policy,
       hasWallet: !!wallet && wallet.status === 'READY',
     });
-  } catch (err: any) {
-    res.status(401).json({ success: false, error: err.message || 'MFA verification failed' });
+  } catch (err: unknown) {
+    if (err instanceof MfaChallengeError) {
+      const code = err.rateLimited ? 'MFA_RATE_LIMITED' : 'MFA_CODE_INVALID';
+      res.status(err.rateLimited ? 429 : 400).json({ success: false, code, error: err.message });
+      return;
+    }
+    if (err instanceof InvalidAccountSession) {
+      res.status(401).json({ success: false, error: 'Unauthorized: Invalid or expired token' });
+      return;
+    }
+    res.status(503).json({ success: false, error: 'MFA verification is temporarily unavailable' });
   }
 };
 
-router.post('/mfa/verify', handleMfaVerifyEndpoint);
-router.post('/auth/mfa/verify', handleMfaVerifyEndpoint);
+router.post('/mfa/verify', requireAuth, handleMfaVerifyEndpoint);
+router.post('/auth/mfa/verify', requireAuth, handleMfaVerifyEndpoint);
 
 // POST /auth/link-account (Requires Auth)
-router.post('/auth/link-account', requireAuth, (req: Request, res: Response) => {
+router.post('/auth/link-account', requireAuth, requireMfa, async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { targetMethod, identifier } = req.body;
-    if (!targetMethod || !identifier) {
+    const { targetMethod, identifier } = req.body ?? {};
+    if ((targetMethod !== 'google' && targetMethod !== 'mobile') || typeof identifier !== 'string' || !identifier) {
       res.status(400).json({ success: false, error: 'targetMethod and identifier are required' });
       return;
     }
 
-    const result = linkAccount(userId, targetMethod, identifier);
+    const result = await linkAccount(userId, targetMethod, identifier);
     res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ success: false, error: err.message || 'Account linking failed' });
+  } catch {
+    res.status(400).json({ success: false, error: 'Unable to verify or link this identity' });
   }
 });
 
 // POST /auth/logout
-router.post('/auth/logout', (_req: Request, res: Response) => {
+router.post('/auth/logout', requireAuth, async (req: Request, res: Response) => {
+  const { userId, sessionId } = req.user!;
+  await revokeAccountSession(userId, sessionId);
   res.json({ success: true, message: 'Logged out successfully' });
 });
 
 // GET /auth/session & /auth/me (Validates active session)
-const handleSession = (req: Request, res: Response) => {
+const handleSession = async (req: Request, res: Response) => {
   const userId = req.user!.userId;
-  const user = store.findUserById(userId);
-  const mfa = store.getMfa(userId);
-  const policy = store.getPolicy(userId);
-  const wallet = store.getWalletByUserId(userId);
+  const [user, mfa, policy, wallet] = await Promise.all([
+    store.findPersistedUser({ id: userId }), store.findPersistedMfa(userId),
+    store.loadPolicy(userId), store.loadWallet(userId),
+  ]);
 
   res.json({
     success: true,
     user: user || { id: userId, loginMethod: 'unknown' },
     mfaEnrolled: !!mfa?.totpSecretEncrypted,
-    mfaVerified: !!mfa?.verifiedAt,
+    mfaVerified: req.user!.mfaVerified,
     hasPolicy: !!policy,
     hasWallet: !!wallet && wallet.status === 'READY',
-    policy: policy || null,
+    policy: req.user!.mfaVerified ? policy : null,
   });
 };
 
@@ -533,12 +459,12 @@ router.get('/auth/session', requireAuth, handleSession);
 router.get('/auth/me', requireAuth, handleSession);
 
 // GET /profile (Used by frontend profileApi)
-router.get('/profile', requireAuth, (req: Request, res: Response) => {
+router.get('/profile', requireAuth, requireMfa, async (req: Request, res: Response) => {
   const userId = req.user!.userId;
-  const user = store.findUserById(userId);
-  const mfa = store.getMfa(userId);
-  const policy = store.getPolicy(userId);
-  const wallet = store.getWalletByUserId(userId);
+  const [user, mfa, policy, wallet] = await Promise.all([
+    store.findPersistedUser({ id: userId }), store.findPersistedMfa(userId),
+    store.loadPolicy(userId), store.loadWallet(userId),
+  ]);
 
   res.json({
     user: user || { id: userId, login_method: 'mobile', created_at: new Date().toISOString() },
@@ -566,39 +492,10 @@ router.get('/profile', requireAuth, (req: Request, res: Response) => {
 });
 
 // POST /profile/policy (Used by frontend profileApi)
-router.post('/profile/policy', requireAuth, (req: Request, res: Response) => {
+router.post('/profile/policy', requireAuth, requireMfa, async (req: Request, res: Response) => {
   try {
-    const userId = req.user!.userId;
-    const {
-      startTime,
-      endTime,
-      timezone,
-      city,
-      lat,
-      lng,
-      radiusKm,
-      timeRestrictionEnabled,
-      locationRestrictionEnabled,
-    } = req.body;
-
-    const record = {
-      userId,
-      timeRestrictionEnabled: timeRestrictionEnabled !== undefined ? Boolean(timeRestrictionEnabled) : true,
-      startTime: startTime || '09:00',
-      endTime: endTime || '18:00',
-      days: ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'],
-      timezone: timezone || 'Asia/Kolkata',
-      locationRestrictionEnabled: Boolean(locationRestrictionEnabled),
-      allowedRegion: city || 'Indore',
-      geofenceEnabled: Boolean(locationRestrictionEnabled),
-      lat: lat !== undefined ? Number(lat) : 22.7196,
-      lng: lng !== undefined ? Number(lng) : 75.8577,
-      radiusMeters: (Number(radiusKm) || 25) * 1000,
-      updatedAt: new Date().toISOString(),
-    };
-
-    store.savePolicy(record);
-
+    const record = parseWorkingPolicy(req.user!.userId, req.body ?? {}, ALL_WORKING_DAYS);
+    await store.savePolicy(record);
     res.json({
       message: 'Policy saved successfully',
       policy: {
@@ -608,11 +505,15 @@ router.post('/profile/policy', requireAuth, (req: Request, res: Response) => {
         city: record.allowedRegion,
         lat: record.lat,
         lng: record.lng,
-        radiusKm: Number(radiusKm) || 25,
+        radiusKm: record.radiusMeters! / 1000,
       },
     });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message || 'Failed to save policy' });
+  } catch (err) {
+    if (err instanceof InvalidWorkingPolicy) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    res.status(503).json({ error: 'Unable to save working policy' });
   }
 });
 

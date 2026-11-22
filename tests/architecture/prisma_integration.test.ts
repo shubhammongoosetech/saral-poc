@@ -6,7 +6,7 @@ import { mfaService } from '../../apps/auth-server/src/modules/mfa/mfa.service';
 import { policyService } from '../../apps/auth-server/src/modules/policy/policy.service';
 import { walletService } from '../../apps/auth-server/src/modules/wallet/wallet.service';
 import { encryptTotpSecret, decryptTotpSecret } from '../../apps/auth-server/src/utils/crypto';
-import { saralBackendClient } from '../../apps/auth-server/src/clients/saralBackendClient';
+import { mockWalletCoordinator } from './walletFixtures';
 
 describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
   beforeAll(async () => {
@@ -41,54 +41,7 @@ describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
       },
     });
 
-    vi.spyOn(saralBackendClient, 'startDkg').mockResolvedValue({
-      success: true,
-      sessionId: 'sess-prisma-1',
-      committeeId: 'committee-foundation',
-      state: 'COMPLETED',
-      n: 5,
-      k: 3,
-      t: 1,
-      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
-    });
-    vi.spyOn(saralBackendClient, 'getDkgStatus').mockResolvedValue({
-      sessionId: 'sess-prisma-1',
-      committeeId: 'committee-foundation',
-      epoch: 1,
-      n: 5,
-      k: 3,
-      t: 1,
-      state: 'COMPLETED',
-      completedNodes: 5,
-      totalNodes: 5,
-      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
-    });
-    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
-      if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
-        return {
-          success: true,
-          walletId: params.walletId,
-          keyId: params.keyId,
-          sessionId: params.dkgSessionId || 'sess-1',
-          committeeId: 'committee-foundation',
-          epoch: 1,
-          curve: 'ed25519',
-          threshold: 3,
-          masterPublicKey: '042169367072777666f3593f95feb28688789dd6b04e7cf45cb08f6ec91449bdf16666666666666666666666666666666666666666666666666666666666666658',
-        };
-      }
-      return {
-        success: true,
-        walletId: params.walletId,
-        keyId: params.keyId,
-        sessionId: params.dkgSessionId || 'sess-1',
-        committeeId: 'committee-foundation',
-        epoch: 1,
-        curve: 'secp256k1',
-        threshold: 3,
-        masterPublicKey: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
-      };
-    });
+    mockWalletCoordinator();
   });
 
   afterAll(async () => {
@@ -131,6 +84,7 @@ describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
 
   it('3. User creation and mobile authentication flow via Prisma repository', async () => {
     const testMobile = '+919111222333';
+    await prisma.user.deleteMany({ where: { mobile: testMobile } });
     const testUser = await authRepository.createUser({
       name: 'Prisma Test User',
       mobile: testMobile,
@@ -156,6 +110,7 @@ describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
   });
 
   it('4. TOTP MFA enrollment and AES-256-GCM encryption at rest in Prisma', async () => {
+    await prisma.user.deleteMany({ where: { mobile: '+919444555666' } });
     const tempUser = await authRepository.createUser({
       mobile: '+919444555666',
       loginMethod: 'mobile',
@@ -189,6 +144,7 @@ describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
   });
 
   it('5. Working policy evaluation and access audit logging via Prisma', async () => {
+    await prisma.user.deleteMany({ where: { mobile: '+919777888999' } });
     const tempUser = await authRepository.createUser({
       mobile: '+919777888999',
       loginMethod: 'mobile',

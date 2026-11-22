@@ -14,34 +14,22 @@ import { Sheet, SheetContent } from '@/shared/ui/Sheet';
 import { Dialog, DialogContent } from '@/shared/ui/Dialog';
 import { Amount } from '@/shared/ui/Amount';
 import { AddressText } from '@/shared/ui/AddressText';
-import { formatRelativeTime, truncateAddress, getExplorerTxUrl } from '@/shared/lib/format';
+import { formatRelativeTime, truncateAddress, getExplorerTxUrl, mapApiError } from '@/shared/lib/format';
 import { IconReceive, IconRefresh, IconExternal } from '@/shared/ui/icons';
-
-const DKG_STEPS = [
-  'Node Quorum Reached (15/15 Active)',
-  'Kate-Huang-Goldberg AVSS Started',
-  'Pedersen Bivariate Commitments Verified',
-  'Randomized ABBA Consensus Reached',
-  'Threshold Public Keys Derived (Y = xG)',
-  'Multi-Chain Address Derivation (MST, SOL, BTC)',
-  'Local Node Vault Persistence (AES-256-GCM)',
-  'Wallet Identity Cryptographically Bound',
-];
 
 export const Wallet: React.FC = () => {
   const { isDesktop } = useBreakpoint();
-  const { data: walletData, isLoading, refetch, isRefetching } = useWalletQuery();
-  const { data: txData, refetch: refetchTxs } = useTransactionsQuery();
+  const { data: walletData, error: walletError, isLoading, isError, refetch, isRefetching } = useWalletQuery();
+  const wallet = walletData?.wallet;
+  const walletReady = !isError && walletData?.hasWallet === true && wallet?.status === 'READY';
+  const { data: txData, error: txError, refetch: refetchTxs } = useTransactionsQuery(walletReady);
 
   const [creating, setCreating] = useState(false);
-  const [currentDkgStep, setCurrentDkgStep] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const [creationError, setCreationError] = useState<string | null>(null);
 
   // Receive modal state
   const [showReceiveModal, setShowReceiveModal] = useState(false);
 
-  const wallet = walletData?.wallet;
-  const hasWallet = walletData?.hasWallet;
   const transactions = txData?.transactions || [];
 
   const handleRefreshAll = async () => {
@@ -49,23 +37,17 @@ export const Wallet: React.FC = () => {
   };
 
   const handleCreateWallet = async () => {
+    setCreating(true);
+    setCreationError(null);
     try {
-      setCreating(true);
-      setError(null);
-      setCurrentDkgStep(0);
-
-      // Multi-step progress animation while DKG runs
-      const stepInterval = setInterval(() => {
-        setCurrentDkgStep((prev) => (prev < DKG_STEPS.length - 1 ? prev + 1 : prev));
-      }, 350);
-
       await walletApi.generateWallet();
-      clearInterval(stepInterval);
-      setCurrentDkgStep(DKG_STEPS.length);
-      await handleRefreshAll();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to create distributed wallet');
+    } catch (error: unknown) {
+      const message = error instanceof DOMException && error.name === 'AbortError'
+        ? 'Wallet setup is taking longer than expected. Check its status before trying again.'
+        : mapApiError(error, 'Unable to complete wallet setup.');
+      setCreationError(message);
     } finally {
+      await refetch();
       setCreating(false);
     }
   };
@@ -83,94 +65,80 @@ export const Wallet: React.FC = () => {
     );
   }
 
-  // Before Wallet Creation or in ERROR state: Clean Centered Card
-  if (!hasWallet || wallet?.status === 'ERROR') {
+  const walletMissing = walletData?.hasWallet === false && walletData.wallet === null;
+  const setupInProgress = wallet?.status === 'DKG_IN_PROGRESS';
+  const setupCanResume = wallet?.status === 'KEY_READY';
+  const setupFailed = wallet?.status === 'ERROR';
+
+  if (!isError && wallet?.status === 'UNAVAILABLE') {
     return (
-      <div className="w-full max-w-md mx-auto py-12 flex flex-col items-center gap-6">
-        <div className="w-16 h-16 rounded-2xl bg-accent/10 text-accent flex items-center justify-center font-bold text-2xl select-none">
-          S
-        </div>
-
-        <div className="text-center">
-          <h1 className="text-xl font-bold text-text tracking-tight mb-2">
-            SARAL Key Infrastructure
-          </h1>
-          <p className="text-xs text-muted max-w-sm mx-auto leading-relaxed">
-            Your cryptographic keys will be generated collaboratively across independent nodes using Dealerless Kate-Huang-Goldberg DKG with 3-of-5 threshold security. No single party ever holds your private keys.
-          </p>
-        </div>
-
-        {(error || wallet?.error) && (
-          <Alert variant="error" className="w-full">
-            <div className="flex flex-col gap-2">
-              <span>{error || wallet?.error}</span>
-              {wallet?.status === 'ERROR' && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleRefreshAll}
-                  loading={isRefetching}
-                  className="self-start text-xs mt-1"
-                >
-                  Retry Address Derivation
-                </Button>
-              )}
-            </div>
-          </Alert>
-        )}
-
-        {creating ? (
-          <Card className="w-full flex flex-col gap-3 p-5 bg-surface border-border">
-            <div className="flex items-center justify-between pb-2 border-b border-border">
-              <span className="text-xs font-semibold text-text">Dealerless DKG in Progress</span>
-              <span className="text-[11px] font-mono text-accent animate-pulse">Running...</span>
-            </div>
-            <div className="flex flex-col gap-2 py-1">
-              {DKG_STEPS.map((step, idx) => (
-                <div key={step} className="flex items-center gap-2.5 text-xs">
-                  <div
-                    className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] shrink-0 ${
-                      idx <= currentDkgStep
-                        ? 'bg-accent text-accent-contrast'
-                        : 'bg-surface-2 text-muted border border-border'
-                    }`}
-                  >
-                    {idx <= currentDkgStep ? '✓' : idx + 1}
-                  </div>
-                  <span
-                    className={
-                      idx <= currentDkgStep ? 'text-text font-medium' : 'text-muted'
-                    }
-                  >
-                    {step}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </Card>
-        ) : (
-          <Button onClick={handleCreateWallet} loading={creating} size="lg" className="w-full max-w-xs">
-            {wallet?.status === 'ERROR' ? 'Retry Wallet Creation' : 'Create Wallet'}
-          </Button>
-        )}
-      </div>
+      <Card className="w-full max-w-md mx-auto flex flex-col gap-4 p-6">
+        <h1 className="text-lg font-semibold text-text">Wallet unavailable</h1>
+        <Alert variant="error">{wallet.error || 'This wallet needs migration before it can be used.'}</Alert>
+      </Card>
     );
   }
 
-  const mstcBalance = wallet?.chains?.mst?.balance ?? wallet?.balance ?? '0.0000';
-  const solBalance = wallet?.chains?.solana?.balance ?? wallet?.solanaBalance ?? '0.0000';
-  const btcBalance = wallet?.chains?.bitcoin?.balance ?? wallet?.bitcoinBalance ?? '0.00000000';
+  if (!creating && (isError || !(walletMissing || walletReady || setupInProgress || setupCanResume || setupFailed))) {
+    return (
+      <Card className="w-full max-w-md mx-auto flex flex-col gap-4 p-6">
+        <h1 className="text-lg font-semibold text-text">Unable to load wallet</h1>
+        <Alert variant="error">{mapApiError(walletError, 'Check your access or try again.')}</Alert>
+        <Button variant="secondary" onClick={() => refetch()} loading={isRefetching}>
+          Reload Wallet
+        </Button>
+      </Card>
+    );
+  }
+
+  if (creating || !walletReady) {
+    return (
+      <Card className="w-full max-w-md mx-auto flex flex-col gap-4 p-6">
+        <h1 className="text-lg font-semibold text-text">Wallet setup</h1>
+        {(creationError || wallet?.error) && (
+          <Alert variant="error">{creationError || wallet?.error}</Alert>
+        )}
+        {creating || setupInProgress ? (
+          <>
+            <p role="status" className="text-sm text-muted">Wallet setup is in progress.</p>
+            {!creating && (
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={handleCreateWallet}>Resume Wallet Setup</Button>
+                <Button variant="secondary" onClick={() => refetch()} loading={isRefetching}>
+                  Check Status
+                </Button>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-muted">
+              {walletMissing ? 'Create a wallet for MST, Solana, and Bitcoin test networks.' : 'Finish setting up your wallet.'}
+            </p>
+            <Button onClick={handleCreateWallet} disabled={isRefetching}>
+              {walletMissing ? 'Create Wallet' : setupCanResume ? 'Finish Wallet Setup' : 'Retry Wallet Setup'}
+            </Button>
+          </>
+        )}
+      </Card>
+    );
+  }
+
+  const mstcBalance = wallet?.chains?.mst?.balance ?? wallet?.balance ?? null;
+  const solBalance = wallet?.chains?.solana?.balance ?? wallet?.solanaBalance ?? null;
+  const btcBalance = wallet?.chains?.bitcoin?.balance ?? wallet?.bitcoinBalance ?? null;
 
   const evmAddress = wallet?.chains?.mst?.address || wallet?.address || wallet?.addresses?.mst || '';
   const solAddress = wallet?.chains?.solana?.address || wallet?.solanaAddress || wallet?.addresses?.solana || '';
   const btcAddress = wallet?.chains?.bitcoin?.address || wallet?.bitcoinAddress || wallet?.addresses?.bitcoin || '';
+  const canReceive = Boolean(evmAddress && solAddress && btcAddress);
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-5xl mx-auto">
-      {(!evmAddress || error) && (
+      {!canReceive && (
         <Alert variant="error" className="w-full">
           <div className="flex items-center justify-between">
-            <span>{error || 'Unable to derive addresses from threshold nodes. Please retry.'}</span>
+            <span>Unable to load all receive addresses.</span>
             <Button size="sm" variant="secondary" onClick={handleRefreshAll} loading={isRefetching}>
               Retry Derivation
             </Button>
@@ -191,6 +159,7 @@ export const Wallet: React.FC = () => {
             <Button
               variant="secondary"
               size="sm"
+              disabled={!canReceive}
               onClick={() => setShowReceiveModal(true)}
               className="gap-1.5 text-xs"
             >
@@ -221,7 +190,7 @@ export const Wallet: React.FC = () => {
                   EVM
                 </span>
               </div>
-              <Amount value={mstcBalance} symbol="MSTC" className="text-2xl mt-1" />
+              <Amount value={mstcBalance} symbol="MSTC" decimals={18} className="text-2xl mt-1" />
             </div>
             <div className="mt-3 pt-2 border-t border-border/60">
               <span className="text-[10px] uppercase font-semibold text-muted block mb-0.5">Receive Address</span>
@@ -238,7 +207,7 @@ export const Wallet: React.FC = () => {
                   Ed25519
                 </span>
               </div>
-              <Amount value={solBalance} symbol="SOL" className="text-2xl mt-1" />
+              <Amount value={solBalance} symbol="SOL" decimals={9} className="text-2xl mt-1" />
             </div>
             <div className="mt-3 pt-2 border-t border-border/60">
               <span className="text-[10px] uppercase font-semibold text-muted block mb-0.5">Receive Address</span>
@@ -255,7 +224,7 @@ export const Wallet: React.FC = () => {
                   Taproot
                 </span>
               </div>
-              <Amount value={btcBalance} symbol="BTC" className="text-2xl mt-1" />
+              <Amount value={btcBalance} symbol="BTC" decimals={8} className="text-2xl mt-1" />
             </div>
             <div className="mt-3 pt-2 border-t border-border/60">
               <span className="text-[10px] uppercase font-semibold text-muted block mb-0.5">Receive Address</span>
@@ -274,14 +243,15 @@ export const Wallet: React.FC = () => {
           </Link>
         </div>
 
-        {transactions.length === 0 ? (
+        {txError ? (
+          <Alert variant="error">{mapApiError(txError, 'Unable to load recent activity.')}</Alert>
+        ) : transactions.length === 0 ? (
           <EmptyState title="No transactions detected on testnets yet" description="Send MSTC, SOL or Testnet BTC to your receive addresses above to see live incoming balances." />
         ) : (
           <Card className="divide-y divide-border p-0 overflow-hidden">
             {transactions.slice(0, 6).map((tx) => {
               const hash = tx.tx_hash || tx.txHash || '';
-              const explorerUrl =
-                (tx as any).explorerUrl || getExplorerTxUrl(tx.chain, hash);
+              const explorerUrl = getExplorerTxUrl(tx.chain, hash);
               const symbol =
                 tx.chain === 'solana-devnet'
                   ? 'SOL'

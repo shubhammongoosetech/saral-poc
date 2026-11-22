@@ -105,10 +105,11 @@ func deriveGeneratorH(seed string) (*CurvePoint, error) {
 	return HashToCurve(seed)
 }
 
-// CurvePoint represents an affine point (X, Y) on NIST P-256.
+// CurvePoint represents an affine point (X, Y), defaulting to NIST P-256.
 type CurvePoint struct {
-	X *big.Int
-	Y *big.Int
+	X     *big.Int
+	Y     *big.Int
+	curve Curve
 }
 
 // NewCurvePoint creates and validates a point on NIST P-256.
@@ -128,12 +129,47 @@ func NewCurvePoint(x, y *big.Int) (*CurvePoint, error) {
 	}, nil
 }
 
-// IsOnCurve checks if the point lies on NIST P-256.
+func (cp *CurvePoint) Curve() Curve {
+	return cp.curve.canonical()
+}
+
+func (cp *CurvePoint) isIdentity() bool {
+	return cp.X.Sign() == 0 && (cp.Y.Sign() == 0 || (cp.Curve() == CurveEd25519 && cp.Y.Cmp(One) == 0))
+}
+
+// IsOnCurve checks whether the point is a finite, nonidentity group member.
 func (cp *CurvePoint) IsOnCurve() bool {
-	if cp == nil || cp.X == nil || cp.Y == nil {
+	if cp == nil || cp.X == nil || cp.Y == nil || cp.isIdentity() {
 		return false
 	}
-	return P256.IsOnCurve(cp.X, cp.Y)
+	switch cp.Curve() {
+	case CurveP256:
+		return P256.IsOnCurve(cp.X, cp.Y)
+	case CurveSecp256k1:
+		if !coordinatesInField(cp, Secp256k1P) {
+			return false
+		}
+		y2 := new(big.Int).Mul(cp.Y, cp.Y)
+		x3 := new(big.Int).Mul(cp.X, cp.X)
+		x3.Mul(x3, cp.X).Add(x3, big.NewInt(7))
+		return y2.Mod(y2, Secp256k1P).Cmp(x3.Mod(x3, Secp256k1P)) == 0
+	case CurveEd25519:
+		if !coordinatesInField(cp, Ed25519P) {
+			return false
+		}
+		x2 := new(big.Int).Mul(cp.X, cp.X)
+		y2 := new(big.Int).Mul(cp.Y, cp.Y)
+		left := new(big.Int).Sub(y2, x2)
+		right := new(big.Int).Mul(Ed25519D, new(big.Int).Mul(x2, y2))
+		right.Add(right, One)
+		return left.Mod(left, Ed25519P).Cmp(right.Mod(right, Ed25519P)) == 0
+	default:
+		return false
+	}
+}
+
+func coordinatesInField(cp *CurvePoint, max *big.Int) bool {
+	return cp.X.Sign() >= 0 && cp.Y.Sign() >= 0 && cp.X.Cmp(max) < 0 && cp.Y.Cmp(max) < 0
 }
 
 // Equal returns constant-time comparison of two curve points.
@@ -143,28 +179,56 @@ func (cp *CurvePoint) Equal(other *CurvePoint) bool {
 	}
 	b1 := cp.Bytes()
 	b2 := other.Bytes()
-	return subtle.ConstantTimeCompare(b1, b2) == 1
+	return cp.Curve() == other.Curve() && subtle.ConstantTimeCompare(b1, b2) == 1
 }
 
-// Add computes cp + other on NIST P-256.
+// Add computes cp + other in their group.
 func (cp *CurvePoint) Add(other *CurvePoint) *CurvePoint {
-	if cp == nil || (cp.X.Sign() == 0 && cp.Y.Sign() == 0) {
+	if cp == nil {
 		return other
 	}
-	if other == nil || (other.X.Sign() == 0 && other.Y.Sign() == 0) {
+	if other == nil {
 		return cp
 	}
-	rx, ry := P256.Add(cp.X, cp.Y, other.X, other.Y)
-	return &CurvePoint{X: rx, Y: ry}
+	if cp.Curve() != other.Curve() {
+		panic("point group mismatch")
+	}
+	if cp.isIdentity() {
+		return other
+	}
+	if other.isIdentity() {
+		return cp
+	}
+	var rx, ry *big.Int
+	switch cp.Curve() {
+	case CurveSecp256k1:
+		rx, ry = Secp256k1Add(cp.X, cp.Y, other.X, other.Y)
+	case CurveEd25519:
+		rx, ry = Ed25519Add(cp.X, cp.Y, other.X, other.Y)
+	default:
+		rx, ry = P256.Add(cp.X, cp.Y, other.X, other.Y)
+	}
+	return &CurvePoint{X: rx, Y: ry, curve: cp.Curve()}
 }
 
-// ScalarMult computes scalar * cp on NIST P-256.
+// ScalarMult computes scalar * cp in their group.
 func (cp *CurvePoint) ScalarMult(scalar *FieldElement) *CurvePoint {
-	if cp == nil || scalar == nil || scalar.IsZero() {
-		return &CurvePoint{X: big.NewInt(0), Y: big.NewInt(0)}
+	if cp.Curve() != scalar.Curve() {
+		panic("point and scalar group mismatch")
 	}
-	rx, ry := P256.ScalarMult(cp.X, cp.Y, scalar.Bytes())
-	return &CurvePoint{X: rx, Y: ry}
+	if scalar.IsZero() || cp.isIdentity() {
+		return cp.Curve().Identity()
+	}
+	var rx, ry *big.Int
+	switch cp.Curve() {
+	case CurveSecp256k1:
+		rx, ry = Secp256k1ScalarMult(cp.X, cp.Y, scalar.val)
+	case CurveEd25519:
+		rx, ry = Ed25519ScalarMult(cp.X, cp.Y, scalar.val)
+	default:
+		rx, ry = P256.ScalarMult(cp.X, cp.Y, scalar.Bytes())
+	}
+	return &CurvePoint{X: rx, Y: ry, curve: cp.Curve()}
 }
 
 // Bytes returns the uncompressed 65-byte representation: 0x04 || X (32 bytes) || Y (32 bytes).
@@ -172,7 +236,11 @@ func (cp *CurvePoint) Bytes() []byte {
 	if cp == nil || cp.X == nil || cp.Y == nil {
 		return make([]byte, 65)
 	}
-	return elliptic.Marshal(P256, cp.X, cp.Y)
+	out := make([]byte, 65)
+	out[0] = 4
+	cp.X.FillBytes(out[1:33])
+	cp.Y.FillBytes(out[33:])
+	return out
 }
 
 // Hex returns the 130-char hex string of the uncompressed point.
@@ -210,10 +278,10 @@ func ParseCurvePointFromHex(h string) (*CurvePoint, error) {
 	return ParseCurvePointFromBytes(b)
 }
 
-// PedersenCommitment computes C = v*G + r*H on NIST P-256.
+// PedersenCommitment computes C = v*G + r*H in the scalar field's group.
 func PedersenCommitment(value, blinding *FieldElement) *CurvePoint {
-	vg := GeneratorG.ScalarMult(value)
-	rh := GeneratorH.ScalarMult(blinding)
+	curve := value.Curve()
+	vg := curve.BaseMult(value)
+	rh := curve.blindGenerator().ScalarMult(blinding)
 	return vg.Add(rh)
 }
-

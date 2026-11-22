@@ -49,6 +49,7 @@ func ValidateSecurityParameters(n, k, t int) error {
 
 // Session tracks the local node's cryptographic state for a single AVSS instance
 type Session struct {
+	Curve       cryptography.Curve
 	SessionID   string
 	CommitteeID string
 	DealerID    string
@@ -77,8 +78,10 @@ type Session struct {
 	ReceivedEchos  map[string]*EchoMessage
 	ReceivedReadys map[string]*ReadyMessage
 
-	SentEcho  bool
-	SentReady bool
+	SentEcho           bool
+	SentReady          bool
+	checkpointStage    int
+	reportedCompletion bool
 
 	Share                  *cryptography.FieldElement
 	BlindShare             *cryptography.FieldElement
@@ -102,6 +105,7 @@ func NewSession(
 
 	now := time.Now()
 	return &Session{
+		Curve:          cryptography.CurveP256,
 		SessionID:      sessionID,
 		CommitteeID:    committeeID,
 		DealerID:       dealerID,
@@ -204,7 +208,7 @@ func (s *Session) FinalizeShare() error {
 	s.Share = s.RowPoly.Coeffs[0]
 	s.BlindShare = s.RowBlindPoly.Coeffs[0]
 
-	selfIndexFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+	selfIndexFE := s.Curve.Scalar(int64(s.SelfIndex))
 	s.PublicShareCommitment = s.Commitments.ComputeShareCommitment(selfIndexFE)
 	s.PublicSecretCommitment = s.Commitments.SecretCommitment()
 
@@ -212,4 +216,3 @@ func (s *Session) FinalizeShare() error {
 	s.UpdatedAt = time.Now()
 	return nil
 }
-

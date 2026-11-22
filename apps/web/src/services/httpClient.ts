@@ -50,13 +50,11 @@ export class HttpClient {
       headers: customHeaders = {},
       timeoutMs = this.defaultTimeoutMs,
       signal: callerSignal,
-      credentials = 'include',
+      credentials = 'same-origin',
       ...rest
     } = options;
 
-    let url = endpoint.startsWith('http')
-      ? endpoint
-      : `${this.baseUrl}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+    let url = `${this.baseUrl}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
 
     if (params) {
       const searchParams = new URLSearchParams();
@@ -100,6 +98,7 @@ export class HttpClient {
         ...rest,
         headers,
         credentials,
+        cache: 'no-store',
         signal: controller.signal,
         body: body !== undefined ? (body instanceof FormData ? body : JSON.stringify(body)) : undefined,
       });
@@ -114,10 +113,12 @@ export class HttpClient {
 
       if (!response.ok) {
         const error = new HttpError(response.status, response.statusText, data);
-        if (response.status === 401) {
-          authErrorHandler.onUnauthorized?.();
-        } else if (response.status === 403 && data?.code === 'MFA_REQUIRED') {
-          authErrorHandler.onMfaRequired?.();
+        if (token && token === SESSION_STORE.getToken()) {
+          if (response.status === 401) {
+            authErrorHandler.onUnauthorized?.();
+          } else if (response.status === 403 && error.code === 'MFA_REQUIRED') {
+            authErrorHandler.onMfaRequired?.();
+          }
         }
         throw error;
       }

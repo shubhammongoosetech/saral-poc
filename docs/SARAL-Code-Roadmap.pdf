@@ -1,0 +1,412 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [7 0 R 9 0 R 11 0 R 13 0 R 15 0 R 17 0 R] /Count 6 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+6 0 obj
+<< /Title (SARAL Code Roadmap) /Subject (Wallet lifecycle and developer setup) /Creator (SARAL repository guide) >>
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 3786 >>
+stream
+0.0784 0.1725 0.1725 rg 0 0 612 792 re f
+0.0863 0.2000 0.2039 rg 0 580 612 212 re f
+0.7451 0.8863 0.8078 rg 48 732 26 4 re f
+BT /F2 9 Tf 0.7451 0.8863 0.8078 rg 1 0 0 1 86 731 Tm (REPOSITORY GUIDE) Tj ET
+BT /F2 49 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 46 668 Tm (SARAL code) Tj ET
+BT /F2 49 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 46 612 Tm (roadmap) Tj ET
+BT /F1 14 Tf 0.7451 0.8863 0.8078 rg 1 0 0 1 48 540 Tm (Trace sign-in, first wallet creation, and a returning wallet lookup across) Tj ET
+BT /F1 14 Tf 0.7451 0.8863 0.8078 rg 1 0 0 1 48 520 Tm (the web app, API, and three-domain node mesh.) Tj ET
+0.1294 0.2784 0.2824 rg 48 404 115 64 re f
+BT /F2 13 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 58 444 Tm (React) Tj ET
+BT /F1 9 Tf 0.7451 0.8863 0.8078 rg 1 0 0 1 58 423 Tm (Wallet screen) Tj ET
+0.7451 0.8863 0.8078 RG 1.15 w 164 436 m 177 436 l S
+0.7451 0.8863 0.8078 RG 1.15 w 177 436 m 172.87332192545162 433.17678763302484 l S
+0.7451 0.8863 0.8078 RG 1.15 w 177 436 m 172.87332192545162 438.82321236697516 l S
+0.1294 0.2784 0.2824 rg 179 404 115 64 re f
+BT /F2 13 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 189 444 Tm (Express) Tj ET
+BT /F1 9 Tf 0.7451 0.8863 0.8078 rg 1 0 0 1 189 423 Tm (Account and policy) Tj ET
+0.7451 0.8863 0.8078 RG 1.15 w 295 436 m 308 436 l S
+0.7451 0.8863 0.8078 RG 1.15 w 308 436 m 303.8733219254516 433.17678763302484 l S
+0.7451 0.8863 0.8078 RG 1.15 w 308 436 m 303.8733219254516 438.82321236697516 l S
+0.1294 0.2784 0.2824 rg 310 404 115 64 re f
+BT /F2 13 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 320 444 Tm (Coordinator) Tj ET
+BT /F1 9 Tf 0.7451 0.8863 0.8078 rg 1 0 0 1 320 423 Tm (Scoped DKG RPC) Tj ET
+0.7451 0.8863 0.8078 RG 1.15 w 426 436 m 439 436 l S
+0.7451 0.8863 0.8078 RG 1.15 w 439 436 m 434.8733219254516 433.17678763302484 l S
+0.7451 0.8863 0.8078 RG 1.15 w 439 436 m 434.8733219254516 438.82321236697516 l S
+0.1294 0.2784 0.2824 rg 441 404 115 64 re f
+BT /F2 13 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 451 444 Tm (Node vault) Tj ET
+BT /F1 9 Tf 0.7451 0.8863 0.8078 rg 1 0 0 1 451 423 Tm (Encrypted shares) Tj ET
+0.9882 0.9804 0.9647 rg 48 114 516 246 re f
+BT /F2 15 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 67 328 Tm (Reading route) Tj ET
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 67 296 Tm (02) Tj ET
+BT /F2 10.5 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 97 296 Tm (Trace one wallet) Tj ET
+BT /F1 9.3 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 223 296 Tm (Follow the first visit, a retry, and a returning read.) Tj ET
+0.7922 0.8431 0.8078 RG 0.5 w 67 286 m 543 286 l S
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 67 262 Tm (03) Tj ET
+BT /F2 10.5 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 97 262 Tm (Follow the source) Tj ET
+BT /F1 9.3 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 223 262 Tm (Open concrete UI, REST, JSON-RPC, and vault files.) Tj ET
+0.7922 0.8431 0.8078 RG 0.5 w 67 252 m 543 252 l S
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 67 228 Tm (04) Tj ET
+BT /F2 10.5 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 97 228 Tm (Understand the mesh) Tj ET
+BT /F1 9.3 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 223 228 Tm (Three DKG domains, three distinct chain keys.) Tj ET
+0.7922 0.8431 0.8078 RG 0.5 w 67 218 m 543 218 l S
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 67 194 Tm (05) Tj ET
+BT /F2 10.5 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 97 194 Tm (Run on Windows) Tj ET
+BT /F1 9.3 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 223 194 Tm (Start the stack, use the wallet, and verify behavior.) Tj ET
+0.7922 0.8431 0.8078 RG 0.5 w 67 184 m 543 184 l S
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 67 160 Tm (06) Tj ET
+BT /F2 10.5 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 97 160 Tm (Signing status) Tj ET
+BT /F1 9.3 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 223 160 Tm (Current API behavior and primary protocol references.) Tj ET
+BT /F1 10 Tf 0.7451 0.8863 0.8078 rg 1 0 0 1 48 52 Tm (Local testnet development  /  22 November 2026) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 5549 >>
+stream
+0.9882 0.9804 0.9647 rg 0 0 612 792 re f
+0.7922 0.8431 0.8078 RG 0.9 w 48 748 m 564 748 l S
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 759 Tm (SARAL / CODE ROADMAP) Tj ET
+BT /F2 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 530 759 Tm (2 / 6) Tj ET
+BT /F2 34 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 700 Tm (Trace one wallet) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 673 Tm (The same account and saved wallet references connect first setup with future visits.) Tj ET
+0.7922 0.8431 0.8078 RG 0.9 w 48 42 m 564 42 l S
+BT /F1 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 24 Tm (SARAL testnet proof of concept) Tj ET
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 144 591 324 55 re B
+BT /F2 12 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 156 626 Tm (Primary sign-in) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 156 608 Tm (Google credential or opt-in local phone OTP.) Tj ET
+0.0275 0.4118 0.3608 RG 1.15 w 306 591 m 306 581 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 581 m 303.17678763302484 585.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 581 m 308.82321236697516 585.1266780745484 l S
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 144 526 324 55 re B
+BT /F2 12 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 156 561 Tm (TOTP or recovery code) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 156 543 Tm (The auth API upgrades the persisted account session.) Tj ET
+0.0275 0.4118 0.3608 RG 1.15 w 306 526 m 306 516 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 516 m 303.17678763302484 520.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 516 m 308.82321236697516 520.1266780745484 l S
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 144 452 324 64 re B
+BT /F2 12 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 156 496 Tm (Working Policy and wallet check) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 156 478 Tm (Save policy during onboarding. GET /api/wallet checks policy and) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 156 465.7 Tm (looks up the wallet row.) Tj ET
+0.0275 0.4118 0.3608 RG 0.9 w 306 452 m 306 437 l S
+0.0275 0.4118 0.3608 RG 0.9 w 170 437 m 441 437 l S
+0.0275 0.4118 0.3608 RG 1.15 w 170 437 m 170 425 l S
+0.0275 0.4118 0.3608 RG 1.15 w 170 425 m 167.17678763302482 429.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 170 425 m 172.82321236697518 429.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 441 437 m 441 425 l S
+0.0275 0.4118 0.3608 RG 1.15 w 441 425 m 438.17678763302484 429.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 441 425 m 443.82321236697516 429.1266780745484 l S
+0.8941 0.9255 0.9020 rg 0.7922 0.8431 0.8078 RG 0.75 w 48 360 244 65 re B
+BT /F2 12 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 405 Tm (No wallet row) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 387 Tm (The browser shows Create Wallet. POST) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 374.7 Tm (/api/wallet/generate reserves the ID.) Tj ET
+0.8941 0.9255 0.9020 rg 0.7922 0.8431 0.8078 RG 0.75 w 320 360 244 65 re B
+BT /F2 12 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 332 405 Tm (Existing READY wallet) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 332 387 Tm (Read the same wallet ID and saved key/session) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 332 374.7 Tm (references.) Tj ET
+0.0275 0.4118 0.3608 RG 1.15 w 170 360 m 170 350 l S
+0.0275 0.4118 0.3608 RG 1.15 w 170 350 m 167.17678763302482 354.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 170 350 m 172.82321236697518 354.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 441 360 m 441 350 l S
+0.0275 0.4118 0.3608 RG 1.15 w 441 350 m 438.17678763302484 354.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 441 350 m 443.82321236697516 354.1266780745484 l S
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 48 271 244 79 re B
+BT /F2 12 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 330 Tm (Start or resume DKG) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 312 Tm (Run chain sessions for all three domains. The) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 299.7 Tm (saved reservation is reused on retry.) Tj ET
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 320 271 244 79 re B
+BT /F2 12 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 332 330 Tm (Resolve public keys) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 332 312 Tm (Ask the saved committees for verified public) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 332 299.7 Tm (contributions and derive the same addresses.) Tj ET
+0.0275 0.4118 0.3608 RG 0.9 w 170 271 m 170 255 l S
+0.0275 0.4118 0.3608 RG 0.9 w 441 271 m 441 255 l S
+0.0275 0.4118 0.3608 RG 0.9 w 170 255 m 441 255 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 255 m 306 242 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 242 m 303.17678763302484 246.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 242 m 308.82321236697516 246.1266780745484 l S
+0.8941 0.9255 0.9020 rg 0.7922 0.8431 0.8078 RG 0.75 w 144 179 324 63 re B
+BT /F2 12 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 156 222 Tm (Wallet overview) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 156 204 Tm (Receive QR, addresses, balances, and activity for MST, Solana, and) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 156 191.70000000000005 Tm (Bitcoin.) Tj ET
+BT /F2 15 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 144 Tm (Read the status before retrying) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 121 Tm (In progress or error states retain wallet references. Policy or derivation failures show an error and reload) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 106 Tm (action. Legacy shared P-256 wallets require recovery.) Tj ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 12 0 R >>
+endobj
+12 0 obj
+<< /Length 3725 >>
+stream
+0.9882 0.9804 0.9647 rg 0 0 612 792 re f
+0.7922 0.8431 0.8078 RG 0.9 w 48 748 m 564 748 l S
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 759 Tm (SARAL / CODE ROADMAP) Tj ET
+BT /F2 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 530 759 Tm (3 / 6) Tj ET
+BT /F2 34 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 700 Tm (Follow the source) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 673 Tm (Start in the browser, then follow one request through the server into the DKG mesh.) Tj ET
+0.7922 0.8431 0.8078 RG 0.9 w 48 42 m 564 42 l S
+BT /F1 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 24 Tm (SARAL testnet proof of concept) Tj ET
+0.8941 0.9255 0.9020 rg 48 573 516 73 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 629 Tm (01 / Page and session) Tj ET
+BT /F3 9.1 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 60 612 Tm (apps/web/src/app/router.tsx) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 595 Tm (Provider and guards route users to login, MFA, policy setup, or wallet.) Tj ET
+1.0000 1.0000 1.0000 rg 48 492 516 73 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 548 Tm (02 / Auth and MFA) Tj ET
+BT /F3 9.1 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 60 531 Tm (apps/auth-server/src/routes/auth.ts) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 514 Tm (GET /api/auth/login-options supplies the Google client ID. The MFA routes manage enrollment and token upgrades.) Tj ET
+0.8941 0.9255 0.9020 rg 48 411 516 73 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 467 Tm (03 / Wallet UI) Tj ET
+BT /F3 9.1 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 60 450 Tm (apps/web/src/features/wallet/Wallet.tsx) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 433 Tm (The UI follows explicit server states. The request wrappers live in apps/web/src/services/walletApi.ts.) Tj ET
+1.0000 1.0000 1.0000 rg 48 330 516 73 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 386 Tm (04 / REST and policy) Tj ET
+BT /F3 9.1 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 60 369 Tm (apps/auth-server/src/routes/wallet.ts) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 352 Tm (GET /api/wallet reads. POST /api/wallet/generate starts or resumes. Wallet access requires a verified session and) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 340 Tm (policy.) Tj ET
+0.8941 0.9255 0.9020 rg 48 249 516 73 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 305 Tm (05 / Lifecycle and storage) Tj ET
+BT /F3 9.1 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 60 288 Tm (apps/auth-server/src/services/walletService.ts) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 271 Tm (createOrGetWallet reserves and transitions a wallet row. storage/store.ts reads and writes it through Prisma.) Tj ET
+1.0000 1.0000 1.0000 rg 48 168 516 73 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 224 Tm (06 / RPC routing) Tj ET
+BT /F3 9.1 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 60 207 Tm (apps/auth-server/src/clients/saralBackendClient.ts) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 190 Tm (Calls saral_startDkg, saral_getDkgStatus, and saral_derivePublicKey on the target domain coordinator.) Tj ET
+0.8941 0.9255 0.9020 rg 48 87 516 73 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 143 Tm (07 / Coordinator and node) Tj ET
+BT /F3 9.1 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 60 126 Tm (services/coordinator/internal/rpc/dkg.go) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 109 Tm (Coordinator orchestrates DKG and checks contributions. The node dkg/engine.go and vault/share_store.go handle) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 97 Tm (local shares.) Tj ET
+BT /F1 9.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 64 Tm (Open apps/auth-server/prisma/schema.prisma to find the unique wallet user ID and the JSON keyReferences column.) Tj ET
+endstream
+endobj
+13 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 14 0 R >>
+endobj
+14 0 obj
+<< /Length 5570 >>
+stream
+0.9882 0.9804 0.9647 rg 0 0 612 792 re f
+0.7922 0.8431 0.8078 RG 0.9 w 48 748 m 564 748 l S
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 759 Tm (SARAL / CODE ROADMAP) Tj ET
+BT /F2 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 530 759 Tm (4 / 6) Tj ET
+BT /F2 34 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 700 Tm (Three domains, three chains) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 673 Tm (Each new chain key combines public keys from Foundation, Public, and Private.) Tj ET
+0.7922 0.8431 0.8078 RG 0.9 w 48 42 m 564 42 l S
+BT /F1 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 24 Tm (SARAL testnet proof of concept) Tj ET
+0.8941 0.9255 0.9020 rg 0.7922 0.8431 0.8078 RG 0.75 w 48 532 168 111 re B
+BT /F2 14 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 618 Tm (Foundation) Tj ET
+BT /F1 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 599 Tm (Coordinator 9001) Tj ET
+0.0275 0.4118 0.3608 rg 0.7922 0.8431 0.8078 RG 0.75 w 60 572 22 14 re B
+0.0275 0.4118 0.3608 rg 0.7922 0.8431 0.8078 RG 0.75 w 89 572 22 14 re B
+0.0275 0.4118 0.3608 rg 0.7922 0.8431 0.8078 RG 0.75 w 118 572 22 14 re B
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 147 572 22 14 re B
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 176 572 22 14 re B
+BT /F1 9 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 548 Tm (3 verified shares from 5 nodes) Tj ET
+0.0275 0.4118 0.3608 RG 0.9 w 132 532 m 132 510 l S
+0.8941 0.9255 0.9020 rg 0.7922 0.8431 0.8078 RG 0.75 w 222 532 168 111 re B
+BT /F2 14 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 234 618 Tm (Public) Tj ET
+BT /F1 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 234 599 Tm (Coordinator 9002) Tj ET
+0.0275 0.4118 0.3608 rg 0.7922 0.8431 0.8078 RG 0.75 w 234 572 22 14 re B
+0.0275 0.4118 0.3608 rg 0.7922 0.8431 0.8078 RG 0.75 w 263 572 22 14 re B
+0.0275 0.4118 0.3608 rg 0.7922 0.8431 0.8078 RG 0.75 w 292 572 22 14 re B
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 321 572 22 14 re B
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 350 572 22 14 re B
+BT /F1 9 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 234 548 Tm (3 verified shares from 5 nodes) Tj ET
+0.0275 0.4118 0.3608 RG 0.9 w 306 532 m 306 510 l S
+0.8941 0.9255 0.9020 rg 0.7922 0.8431 0.8078 RG 0.75 w 396 532 168 111 re B
+BT /F2 14 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 408 618 Tm (Private) Tj ET
+BT /F1 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 408 599 Tm (Coordinator 9003) Tj ET
+0.0275 0.4118 0.3608 rg 0.7922 0.8431 0.8078 RG 0.75 w 408 572 22 14 re B
+0.0275 0.4118 0.3608 rg 0.7922 0.8431 0.8078 RG 0.75 w 437 572 22 14 re B
+0.0275 0.4118 0.3608 rg 0.7922 0.8431 0.8078 RG 0.75 w 466 572 22 14 re B
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 495 572 22 14 re B
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 524 572 22 14 re B
+BT /F1 9 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 408 548 Tm (3 verified shares from 5 nodes) Tj ET
+0.0275 0.4118 0.3608 RG 0.9 w 480 532 m 480 510 l S
+0.0275 0.4118 0.3608 RG 0.9 w 132 510 m 480 510 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 510 m 306 498 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 498 m 303.17678763302484 502.1266780745484 l S
+0.0275 0.4118 0.3608 RG 1.15 w 306 498 m 308.82321236697516 502.1266780745484 l S
+1.0000 1.0000 1.0000 rg 0.7922 0.8431 0.8078 RG 0.75 w 159 433 294 65 re B
+BT /F2 12 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 171 478 Tm (Add the domain public keys) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 171 460 Tm (Per chain, combine public points in the same curve group and) Tj ET
+BT /F1 9.4 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 171 447.7 Tm (encode one receive address.) Tj ET
+BT /F2 15 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 396 Tm (Chain-specific keys and address formats) Tj ET
+0.0784 0.1725 0.1725 rg 48 356 516 25 re f
+BT /F2 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 364 Tm (NETWORK) Tj ET
+BT /F2 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 214 364 Tm (CURVE) Tj ET
+BT /F2 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 333 364 Tm (ADDRESS FORMAT) Tj ET
+0.8941 0.9255 0.9020 rg 48 322 516 34 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 334 Tm (MST Testnet) Tj ET
+BT /F3 10 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 214 334 Tm (secp256k1) Tj ET
+BT /F1 10 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 333 334 Tm (EVM / EIP-55 checksum) Tj ET
+1.0000 1.0000 1.0000 rg 48 288 516 34 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 300 Tm (Solana Devnet) Tj ET
+BT /F3 10 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 214 300 Tm (Ed25519) Tj ET
+BT /F1 10 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 333 300 Tm (Base58 public key) Tj ET
+0.8941 0.9255 0.9020 rg 48 254 516 34 re f
+BT /F2 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 266 Tm (Bitcoin Testnet) Tj ET
+BT /F3 10 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 214 266 Tm (secp256k1) Tj ET
+BT /F1 10 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 333 266 Tm (Taproot witness v1 / Bech32m) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 227 Tm (Five nodes per domain give 15 nodes in the deployment. The configured threshold is three per domain,) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 212 Tm (with t=1. Each new wallet has nine DKG sessions, one for each chain-domain pair. MST and Bitcoin) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 197 Tm (have separate secp256k1 keys.) Tj ET
+0.9961 0.9451 0.8510 rg 48 78 516 88 re f
+BT /F2 13 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 142 Tm (Reading older wallets) Tj ET
+BT /F1 10 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 122 Tm (Foundation-only wallets with native per-chain sessions keep their original addresses. An older single shared) Tj ET
+BT /F1 10 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 60 108 Tm (P-256 session is reported as recovery required and its saved wallet row stays intact.) Tj ET
+endstream
+endobj
+15 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 16 0 R >>
+endobj
+16 0 obj
+<< /Length 3867 >>
+stream
+0.9882 0.9804 0.9647 rg 0 0 612 792 re f
+0.7922 0.8431 0.8078 RG 0.9 w 48 748 m 564 748 l S
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 759 Tm (SARAL / CODE ROADMAP) Tj ET
+BT /F2 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 530 759 Tm (5 / 6) Tj ET
+BT /F2 34 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 700 Tm (Run on Windows) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 673 Tm (Open PowerShell at the repo root. Start Docker Desktop, then use npm.cmd.) Tj ET
+0.7922 0.8431 0.8078 RG 0.9 w 48 42 m 564 42 l S
+BT /F1 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 24 Tm (SARAL testnet proof of concept) Tj ET
+BT /F2 15 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 635 Tm (Web and auth API on the host) Tj ET
+0.0784 0.1725 0.1725 rg 48 510 516 112 re f
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 606 Tm (npm.cmd ci) Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 592 Tm (npm.cmd run docker:nodes) Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 578 Tm (npm.cmd run prisma:generate) Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 564 Tm ($env:NODE_ENV = 'development') Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 550 Tm ($env:DATABASE_URL = '<local PostgreSQL URL>') Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 536 Tm ($env:GOOGLE_CLIENT_ID = '<Google OAuth web client ID>') Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 522 Tm (npm.cmd run dev) Tj ET
+BT /F1 10.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 492 Tm (Use Node.js 22, npm 10+, and Compose v2. Fill DATABASE_URL from apps/auth-server/.env.example.) Tj ET
+BT /F1 10.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 477 Tm (Use a Google OAuth client that allows the frontend origin you open.) Tj ET
+BT /F1 10.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 445 Tm (Opt in with $env:ENABLE_DEV_AUTH = 'true' before launching Vite and the auth API. The local UI) Tj ET
+BT /F1 10.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 430 Tm (displays development codes for manual entry. Use Google and an authenticator for the ordinary flow.) Tj ET
+BT /F2 15 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 381 Tm (Full Docker stack) Tj ET
+0.0784 0.1725 0.1725 rg 48 312 516 56 re f
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 352 Tm ($env:GOOGLE_CLIENT_ID = '<Google OAuth web client ID>') Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 338 Tm (npm.cmd run docker:full) Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 324 Tm (npm.cmd run docker:status) Tj ET
+BT /F1 10.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 292 Tm (Vite runs at http://localhost:5173. Full Docker publishes the web app at http://localhost:3000. Both modes) Tj ET
+BT /F1 10.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 277 Tm (wait for PostgreSQL and apply the additive Working Policy migration before starting services.) Tj ET
+BT /F2 15 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 237 Tm (Check the flow) Tj ET
+BT /F1 10.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 214 Tm (Sign in, complete MFA, save a Working Policy, and create a wallet. Return with the same account.) Tj ET
+BT /F1 10.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 199 Tm (Compare all three addresses and use the browser Network panel to compare wallet.walletId in) Tj ET
+BT /F1 10.6 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 184 Tm (the two GET /api/wallet responses. A policy error should show a reload action.) Tj ET
+0.0784 0.1725 0.1725 rg 48 91 516 84 re f
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 159 Tm (npm.cmd run typecheck) Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 145 Tm (npm.cmd --prefix apps/web test) Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 131 Tm (npm.cmd run test:ts) Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 117 Tm (npm.cmd run test:go) Tj ET
+BT /F3 9 Tf 1.0000 1.0000 1.0000 rg 1 0 0 1 60 103 Tm (npm.cmd run test:all-crypto) Tj ET
+BT /F3 9.5 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 65 Tm (Health endpoint: http://localhost:3001/health) Tj ET
+endstream
+endobj
+17 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 18 0 R /Annots [19 0 R 20 0 R 21 0 R 22 0 R 23 0 R] >>
+endobj
+18 0 obj
+<< /Length 3411 >>
+stream
+0.9882 0.9804 0.9647 rg 0 0 612 792 re f
+0.7922 0.8431 0.8078 RG 0.9 w 48 748 m 564 748 l S
+BT /F2 9 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 759 Tm (SARAL / CODE ROADMAP) Tj ET
+BT /F2 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 530 759 Tm (6 / 6) Tj ET
+BT /F2 34 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 700 Tm (Signing and references) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 673 Tm (Wallet addresses and balances are available. Live transaction signing and broadcast are disabled.) Tj ET
+0.7922 0.8431 0.8078 RG 0.9 w 48 42 m 564 42 l S
+BT /F1 9 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 24 Tm (SARAL testnet proof of concept) Tj ET
+0.9961 0.9451 0.8510 rg 48 580 516 66 re f
+BT /F3 11 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 623 Tm (POST /api/wallet/sign) Tj ET
+BT /F1 10.3 Tf 0.4706 0.3294 0.0784 rg 1 0 0 1 60 602 Tm (After authentication, MFA, and policy checks, the route returns HTTP 501 SIGNING_UNAVAILABLE. The) Tj ET
+BT /F1 10.3 Tf 0.4706 0.3294 0.0784 rg 1 0 0 1 60 588 Tm (receive screen remains available.) Tj ET
+BT /F2 15 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 541 Tm (Solana / Ed25519) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 519 Tm (The RFC 9591 Ed25519 ciphersuite is a reference for evaluating a signing adapter. Production use) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 504 Tm (requires integration with wallet shares and valid Solana transaction messages.) Tj ET
+BT /F2 10 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 477 Tm (RFC 9591: FROST Ed25519 and the two-round protocol) Tj ET
+0.7922 0.8431 0.8078 RG 0.9 w 48 457 m 564 457 l S
+BT /F2 15 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 429 Tm (MST / secp256k1 ECDSA) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 407 Tm (Lockness CGGMP24 is a threshold ECDSA reference. Its normal flow generates auxiliary information) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 392 Tm (and combines it with incomplete DKG shares before signing. Match the signer and key representation) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 377 Tm (before any integration.) Tj ET
+BT /F2 10 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 350 Tm (Lockness CGGMP24: auxiliary information and key generation) Tj ET
+0.7922 0.8431 0.8078 RG 0.9 w 48 330 m 564 330 l S
+BT /F2 15 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 48 302 Tm (Bitcoin / BIP-341 Taproot) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 280 Tm (Taproot key-path spending uses BIP-340-compatible Schnorr and Taproot transaction rules. Zcash) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 265 Tm (Foundation's frost-secp256k1-tr crate is a candidate for this ciphersuite. The NCC v0.6.0 audit) Tj ET
+BT /F1 11 Tf 0.3020 0.4000 0.3961 rg 1 0 0 1 48 250 Tm (documented by ZF excluded this Taproot crate.) Tj ET
+BT /F2 10 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 221 Tm (Bitcoin BIP 341: Taproot rules) Tj ET
+BT /F2 10 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 201 Tm (Zcash Foundation: ciphersuite choice) Tj ET
+BT /F2 10 Tf 0.0275 0.4118 0.3608 rg 1 0 0 1 48 181 Tm (Zcash Foundation: NCC audit scope) Tj ET
+0.8941 0.9255 0.9020 rg 48 78 516 65 re f
+BT /F1 10.5 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 121 Tm (Library tests and protocol references describe specific components. Keep live sending disabled until) Tj ET
+BT /F1 10.5 Tf 0.0784 0.1569 0.1647 rg 1 0 0 1 60 107 Tm (the actual adapter, wallet key lifecycle, and chain broadcast path have been verified together.) Tj ET
+endstream
+endobj
+19 0 obj
+<< /Type /Annot /Subtype /Link /Rect [48 474 308.41400000000004 489] /Border [0 0 0] /A << /S /URI /URI (https://www.rfc-editor.org/rfc/rfc9591.html) >> >>
+endobj
+20 0 obj
+<< /Type /Annot /Subtype /Link /Rect [48 347 339.1370000000001 362] /Border [0 0 0] /A << /S /URI /URI (https://github.com/LFDT-Lockness/cggmp21#auxiliary-info-generation) >> >>
+endobj
+21 0 obj
+<< /Type /Annot /Subtype /Link /Rect [48 218 188.76150000000004 233] /Border [0 0 0] /A << /S /URI /URI (https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki) >> >>
+endobj
+22 0 obj
+<< /Type /Annot /Subtype /Link /Rect [48 198 225.23200000000008 213] /Border [0 0 0] /A << /S /URI /URI (https://frost.zfnd.org/tutorial.html) >> >>
+endobj
+23 0 obj
+<< /Type /Annot /Subtype /Link /Rect [48 178 218.23050000000003 193] /Border [0 0 0] /A << /S /URI /URI (https://github.com/ZcashFoundation/frost#ncc-audit) >> >>
+endobj
+xref
+0 24
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000149 00000 n 
+0000000219 00000 n 
+0000000294 00000 n 
+0000000362 00000 n 
+0000000493 00000 n 
+0000000639 00000 n 
+0000004476 00000 n 
+0000004623 00000 n 
+0000010224 00000 n 
+0000010372 00000 n 
+0000014149 00000 n 
+0000014297 00000 n 
+0000019919 00000 n 
+0000020067 00000 n 
+0000023986 00000 n 
+0000024179 00000 n 
+0000027642 00000 n 
+0000027814 00000 n 
+0000028008 00000 n 
+0000028199 00000 n 
+0000028364 00000 n 
+trailer
+<< /Size 24 /Root 1 0 R /Info 6 0 R >>
+startxref
+28543
+%%EOF

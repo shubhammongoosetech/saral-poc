@@ -2,19 +2,15 @@ import { app } from './app';
 import { env } from './config/env';
 import { connectPrisma, disconnectPrisma } from './database/prisma';
 import { DataStore } from './storage/store';
+import { KeyManager } from './auth/token';
 
 export async function startServer(): Promise<any> {
   const port = env.PORT;
+  KeyManager.getInstance();
 
   // 1. Initialize Prisma & sync store
-  try {
-    const connected = await connectPrisma();
-    if (connected) {
-      await DataStore.getInstance().syncFromPostgres();
-    }
-  } catch (err: any) {
-    console.warn('[SARAL Auth Server] Database initialization warning:', err.message);
-  }
+  if (!await connectPrisma()) throw new Error('PostgreSQL is required to start the auth server');
+  await DataStore.getInstance().syncFromPostgres();
 
   // 2. Start Express server
   const server = app.listen(port, () => {

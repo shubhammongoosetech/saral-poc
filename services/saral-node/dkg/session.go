@@ -1,6 +1,8 @@
 package dkg
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"sync"
@@ -30,23 +32,25 @@ type Session struct {
 	KeyID         string
 	UserBindingID string
 	ChainFamily   string
-	Curve         string
+	Curve         cryptography.Curve
 
 	// Local random secret contribution material
-	LocalSecret        *cryptography.FieldElement
-	LocalBlind         *cryptography.FieldElement
-	LocalDealerPkg     *avss.DealerPackage
-	ContributionDealt  bool
-	proposed           bool
+	LocalSecret       *cryptography.FieldElement
+	LocalBlind        *cryptography.FieldElement
+	LocalDealerPkg    *avss.DealerPackage
+	ContributionDealt bool
+	proposed          bool
 
 	// Completed AVSS instances from peer dealers: DealerID -> Session
-	CompletedSharings      map[string]*avss.Session
-	PeerCommitments        map[string]*cryptography.CurvePoint // C^{(i)}_{0,0} = z_i*G + z'_i*H
-	PeerPublicKeys         map[string]*cryptography.CurvePoint // V_i = z_i*G (unblinded signing public key share)
-	PeerCommitmentMatrices map[string]*avss.CommitmentMatrix
+	CompletedSharings          map[string]*avss.Session
+	PeerCommitments            map[string]*cryptography.CurvePoint // C^{(i)}_{0,0} = z_i*G + z'_i*H
+	VerifiedSigningCommitments map[string]*cryptography.CurvePoint
+	PeerPublicKeys             map[string]*cryptography.CurvePoint // V_i = z_i*G (unblinded signing public key share)
+	PeerCommitmentMatrices     map[string]*avss.CommitmentMatrix
 
 	// Agreement instance for negotiating the Qualified Set QUAL
-	Agreement *proactive.ValidatedAgreementInstance
+	Agreement       *proactive.ValidatedAgreementInstance
+	walletAgreement *walletAgreement
 
 	// Final derived DKG key material
 	QualifiedSet           []string
@@ -82,23 +86,25 @@ func NewSession(
 	copy(normalizedCommittee, committee)
 
 	sess := &Session{
-		SessionID:              sessionID,
-		CommitteeID:            committeeID,
-		Epoch:                  1, // Initial DKG generates Epoch 1 shares
-		SelfID:                 selfID,
-		SelfIndex:              selfIndex,
-		Committee:              normalizedCommittee,
-		N:                      n,
-		K:                      k,
-		T:                      t,
-		State:                  StateCreated,
-		CompletedSharings:      make(map[string]*avss.Session),
-		PeerCommitments:        make(map[string]*cryptography.CurvePoint),
-		PeerPublicKeys:         make(map[string]*cryptography.CurvePoint),
-		PeerCommitmentMatrices: make(map[string]*avss.CommitmentMatrix),
-		ShareStore:             shareStore,
-		CreatedAt:              time.Now(),
-		UpdatedAt:              time.Now(),
+		SessionID:                  sessionID,
+		Curve:                      cryptography.CurveP256,
+		CommitteeID:                committeeID,
+		Epoch:                      1, // Initial DKG generates Epoch 1 shares
+		SelfID:                     selfID,
+		SelfIndex:                  selfIndex,
+		Committee:                  normalizedCommittee,
+		N:                          n,
+		K:                          k,
+		T:                          t,
+		State:                      StateCreated,
+		CompletedSharings:          make(map[string]*avss.Session),
+		PeerCommitments:            make(map[string]*cryptography.CurvePoint),
+		VerifiedSigningCommitments: make(map[string]*cryptography.CurvePoint),
+		PeerPublicKeys:             make(map[string]*cryptography.CurvePoint),
+		PeerCommitmentMatrices:     make(map[string]*avss.CommitmentMatrix),
+		ShareStore:                 shareStore,
+		CreatedAt:                  time.Now(),
+		UpdatedAt:                  time.Now(),
 	}
 
 	// Define external validity predicate for Agreement on QUAL:
@@ -117,7 +123,7 @@ func NewSession(
 				return false
 			}
 			expectedQ, hasQ := sess.PeerCommitments[dealerID]
-			if !hasQ || !subSess.Commitments.SecretCommitment().Equal(expectedQ) {
+			if !hasQ || !subSess.Commitments.SecretCommitment().Equal(expectedQ) || !sess.signingCommitmentMatches(dealerID, expectedQ) {
 				return false
 			}
 		}
@@ -138,45 +144,28 @@ func (s *Session) StartContribution() (*avss.DealerPackage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.State == StateCompleted {
+		return nil, nil
+	}
 	if s.ContributionDealt {
 		return s.LocalDealerPkg, nil
 	}
 
-	// 1. Independently generate a fresh random secret contribution z_i in [1, q-1]
-	zi, err := cryptography.RandScalar()
-	if err != nil {
-		s.State = StateFailed
-		s.Error = fmt.Sprintf("failed to generate random secret contribution: %v", err)
-		return nil, err
-	}
-
-	// 2. Independently generate a random blinding contribution z'_i in [1, q-1]
-	zPrimeI, err := cryptography.RandScalar()
-	if err != nil {
-		s.State = StateFailed
-		s.Error = fmt.Sprintf("failed to generate random blinding contribution: %v", err)
-		return nil, err
-	}
-
-	subSessionID := fmt.Sprintf("dkg-%s-contrib-%s", s.SessionID, s.SelfID)
-
-	// 3. Generate verifiable bivariate polynomial sharing of (zi, zPrimeI) via AVSS
-	dealerPkg, err := avss.GenerateDealerSharing(
-		subSessionID, s.CommitteeID, s.SelfID, s.Epoch, s.Committee, s.K, zi, zPrimeI,
-	)
+	dealerPkg, err := s.prepareLocalDealer()
 	if err != nil {
 		s.State = StateFailed
 		s.Error = fmt.Sprintf("failed to generate AVSS contribution package: %v", err)
 		return nil, err
 	}
 
-	s.LocalSecret = zi
-	s.LocalBlind = zPrimeI
+	s.LocalSecret = dealerPkg.Secret
+	s.LocalBlind = dealerPkg.BlindSecret
 	s.LocalDealerPkg = dealerPkg
 	s.ContributionDealt = true
 	s.PeerCommitments[s.SelfID] = dealerPkg.CommitmentMatrix.SecretCommitment()
-	s.PeerPublicKeys[s.SelfID] = cryptography.GeneratorG.ScalarMult(zi)
+	s.PeerPublicKeys[s.SelfID] = s.Curve.BaseMult(dealerPkg.Secret)
 	s.PeerCommitmentMatrices[s.SelfID] = dealerPkg.CommitmentMatrix
+	s.VerifiedSigningCommitments[s.SelfID] = dealerPkg.CommitmentMatrix.SecretCommitment()
 	s.State = StateAVSSSharing
 	s.UpdatedAt = time.Now()
 
@@ -231,13 +220,28 @@ func (s *Session) CanProposeQualifiedSet() bool {
 }
 
 // GetCandidateQualifiedSet returns the list of dealer IDs whose sharings are verified
+func (s *Session) signingCommitmentMatches(dealer string, commitment *cryptography.CurvePoint) bool {
+	return s.UserBindingID == "" || commitment.Equal(s.VerifiedSigningCommitments[dealer])
+}
+
+func (s *Session) RecordVerifiedSigningKey(dealer string, commitment, key *cryptography.CurvePoint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing := s.VerifiedSigningCommitments[dealer]; existing == nil {
+		s.VerifiedSigningCommitments[dealer] = commitment
+		s.PeerPublicKeys[dealer] = key
+	}
+}
+
 func (s *Session) GetCandidateQualifiedSet() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	candidates := make([]string, 0, len(s.CompletedSharings))
-	for dealerID := range s.CompletedSharings {
-		candidates = append(candidates, dealerID)
+	for dealerID, sharing := range s.CompletedSharings {
+		if sharing.Commitments != nil && s.signingCommitmentMatches(dealerID, sharing.Commitments.SecretCommitment()) {
+			candidates = append(candidates, dealerID)
+		}
 	}
 	sort.Strings(candidates)
 	return candidates
@@ -247,12 +251,26 @@ func (s *Session) GetCandidateQualifiedSet() []string {
 // Computes local private key share x_j = \sum_{i \in QUAL} s_{i, j} mod N,
 // public key Y = \sum_{i \in QUAL} C^{(i)}_{0, 0}, and saves to vault.
 func (s *Session) AggregateShares(agreedQUAL []string) error {
+	return s.aggregateShares(agreedQUAL, false)
+}
+
+func (s *Session) aggregateShares(agreedQUAL []string, walletDecision bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.State == StateCompleted {
+		return nil
+	}
 
-	if len(agreedQUAL) < s.N-s.T {
+	minimum := s.N - s.T
+	if s.UserBindingID != "" {
+		if !walletDecision {
+			return fmt.Errorf("wallet shares require a certified agreement decision")
+		}
+		minimum = s.T + 1
+	}
+	if len(agreedQUAL) < minimum {
 		return fmt.Errorf("%w: agreed set size %d < required quorum %d",
-			ErrInsufficientDealers, len(agreedQUAL), s.N-s.T)
+			ErrInsufficientDealers, len(agreedQUAL), minimum)
 	}
 
 	sortedQUAL := make([]string, len(agreedQUAL))
@@ -260,9 +278,12 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 	sort.Strings(sortedQUAL)
 
 	// 1. Verify every dealer in QUAL has a completed sharing
-	for _, dealerID := range sortedQUAL {
+	for i, dealerID := range sortedQUAL {
+		if i > 0 && dealerID == sortedQUAL[i-1] {
+			return fmt.Errorf("duplicate qualified dealer")
+		}
 		subSess, exists := s.CompletedSharings[dealerID]
-		if !exists || subSess.Share == nil || subSess.BlindShare == nil {
+		if !exists || subSess.Share == nil || subSess.BlindShare == nil || subSess.Share.Curve() != s.Curve || subSess.Commitments == nil || !s.signingCommitmentMatches(dealerID, subSess.Commitments.SecretCommitment()) {
 			return fmt.Errorf("missing verified AVSS share from qualified contributor: %s", dealerID)
 		}
 	}
@@ -270,8 +291,8 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 	// 2. Aggregate local private key share and blinding factor:
 	// x_j = \sum_{i \in QUAL} s_{i, j} \pmod N
 	// x'_j = \sum_{i \in QUAL} s'_{i, j} \pmod N
-	combinedShare := cryptography.NewFieldElement(0)
-	combinedBlind := cryptography.NewFieldElement(0)
+	combinedShare := s.Curve.Scalar(0)
+	combinedBlind := s.Curve.Scalar(0)
 
 	for _, dealerID := range sortedQUAL {
 		subSess := s.CompletedSharings[dealerID]
@@ -281,7 +302,7 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 
 	// 3. Derive group master secret commitment:
 	// C = \sum_{i \in QUAL} C^{(i)}_{0, 0} = x * G + x' * H
-	masterSecretCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	masterSecretCommit := s.Curve.Identity()
 	for _, dealerID := range sortedQUAL {
 		subCommit, exists := s.PeerCommitments[dealerID]
 		if !exists || subCommit == nil {
@@ -292,7 +313,7 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 
 	// 3b. Derive group master signing public key:
 	// Y = \sum_{i \in QUAL} V_i = x * G (where V_i = z_i * G)
-	masterSigningPubKey := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	masterSigningPubKey := s.Curve.Identity()
 	hasSigningKeys := true
 	for _, dealerID := range sortedQUAL {
 		pk, exists := s.PeerPublicKeys[dealerID]
@@ -303,7 +324,9 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 		masterSigningPubKey = masterSigningPubKey.Add(pk)
 	}
 	if !hasSigningKeys || !masterSigningPubKey.IsOnCurve() {
-		// If peer signing public key shares are not explicitly available, fall back to secret commitment
+		if s.UserBindingID != "" {
+			return ErrPublicKeyMismatch
+		}
 		masterSigningPubKey = masterSecretCommit
 	}
 
@@ -313,8 +336,8 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 
 	// Mathematical consistency check:
 	// Verify that Q_j matches the sum of the dealers' individual share commitments at x = selfIndex
-	selfIdxFE := cryptography.NewFieldElement(int64(s.SelfIndex))
-	expectedShareCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	selfIdxFE := s.Curve.Scalar(int64(s.SelfIndex))
+	expectedShareCommit := s.Curve.Identity()
 	for _, dealerID := range sortedQUAL {
 		cm := s.PeerCommitmentMatrices[dealerID]
 		if cm == nil {
@@ -354,7 +377,7 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 			NodeID:                 s.SelfID,
 			NodeIndex:              s.SelfIndex,
 			ChainFamily:            s.ChainFamily,
-			Curve:                  s.Curve,
+			Curve:                  string(s.Curve),
 			Threshold:              s.K,
 			ShareEpoch:             s.Epoch,
 			Epoch:                  s.Epoch,
@@ -367,7 +390,20 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 			UpdatedAt:              time.Now().UnixMilli(),
 			RecordVersion:          1,
 		}
-		if err := s.ShareStore.SaveShare(meta, combinedShare, combinedBlind); err != nil {
+		if s.UserBindingID != "" {
+			meta.RecordVersion = 2
+			meta.MasterSigningPublicKeyHash = signingPointHash(masterSigningPubKey)
+		}
+		var err error
+		if walletDecision {
+			meta.State = "STAGED"
+			if err = s.ShareStore.SaveShare(meta, combinedShare, combinedBlind); err == nil {
+				err = s.activateWalletShare(meta, combinedShare, combinedBlind)
+			}
+		} else {
+			err = s.ShareStore.SaveShare(meta, combinedShare, combinedBlind)
+		}
+		if err != nil {
 			s.State = StateFailed
 			s.Error = fmt.Sprintf("failed saving final DKG share to encrypted vault: %v", err)
 			return err
@@ -377,6 +413,7 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 	// Zero out ephemeral contribution secrets
 	s.LocalSecret = nil
 	s.LocalBlind = nil
+	s.LocalDealerPkg = nil
 
 	s.State = StateCompleted
 	s.UpdatedAt = time.Now()
@@ -454,10 +491,15 @@ func (s *Session) GetPublicView() *DKGSessionPublicView {
 		MasterSigningPublicKey: signingPubHex,
 		MasterSecretCommitment: secretCommitHex,
 		MasterPublicKey:        masterPubHex,
-		Curve:                  "NIST P-256",
+		Curve:                  string(s.Curve),
 		Participants:           parts,
 		CreatedAt:              s.CreatedAt.UnixMilli(),
 		UpdatedAt:              s.UpdatedAt.UnixMilli(),
 		Error:                  s.Error,
 	}
+}
+
+func signingPointHash(point *cryptography.CurvePoint) string {
+	digest := sha256.Sum256(point.Bytes())
+	return hex.EncodeToString(digest[:])
 }

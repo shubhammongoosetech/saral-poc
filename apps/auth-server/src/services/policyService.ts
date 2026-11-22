@@ -18,10 +18,80 @@ const store = DataStore.getInstance();
 export interface PolicyEvaluationResult {
   allowed: boolean;
   reason?: string;
+  code?: 'LOCATION_REQUIRED' | 'LOCATION_INVALID' | 'POLICY_DENIED';
   timeAllowed: boolean;
   locationAllowed: boolean;
   evaluatedAt: string;
   serverTime: string;
+}
+
+export const ALL_WORKING_DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+const VALID_TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+export class InvalidWorkingPolicy extends Error {}
+
+export function parseCoordinate(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'number') return value;
+  return typeof value === 'string' && value.trim() ? Number(value) : NaN;
+}
+
+function validCoordinates(lat?: number, lng?: number): boolean {
+  return lat !== undefined && lng !== undefined && Number.isFinite(lat) && Number.isFinite(lng)
+    && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+}
+
+export function parseWorkingPolicy(
+  userId: string,
+  body: Record<string, unknown>,
+  defaultDays = ALL_WORKING_DAYS.slice(0, 5),
+): WorkingPolicyRecord {
+  const {
+    timeRestrictionEnabled = true, startTime = '09:00', endTime = '18:00',
+    days = defaultDays, timezone = 'Asia/Kolkata', expiresAt,
+    locationRestrictionEnabled = false, geofenceEnabled = locationRestrictionEnabled,
+  } = body;
+  const allowedRegion = body.allowedRegion ?? body.city ?? 'Primary Workspace';
+  const lat = parseCoordinate(body.lat);
+  const lng = parseCoordinate(body.lng);
+  const radiusMeters = parseCoordinate(body.radiusMeters ?? (body.radiusKm === undefined
+    ? 25000 : Number(parseCoordinate(body.radiusKm)) * 1000));
+
+  if (typeof timeRestrictionEnabled !== 'boolean' || typeof locationRestrictionEnabled !== 'boolean'
+    || typeof geofenceEnabled !== 'boolean') throw new InvalidWorkingPolicy('Policy switches must be boolean.');
+  if (typeof startTime !== 'string' || typeof endTime !== 'string'
+    || !VALID_TIME.test(startTime) || !VALID_TIME.test(endTime)) {
+    throw new InvalidWorkingPolicy('Working hours must use HH:mm format.');
+  }
+  if (!Array.isArray(days) || !days.length || days.some((day) => !ALL_WORKING_DAYS.includes(day))) {
+    throw new InvalidWorkingPolicy('Select at least one valid working day.');
+  }
+  if (typeof timezone !== 'string' || !timezone || timezone.length > 100) {
+    throw new InvalidWorkingPolicy('A valid time zone is required.');
+  }
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: timezone });
+  } catch {
+    throw new InvalidWorkingPolicy('A valid time zone is required.');
+  }
+  if (expiresAt !== undefined && (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)))) {
+    throw new InvalidWorkingPolicy('The policy expiration is invalid.');
+  }
+  if (typeof allowedRegion !== 'string' || !allowedRegion.trim() || allowedRegion.length > 255) {
+    throw new InvalidWorkingPolicy('A valid workspace name is required.');
+  }
+  if ((geofenceEnabled || lat !== undefined || lng !== undefined) && !validCoordinates(lat, lng)) {
+    throw new InvalidWorkingPolicy('Valid workspace coordinates are required.');
+  }
+  if (radiusMeters === undefined || !Number.isFinite(radiusMeters) || radiusMeters <= 0) {
+    throw new InvalidWorkingPolicy('The geofence radius must be a positive number.');
+  }
+  return {
+    userId, timeRestrictionEnabled, startTime, endTime, days: [...new Set(days)], timezone, expiresAt,
+    locationRestrictionEnabled: locationRestrictionEnabled || geofenceEnabled,
+    geofenceEnabled, allowedRegion: allowedRegion.trim(), lat, lng, radiusMeters,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 /**
@@ -43,7 +113,8 @@ export function calculateHaversineDistanceMeters(
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const clamped = Math.min(Math.max(a, 0), 1);
+  const c = 2 * Math.atan2(Math.sqrt(clamped), Math.sqrt(1 - clamped));
   return R * c;
 }
 
@@ -54,17 +125,14 @@ export function evaluateTimeRestriction(
   policy: WorkingPolicyRecord,
   serverDate: Date = new Date()
 ): { allowed: boolean; reason?: string } {
-  if (!policy.timeRestrictionEnabled) {
-    return { allowed: true };
-  }
-
   // 1. Check expiration date if configured
   if (policy.expiresAt) {
     const expDate = new Date(policy.expiresAt);
-    if (serverDate.getTime() > expDate.getTime()) {
+    if (!Number.isFinite(expDate.getTime()) || serverDate.getTime() >= expDate.getTime()) {
       return { allowed: false, reason: `Working policy expired on ${policy.expiresAt}` };
     }
   }
+  if (!policy.timeRestrictionEnabled) return { allowed: true };
 
   const tz = policy.timezone || 'Asia/Kolkata';
 
@@ -76,7 +144,7 @@ export function evaluateTimeRestriction(
       weekday: 'short',
       hour: 'numeric',
       minute: 'numeric',
-      hour12: false,
+      hourCycle: 'h23',
     });
     parts = formatter.formatToParts(serverDate);
   } catch (_) {
@@ -143,20 +211,30 @@ export function evaluateLocationRestriction(
   policy: WorkingPolicyRecord,
   clientLat?: number,
   clientLng?: number
-): { allowed: boolean; reason?: string } {
-  if (!policy.locationRestrictionEnabled) {
+): { allowed: boolean; reason?: string; code?: PolicyEvaluationResult['code'] } {
+  if (!policy.locationRestrictionEnabled && !policy.geofenceEnabled) {
     return { allowed: true };
   }
 
   if (clientLat === undefined || clientLng === undefined) {
     return {
       allowed: false,
+      code: 'LOCATION_REQUIRED',
       reason: 'Location coordinates required by active security policy but were not provided.',
     };
   }
+  if (!validCoordinates(clientLat, clientLng)) {
+    return { allowed: false, code: 'LOCATION_INVALID', reason: 'The supplied location coordinates are invalid.' };
+  }
 
-  if (policy.geofenceEnabled && policy.lat !== undefined && policy.lng !== undefined) {
-    const radiusMeters = policy.radiusMeters || 25000; // default 25km
+  if (policy.geofenceEnabled) {
+    if (policy.lat === undefined || policy.lng === undefined || !validCoordinates(policy.lat, policy.lng)) {
+      return { allowed: false, code: 'POLICY_DENIED', reason: 'The geofence has no valid workspace location.' };
+    }
+    const radiusMeters = policy.radiusMeters ?? 25000;
+    if (!Number.isFinite(radiusMeters) || radiusMeters <= 0) {
+      return { allowed: false, code: 'POLICY_DENIED', reason: 'The geofence has no valid radius.' };
+    }
     const distance = calculateHaversineDistanceMeters(policy.lat, policy.lng, clientLat, clientLng);
 
     if (distance > radiusMeters) {
@@ -187,6 +265,7 @@ export function evaluateWorkingPolicy(
   if (!policy) {
     return {
       allowed: false,
+      code: 'POLICY_DENIED',
       reason: 'Working policy not configured for user. Please complete onboarding.',
       timeAllowed: false,
       locationAllowed: false,
@@ -210,8 +289,8 @@ export function evaluateWorkingPolicy(
     id: crypto.randomUUID(),
     userId,
     attemptedAt: evaluatedAt,
-    lat: clientLat,
-    lng: clientLng,
+    lat: Number.isFinite(clientLat) ? clientLat : undefined,
+    lng: Number.isFinite(clientLng) ? clientLng : undefined,
     allowed,
     reason: reason || 'Access Granted: Time and location policies satisfied.',
   });
@@ -219,6 +298,7 @@ export function evaluateWorkingPolicy(
   return {
     allowed,
     reason,
+    code: allowed ? undefined : (timeCheck.allowed ? locationCheck.code : undefined) ?? 'POLICY_DENIED',
     timeAllowed: timeCheck.allowed,
     locationAllowed: locationCheck.allowed,
     evaluatedAt,

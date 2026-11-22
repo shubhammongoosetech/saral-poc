@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import crypto from 'crypto';
 import { DataStore } from '../../apps/auth-server/src/storage/store';
-import { saralBackendClient } from '../../apps/auth-server/src/clients/saralBackendClient';
+import { prisma } from '../../apps/auth-server/src/database/prisma';
+import { mockWalletCoordinator, ED25519_TEST_PUBKEY } from './walletFixtures';
 import {
   requestPhoneOtp,
   verifyPhoneOtp,
@@ -32,54 +33,7 @@ describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', ()
   const store = DataStore.getInstance();
 
   beforeEach(() => {
-    vi.spyOn(saralBackendClient, 'startDkg').mockResolvedValue({
-      success: true,
-      sessionId: 'sess-auth-1',
-      committeeId: 'committee-foundation',
-      state: 'COMPLETED',
-      n: 5,
-      k: 3,
-      t: 1,
-      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
-    });
-    vi.spyOn(saralBackendClient, 'getDkgStatus').mockResolvedValue({
-      sessionId: 'sess-auth-1',
-      committeeId: 'committee-foundation',
-      epoch: 1,
-      n: 5,
-      k: 3,
-      t: 1,
-      state: 'COMPLETED',
-      completedNodes: 5,
-      totalNodes: 5,
-      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
-    });
-    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
-      if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
-        return {
-          success: true,
-          walletId: params.walletId,
-          keyId: params.keyId,
-          sessionId: params.dkgSessionId || 'sess-1',
-          committeeId: 'committee-foundation',
-          epoch: 1,
-          curve: 'ed25519',
-          threshold: 3,
-          masterPublicKey: '042169367072777666f3593f95feb28688789dd6b04e7cf45cb08f6ec91449bdf16666666666666666666666666666666666666666666666666666666666666658',
-        };
-      }
-      return {
-        success: true,
-        walletId: params.walletId,
-        keyId: params.keyId,
-        sessionId: params.dkgSessionId || 'sess-1',
-        committeeId: 'committee-foundation',
-        epoch: 1,
-        curve: 'secp256k1',
-        threshold: 3,
-        masterPublicKey: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
-      };
-    });
+    mockWalletCoordinator();
   });
 
   describe('1. Phone OTP & Identity Normalization', () => {
@@ -89,43 +43,34 @@ describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', ()
       expect(normalizeE164('+919876543210')).toBe('+919876543210');
     });
 
-    it('creates OTP challenge, hashes code with HMAC-SHA256, and verifies correctly', () => {
+    it('creates OTP challenge, hashes code with HMAC-SHA256, and verifies correctly', async () => {
       const mobile = '9876543210';
-      const req = requestPhoneOtp(mobile);
+      const req = await requestPhoneOtp(mobile);
       expect(req.success).toBe(true);
       expect(req.mobile).toBe('+919876543210');
       expect(req.devOtp).toBeDefined();
 
       // Verify OTP
-      const verifyRes = verifyPhoneOtp(mobile, req.devOtp!);
+      const verifyRes = await verifyPhoneOtp(mobile, req.devOtp!);
       expect(verifyRes.user.mobile).toBe('+919876543210');
       expect(verifyRes.token).toBeDefined();
       expect(verifyRes.mfaVerified).toBe(false); // Primary auth only
     });
 
-    it('rejects incorrect OTP and enforces attempt invalidation', () => {
+    it('rejects incorrect OTP and enforces attempt invalidation', async () => {
       const mobile = '9998887776';
-      requestPhoneOtp(mobile);
-      expect(() => verifyPhoneOtp(mobile, '000000')).toThrow(/Incorrect OTP code/);
+      await requestPhoneOtp(mobile);
+      await expect(verifyPhoneOtp(mobile, '000000')).rejects.toThrow(/Incorrect OTP code/);
     });
   });
 
   describe('2. Google Sign-In & Explicit Account Linking', () => {
-    it('authenticates Google identity and resolves user', () => {
-      const googleToken = 'sample-google-id-token-xyz';
-      const auth = verifyGoogleToken(googleToken);
-      expect(auth.user.loginMethod).toBe('google');
-      expect(auth.user.googleId).toBeDefined();
-      expect(auth.token).toBeDefined();
+    it('rejects an invalid Google credential', async () => {
+      await expect(verifyGoogleToken('sample-google-id-token-xyz')).rejects.toThrow(/Invalid Google credential/);
     });
 
-    it('links phone number to existing Google user identity without changing userId', () => {
-      const auth = verifyGoogleToken('user-linking-token');
-      const userId = auth.user.id;
-
-      const linked = linkAccount(userId, 'mobile', '9123456789');
-      expect(linked.user.id).toBe(userId);
-      expect(linked.user.mobile).toBe('+919123456789');
+    it('requires proof for linking a mobile account', async () => {
+      await expect(linkAccount(crypto.randomUUID(), 'mobile', '9123456789')).rejects.toThrow(/verified SMS/);
     });
   });
 
@@ -138,34 +83,41 @@ describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', ()
       expect(decrypted).toBe(secret);
     });
 
-    it('enrolls TOTP, generates QR URI and 8 recovery codes', () => {
-      const testUserId = `user-mfa-${Date.now()}`;
-      const enroll = enrollTotp(testUserId, 'user@example.com');
-      expect(enroll.secret).toBeDefined();
-      expect(enroll.qrUri).toContain('otpauth://totp/');
-      expect(enroll.recoveryCodes.length).toBe(8);
+    it('enrolls TOTP, generates QR URI and verifies setup once', async () => {
+      const user = await prisma.user.create({ data: { loginMethod: 'google' } });
+      try {
+        const enroll = await enrollTotp(user.id, 'user@example.com');
+        expect(enroll.secret).toBeDefined();
+        expect(enroll.qrUri).toContain('otpauth://totp/');
+        expect(enroll.recoveryCodes.length).toBe(8);
 
-      // Verify challenge with active TOTP code
-      const currentStep = Math.floor(Date.now() / 1000 / 30);
-      const code = computeTotpToken(enroll.secret, currentStep);
-
-      const verification = verifyMfaChallenge(testUserId, code);
-      expect(verification.verified).toBe(true);
-      expect(verification.method).toBe('totp');
+        const currentStep = Math.floor(Date.now() / 30_000);
+        const code = computeTotpToken(enroll.secret, currentStep);
+        const verification = await verifyMfaChallenge(user.id, code);
+        expect(verification.verified).toBe(true);
+        expect(verification.method).toBe('totp');
+        await expect(verifyMfaChallenge(user.id, code)).rejects.toThrow(/already used/);
+        await expect(enrollTotp(user.id, 'user@example.com')).rejects.toThrow(/already enrolled/);
+      } finally {
+        await prisma.user.delete({ where: { id: user.id } });
+      }
     });
 
-    it('supports authentication using single-use hashed recovery code and burns code', () => {
-      const testUserId = `user-rec-${Date.now()}`;
-      const enroll = enrollTotp(testUserId, 'recovery@example.com');
-      const codeToUse = enroll.recoveryCodes[0];
+    it('burns a recovery code and requires verified enrollment before use', async () => {
+      const user = await prisma.user.create({ data: { loginMethod: 'google' } });
+      try {
+        const enroll = await enrollTotp(user.id, 'recovery@example.com');
+        const recoveryCode = enroll.recoveryCodes[0];
+        await expect(verifyMfaChallenge(user.id, recoveryCode)).rejects.toThrow(/Invalid MFA/);
+        await verifyMfaChallenge(user.id, computeTotpToken(enroll.secret, Math.floor(Date.now() / 30_000)));
 
-      // Use recovery code
-      const res = verifyMfaChallenge(testUserId, codeToUse);
-      expect(res.verified).toBe(true);
-      expect(res.method).toBe('recovery-code');
-
-      // Attempt replay of burned recovery code should fail
-      expect(() => verifyMfaChallenge(testUserId, codeToUse)).toThrow();
+        const result = await verifyMfaChallenge(user.id, recoveryCode);
+        expect(result.verified).toBe(true);
+        expect(result.method).toBe('recovery-code');
+        await expect(verifyMfaChallenge(user.id, recoveryCode)).rejects.toThrow(/Invalid MFA/);
+      } finally {
+        await prisma.user.delete({ where: { id: user.id } });
+      }
     });
   });
 
@@ -268,9 +220,9 @@ describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', ()
       expect(secondCall.wallet.walletId).toBe(walletId); // Same wallet!
     });
 
-    it('STRICT ZERO-ADDRESS DATABASE INVARIANT: application database stores zero wallet addresses', () => {
+    it('STRICT ZERO-ADDRESS DATABASE INVARIANT: application database stores zero wallet addresses', async () => {
       const userId = `user-db-audit-${Date.now()}`;
-      store.saveWallet({
+      await store.reserveWallet({
         userId,
         walletId: `wal-${userId}`,
         status: 'READY',
@@ -300,7 +252,7 @@ describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', ()
       const walletId = 'wal-test-deterministic-001';
       const keyRefs = {
         mst: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
-        solana: '042169367072777666f3593f95feb28688789dd6b04e7cf45cb08f6ec91449bdf16666666666666666666666666666666666666666666666666666666666666658',
+        solana: ED25519_TEST_PUBKEY,
         bitcoin: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
       };
 
@@ -314,7 +266,7 @@ describe('SARAL Protocol V3 — Auth, MFA, Working Policy & Wallet Security', ()
 
       // Standards formatting
       expect(run1.mst.address).toBe('0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf');
-      expect(run1.solana.address).toBe('6x5SYnLroiN7WYq8NQYU9KHcH4YjpBbwpUfVu3EB7igV');
+      expect(run1.solana.address).toBe('6x5SYnLroiN7WYq8NQYU9KHcH4YjpBbwpUfVu3EB7ieH');
       expect(run1.bitcoin.address).toBe('tb1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssk79hv2');
     });
   });

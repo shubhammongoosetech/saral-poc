@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -28,28 +29,29 @@ var (
 // STRICT PRIVACY GUARANTEE: Neither complete private keys, aggregate public keys,
 // nor derived blockchain addresses are EVER persisted in the vault.
 type ShareRecordMetadata struct {
-	WalletID               string `json:"wallet_id,omitempty"`
-	KeyID                  string `json:"key_id,omitempty"`
-	UserBindingID          string `json:"user_binding_id,omitempty"`
-	DKGSessionID           string `json:"dkg_session_id,omitempty"`
-	SessionID              string `json:"sessionId,omitempty"`
-	CommitteeID            string `json:"committee_id,omitempty"`
-	ParticipantID          string `json:"participant_id,omitempty"`
-	NodeID                 string `json:"nodeId,omitempty"`
-	NodeIndex              int    `json:"nodeIndex"`
-	ChainFamily            string `json:"chain_family,omitempty"`
-	Curve                  string `json:"curve,omitempty"`
-	Threshold              int    `json:"threshold,omitempty"`
-	ShareEpoch             uint64 `json:"share_epoch,omitempty"`
-	Epoch                  uint64 `json:"epoch,omitempty"`
-	ShareVersion           uint64 `json:"shareVersion,omitempty"`
-	State                  string `json:"state"` // "ACTIVE", "EXPIRED", "ERASED"
-	PublicShareCommitment  string `json:"publicShareCommitment,omitempty"`
-	PublicSecretCommitment string `json:"publicSecretCommitment,omitempty"`
-	CreationTimestamp      int64  `json:"creation_timestamp,omitempty"`
-	CreatedAt              int64  `json:"createdAt,omitempty"`
-	UpdatedAt              int64  `json:"updatedAt,omitempty"`
-	RecordVersion          int    `json:"record_version"`
+	WalletID                   string `json:"wallet_id,omitempty"`
+	KeyID                      string `json:"key_id,omitempty"`
+	UserBindingID              string `json:"user_binding_id,omitempty"`
+	DKGSessionID               string `json:"dkg_session_id,omitempty"`
+	SessionID                  string `json:"sessionId,omitempty"`
+	CommitteeID                string `json:"committee_id,omitempty"`
+	ParticipantID              string `json:"participant_id,omitempty"`
+	NodeID                     string `json:"nodeId,omitempty"`
+	NodeIndex                  int    `json:"nodeIndex"`
+	ChainFamily                string `json:"chain_family,omitempty"`
+	Curve                      string `json:"curve,omitempty"`
+	Threshold                  int    `json:"threshold,omitempty"`
+	ShareEpoch                 uint64 `json:"share_epoch,omitempty"`
+	Epoch                      uint64 `json:"epoch,omitempty"`
+	ShareVersion               uint64 `json:"shareVersion,omitempty"`
+	State                      string `json:"state"` // "ACTIVE", "EXPIRED", "ERASED"
+	PublicShareCommitment      string `json:"publicShareCommitment,omitempty"`
+	PublicSecretCommitment     string `json:"publicSecretCommitment,omitempty"`
+	CreationTimestamp          int64  `json:"creation_timestamp,omitempty"`
+	CreatedAt                  int64  `json:"createdAt,omitempty"`
+	UpdatedAt                  int64  `json:"updatedAt,omitempty"`
+	RecordVersion              int    `json:"record_version"`
+	MasterSigningPublicKeyHash string `json:"master_point_digest,omitempty"`
 }
 
 // SecretPayload holds the confidential share values before local vault encryption
@@ -97,8 +99,22 @@ func (s *ShareStore) getRecordPath(id string, epoch uint64) string {
 	return filepath.Join(s.vaultDir, fmt.Sprintf("share_%s_epoch_%d.json", id, epoch))
 }
 
+func (s *ShareStore) Persistent() bool {
+	return s != nil && s.vaultDir != ""
+}
+
+var recordIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$`)
+
+func ValidRecordID(id string) bool {
+	return recordIDPattern.MatchString(id)
+}
+
 // computeAad returns the cryptographic Associated Authenticated Data for AES-256-GCM.
 func computeAad(meta *ShareRecordMetadata) []byte {
+	if meta.RecordVersion == 2 {
+		encoded, _ := json.Marshal(meta)
+		return append([]byte("saral-vault-key-v2:"), encoded...)
+	}
 	if meta.WalletID != "" || meta.KeyID != "" {
 		epoch := meta.ShareEpoch
 		if epoch == 0 {
@@ -152,6 +168,27 @@ func (s *ShareStore) SaveShare(
 	if meta.RecordVersion == 0 {
 		meta.RecordVersion = 1
 	}
+	primaryID := meta.KeyID
+	if primaryID == "" {
+		primaryID = meta.CommitteeID
+	}
+	if meta.RecordVersion == 2 && meta.KeyID == "" {
+		primaryID = meta.DKGSessionID
+	}
+	if meta.RecordVersion == 2 {
+		curve, err := cryptography.ParseCurve(meta.Curve)
+		if err != nil || share.Curve() != curve || blindShare.Curve() != curve {
+			return fmt.Errorf("share curve does not match authenticated metadata")
+		}
+	}
+	for _, id := range []string{primaryID, meta.CommitteeID, meta.KeyID, meta.DKGSessionID} {
+		if id != "" && !ValidRecordID(id) {
+			return fmt.Errorf("invalid share record identifier")
+		}
+	}
+	if primaryID == "" {
+		return fmt.Errorf("missing share record identifier")
+	}
 
 	// 1. Prepare plaintext secret payload
 	secPayload := SecretPayload{
@@ -198,11 +235,10 @@ func (s *ShareStore) SaveShare(
 		return err
 	}
 
-	primaryID := meta.KeyID
-	if primaryID == "" {
-		primaryID = meta.CommitteeID
-	}
 	targetPath := s.getRecordPath(primaryID, meta.Epoch)
+	if meta.RecordVersion == 2 {
+		return s.writeDurableState(targetPath, data)
+	}
 	tmpPath := targetPath + ".tmp"
 
 	// Write atomically with 0600 permissions
@@ -253,6 +289,9 @@ func (s *ShareStore) LoadShare(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if !s.Persistent() || !ValidRecordID(id) {
+		return nil, nil, nil, ErrShareNotFound
+	}
 	if currentEpoch > 0 && epoch < currentEpoch {
 		return nil, nil, nil, fmt.Errorf("%w: requested epoch %d < active epoch %d", ErrStaleEpoch, epoch, currentEpoch)
 	}
@@ -273,8 +312,9 @@ func (s *ShareStore) LoadShare(
 				}
 				var checkFile VaultEncryptedFile
 				if json.Unmarshal(content, &checkFile) == nil {
-					if checkFile.Metadata.KeyID == id || checkFile.Metadata.CommitteeID == id ||
-						checkFile.Metadata.SessionID == id || checkFile.Metadata.WalletID == id {
+					if checkFile.Metadata.RecordVersion < 2 && checkFile.Metadata.Epoch == epoch &&
+						(checkFile.Metadata.KeyID == id || checkFile.Metadata.CommitteeID == id ||
+							checkFile.Metadata.SessionID == id || checkFile.Metadata.WalletID == id) {
 						data = content
 						found = true
 						break
@@ -295,6 +335,9 @@ func (s *ShareStore) LoadShare(
 	if vaultFile.Metadata.State == "ERASED" {
 		return nil, nil, nil, errors.New("share was securely erased")
 	}
+	if vaultFile.Metadata.Epoch != epoch {
+		return nil, nil, nil, ErrStaleEpoch
+	}
 
 	nonce, err := hex.DecodeString(vaultFile.NonceHex)
 	if err != nil {
@@ -313,17 +356,15 @@ func (s *ShareStore) LoadShare(
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	if len(nonce) != gcm.NonceSize() {
+		return nil, nil, nil, errors.New("invalid vault nonce")
+	}
 
 	// Try AAD v2 (full authenticated metadata binding)
 	aadV2 := computeAad(&vaultFile.Metadata)
 	plainBytes, err := gcm.Open(nil, nonce, ciphertext, aadV2)
 	if err != nil {
-		// Fallback to legacy AAD v1 format: committeeId:epoch
-		aadV1 := []byte(fmt.Sprintf("%s:%d", vaultFile.Metadata.CommitteeID, vaultFile.Metadata.Epoch))
-		plainBytes, err = gcm.Open(nil, nonce, ciphertext, aadV1)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("vault decryption failed: %w", err)
-		}
+		return nil, nil, nil, fmt.Errorf("vault decryption failed: %w", err)
 	}
 	defer func() {
 		for i := range plainBytes {
@@ -336,12 +377,20 @@ func (s *ShareStore) LoadShare(
 		return nil, nil, nil, err
 	}
 
-	share, err := cryptography.NewFieldElementFromHex(secPayload.ShareHex)
+	curve := cryptography.CurveP256
+	if vaultFile.Metadata.RecordVersion == 2 {
+		curve, err = cryptography.ParseCurve(vaultFile.Metadata.Curve)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	share, err := curve.ParseScalar(secPayload.ShareHex)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	blindShare, err := cryptography.NewFieldElementFromHex(secPayload.BlindShareHex)
+	blindShare, err := curve.ParseScalar(secPayload.BlindShareHex)
 	if err != nil {
+		share.Zero()
 		return nil, nil, nil, err
 	}
 
@@ -358,6 +407,9 @@ func (s *ShareStore) SecureEraseEpoch(committeeID string, epoch uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if !ValidRecordID(committeeID) {
+		return ErrShareNotFound
+	}
 	targetPath := s.getRecordPath(committeeID, epoch)
 	info, err := os.Stat(targetPath)
 	if err != nil {

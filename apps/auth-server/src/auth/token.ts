@@ -78,7 +78,7 @@ export function verifyJwt<T = TokenClaims>(token: string, publicKey: crypto.KeyO
   }
 
   const now = Math.floor(Date.now() / 1000);
-  if (typeof payload.exp === 'number' && payload.exp < now - 10) {
+  if (!Number.isSafeInteger(payload.exp) || (payload.exp as number) <= now) {
     throw new Error('Token expired');
   }
   if (typeof payload.nbf === 'number' && payload.nbf > now + 10) {
@@ -97,6 +97,7 @@ export class KeyManager {
   public activeKid: string;
   public issuer: string;
   public audience: string;
+  private readonly accountAudience = 'saral-wallet-account';
 
   private constructor() {
     this.activeKid = process.env.SARAL_JWT_ACTIVE_KID || 'saral-auth-ed25519-2026-01';
@@ -124,6 +125,7 @@ export class KeyManager {
         }
       }
     }
+    if (rawKeyDir && !keyDir) throw new Error('Configured authentication signing key pair is missing');
 
     let loaded = false;
 
@@ -138,7 +140,7 @@ export class KeyManager {
           const privKey = crypto.createPrivateKey(privContent);
           const pubKey = crypto.createPublicKey(pubContent);
 
-          if (privKey.asymmetricKeyType === 'ed25519') {
+          if (privKey.asymmetricKeyType === 'ed25519' && crypto.createPublicKey(privKey).equals(pubKey)) {
             this.privateKey = privKey;
             this.publicKey = pubKey;
             this.privateKeyPem = privContent;
@@ -146,6 +148,7 @@ export class KeyManager {
             loaded = true;
           }
         } catch (_) {}
+        if (!loaded) throw new Error('Configured authentication signing keys are invalid');
       }
     }
 
@@ -158,16 +161,6 @@ export class KeyManager {
       this.privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
       this.publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }) as string;
 
-      if (keyDir && fs.existsSync(keyDir)) {
-        try {
-          fs.writeFileSync(path.join(keyDir, 'auth_ed25519_private_key.pem'), this.privateKeyPem, { mode: 0o600 });
-          fs.writeFileSync(path.join(keyDir, 'auth_ed25519_public_key.pem'), this.publicKeyPem, { mode: 0o644 });
-          // Also write auth_public_key.pem for verifier file discovery fallback
-          fs.writeFileSync(path.join(keyDir, 'auth_public_key.pem'), this.publicKeyPem, { mode: 0o644 });
-        } catch {
-          // Ignore if directory read-only
-        }
-      }
     }
   }
 
@@ -241,4 +234,25 @@ export class KeyManager {
   public verifyToken(token: string): TokenClaims {
     return verifyJwt<TokenClaims>(token, this.publicKey);
   }
+
+  public issueAccountToken(userId: string, mfaVerified: boolean): string {
+    const durationSeconds = mfaVerified ? 3600 : 300;
+    return this.issueScopedToken({
+      sub: userId,
+      aud: this.accountAudience,
+      exp: Math.floor(Date.now() / 1000) + durationSeconds,
+      mfaVerified,
+    });
+  }
+
+  public verifyAccountToken(token: string): TokenClaims {
+    const claims = this.verifyToken(token);
+    if (claims.iss !== this.issuer || claims.aud !== this.accountAudience ||
+        claims.domainRole !== 'operator' || typeof claims.sub !== 'string' || !claims.sub ||
+        typeof claims.mfaVerified !== 'boolean' || typeof claims.nonce !== 'string') {
+      throw new Error('Invalid account session');
+    }
+    return claims;
+  }
+
 }

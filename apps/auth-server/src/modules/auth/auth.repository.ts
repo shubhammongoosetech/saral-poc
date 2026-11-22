@@ -72,7 +72,7 @@ export class AuthRepository {
     providerId: string,
     metadata: Record<string, any> = {}
   ): Promise<AuthIdentity> {
-    return prisma.authIdentity.upsert({
+    const identity = await prisma.authIdentity.upsert({
       where: {
         provider_providerId: {
           provider,
@@ -85,11 +85,10 @@ export class AuthRepository {
         providerId,
         metadata,
       },
-      update: {
-        userId,
-        metadata,
-      },
+      update: {},
     });
+    if (identity.userId !== userId) throw new Error('Identity already linked to another account');
+    return identity;
   }
 }
 

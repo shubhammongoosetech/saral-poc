@@ -6,6 +6,9 @@
   "workspaces": [
     "apps/*"
   ],
+  "prisma": {
+    "schema": "apps/auth-server/prisma/schema.prisma"
+  },
   "engines": {
     "node": ">=20.0.0",
     "npm": ">=10.0.0"
@@ -13,7 +16,7 @@
   "scripts": {
     "clean": "rm -rf services/coordinator/bin services/saral-node/bin services/verifier/bin apps/*/dist",
     "clean:all": "bash scripts/clean-all.sh",
-    "setup": "bash scripts/fresh-setup.sh",
+    "setup": "node scripts/docker-stack.cjs nodes",
     "verify": "bash scripts/verify-all.sh",
     "build:go": "go build -o services/coordinator/bin/coordinator ./services/coordinator/cmd/main.go && go build -o services/verifier/bin/verifier ./services/verifier/cmd/main.go && go build -o services/saral-node/bin/saral-node ./services/saral-node/cmd/main.go",
     "build:apps": "npm --prefix apps/auth-server run build && npm --prefix apps/web run build",
@@ -35,15 +38,20 @@
     "verify:architecture": "cd tests/architecture && go test -v -timeout 30s ./...",
     "docker:build": "docker compose -f infra/compose/full24.yml build",
     "docker:poc": "docker compose -f infra/compose/poc15.yml up -d",
-    "docker:nodes": "docker compose -f infra/compose/full24.yml create 2>/dev/null; docker start $(docker ps -a -q --filter \"name=saral-prod-coord\" --filter \"name=saral-prod-node\" --filter \"name=saral-prod-verifier\")",
-    "docker:full": "docker compose -f infra/compose/full24.yml up -d",
+    "docker:nodes": "node scripts/docker-stack.cjs nodes",
+    "docker:full": "node scripts/docker-stack.cjs full",
     "docker:down": "docker compose -f infra/compose/poc15.yml down && docker compose -f infra/compose/full24.yml down",
     "docker:status": "docker compose -f infra/compose/full24.yml ps",
     "typecheck": "npm --prefix apps/auth-server run typecheck && npm --prefix apps/web run typecheck"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "tsup": "^8.3.0",
     "typescript": "^5.6.0"
+  },
+  "overrides": {
+    "deepmerge-ts": "8.0.0",
+    "effect": "3.22.1",
+    "esbuild": "0.28.2",
+    "zod": "4.6.7"
   }
 }

@@ -2,7 +2,13 @@ import crypto from 'crypto';
 import { env } from '../config/env';
 
 export function getTotpEncryptionKey(): Buffer {
-  return crypto.scryptSync(env.MFA_ENCRYPTION_KEY, 'saral-totp-storage-salt', 32, {
+  const configuredKey = process.env.MFA_ENCRYPTION_KEY;
+  const isLocal = env.isDev || env.isTest || env.NODE_ENV === 'local';
+  if (!isLocal && (!configuredKey || configuredKey.trim().length < 32 || configuredKey === 'saral-mfa-protection-key-2026-v3')) {
+    throw new Error('A secure MFA_ENCRYPTION_KEY is required');
+  }
+  const key = configuredKey || process.env.SARAL_ADMIN_KEY || env.MFA_ENCRYPTION_KEY;
+  return crypto.scryptSync(key, 'saral-totp-storage-salt', 32, {
     N: 16384,
     r: 8,
     p: 1,

@@ -41,7 +41,8 @@ func init() {
 
 // FieldElement represents a scalar in Z_q.
 type FieldElement struct {
-	val *big.Int
+	val   *big.Int
+	curve Curve
 }
 
 // Zero explicitly clears the underlying big.Int to prevent memory lingering
@@ -53,12 +54,7 @@ func (fe *FieldElement) Zero() {
 
 // NewFieldElement creates a new FieldElement from an int64, reduced mod q.
 func NewFieldElement(v int64) *FieldElement {
-	z := big.NewInt(v)
-	z.Mod(z, OrderQ)
-	if z.Sign() < 0 {
-		z.Add(z, OrderQ)
-	}
-	return &FieldElement{val: z}
+	return CurveP256.Scalar(v)
 }
 
 // NewFieldElementFromBigInt creates a new FieldElement from *big.Int, checking canonical range [0, q-1].
@@ -74,23 +70,42 @@ func NewFieldElementFromBigInt(b *big.Int) (*FieldElement, error) {
 
 // NewFieldElementFromBytes parses a canonical 32-byte big-endian scalar.
 func NewFieldElementFromBytes(b []byte) (*FieldElement, error) {
+	return CurveP256.parseScalarBytes(b)
+}
+
+func (c Curve) parseScalarBytes(b []byte) (*FieldElement, error) {
 	if len(b) != 32 {
 		return nil, fmt.Errorf("%w: expected 32 bytes, got %d", ErrInvalidScalarEncoding, len(b))
 	}
 	val := new(big.Int).SetBytes(b)
-	if val.Cmp(OrderQ) >= 0 {
-		return nil, fmt.Errorf("%w: scalar %s >= group order q", ErrInvalidScalarEncoding, hex.EncodeToString(b))
+	if val.Cmp(c.order()) >= 0 {
+		return nil, ErrInvalidScalarEncoding
 	}
-	return &FieldElement{val: val}, nil
+	return &FieldElement{val: val, curve: c}, nil
 }
 
 // NewFieldElementFromHex parses a 64-char hex string as a canonical scalar.
 func NewFieldElementFromHex(h string) (*FieldElement, error) {
+	return CurveP256.ParseScalar(h)
+}
+
+func (c Curve) ParseScalar(h string) (*FieldElement, error) {
 	b, err := hex.DecodeString(h)
 	if err != nil {
 		return nil, fmt.Errorf("invalid hex string: %w", err)
 	}
-	return NewFieldElementFromBytes(b)
+	defer clear(b)
+	return c.parseScalarBytes(b)
+}
+
+func (fe *FieldElement) Curve() Curve {
+	return fe.curve.canonical()
+}
+
+func (fe *FieldElement) assertSameCurve(other *FieldElement) {
+	if fe.Curve() != other.Curve() {
+		panic("scalar field mismatch")
+	}
 }
 
 // Bytes returns the canonical 32-byte big-endian representation.
@@ -123,40 +138,40 @@ func (fe *FieldElement) Equal(other *FieldElement) bool {
 	}
 	b1 := fe.Bytes()
 	b2 := other.Bytes()
-	return subtle.ConstantTimeCompare(b1, b2) == 1
+	return fe.Curve() == other.Curve() && subtle.ConstantTimeCompare(b1, b2) == 1
 }
 
 // Add returns (fe + other) mod q.
 func (fe *FieldElement) Add(other *FieldElement) *FieldElement {
+	fe.assertSameCurve(other)
 	res := new(big.Int).Add(fe.val, other.val)
-	res.Mod(res, OrderQ)
-	return &FieldElement{val: res}
+	res.Mod(res, fe.Curve().order())
+	return &FieldElement{val: res, curve: fe.Curve()}
 }
 
 // Sub returns (fe - other) mod q.
 func (fe *FieldElement) Sub(other *FieldElement) *FieldElement {
+	fe.assertSameCurve(other)
 	res := new(big.Int).Sub(fe.val, other.val)
-	res.Mod(res, OrderQ)
-	if res.Sign() < 0 {
-		res.Add(res, OrderQ)
-	}
-	return &FieldElement{val: res}
+	res.Mod(res, fe.Curve().order())
+	return &FieldElement{val: res, curve: fe.Curve()}
 }
 
 // Mul returns (fe * other) mod q.
 func (fe *FieldElement) Mul(other *FieldElement) *FieldElement {
+	fe.assertSameCurve(other)
 	res := new(big.Int).Mul(fe.val, other.val)
-	res.Mod(res, OrderQ)
-	return &FieldElement{val: res}
+	res.Mod(res, fe.Curve().order())
+	return &FieldElement{val: res, curve: fe.Curve()}
 }
 
 // Neg returns (-fe) mod q.
 func (fe *FieldElement) Neg() *FieldElement {
 	if fe.IsZero() {
-		return &FieldElement{val: big.NewInt(0)}
+		return fe.Curve().Scalar(0)
 	}
-	res := new(big.Int).Sub(OrderQ, fe.val)
-	return &FieldElement{val: res}
+	res := new(big.Int).Sub(fe.Curve().order(), fe.val)
+	return &FieldElement{val: res, curve: fe.Curve()}
 }
 
 // Inv returns fe^(-1) mod q. Returns ErrZeroDivision if fe is zero.
@@ -164,11 +179,11 @@ func (fe *FieldElement) Inv() (*FieldElement, error) {
 	if fe.IsZero() {
 		return nil, ErrZeroDivision
 	}
-	res := new(big.Int).ModInverse(fe.val, OrderQ)
+	res := new(big.Int).ModInverse(fe.val, fe.Curve().order())
 	if res == nil {
 		return nil, ErrZeroDivision
 	}
-	return &FieldElement{val: res}, nil
+	return &FieldElement{val: res, curve: fe.Curve()}, nil
 }
 
 // Div returns (fe * other^(-1)) mod q.
@@ -182,16 +197,16 @@ func (fe *FieldElement) Div(other *FieldElement) (*FieldElement, error) {
 
 // Exp returns fe^e mod q.
 func (fe *FieldElement) Exp(e *big.Int) *FieldElement {
-	res := new(big.Int).Exp(fe.val, e, OrderQ)
-	return &FieldElement{val: res}
+	res := new(big.Int).Exp(fe.val, e, fe.Curve().order())
+	return &FieldElement{val: res, curve: fe.Curve()}
 }
 
 // LagrangeCoefficient computes the Lagrange interpolation basis coefficient:
 // \lambda_i = \prod_{j \in S, j \ne i} \frac{x - x_j}{x_i - x_j} \pmod q
 // evaluated at xTarget (typically xTarget = 0 to recover secret).
 func LagrangeCoefficient(xTarget *FieldElement, xi *FieldElement, allX []*FieldElement) (*FieldElement, error) {
-	num := NewFieldElement(1)
-	den := NewFieldElement(1)
+	num := xi.Curve().Scalar(1)
+	den := xi.Curve().Scalar(1)
 
 	for _, xj := range allX {
 		if xj.Equal(xi) {
@@ -215,4 +230,3 @@ func LagrangeCoefficient(xTarget *FieldElement, xi *FieldElement, allX []*FieldE
 	}
 	return coeff, nil
 }
-

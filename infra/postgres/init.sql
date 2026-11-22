@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS work_policy (
   time_restriction_enabled BOOLEAN NOT NULL DEFAULT TRUE,
   location_restriction_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   geofence_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  days TEXT[] NOT NULL DEFAULT ARRAY['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'],
+  expires_at TIMESTAMPTZ(6),
   set_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT unique_user_work_policy UNIQUE (user_id)
 );

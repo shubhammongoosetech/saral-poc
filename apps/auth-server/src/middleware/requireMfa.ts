@@ -9,6 +9,7 @@ export function requireMfa(req: Request, res: Response, next: NextFunction): voi
   if (!req.user.mfaVerified) {
     res.status(403).json({
       success: false,
+      code: 'MFA_REQUIRED',
       error: 'MFA_REQUIRED',
       message: 'Multi-Factor Authentication verification required to perform this action',
     });

@@ -7,6 +7,7 @@ import { Field } from '@/shared/ui/Field';
 import { Alert } from '@/shared/ui/Alert';
 import { OtpInput } from '@/shared/ui/OtpInput';
 import { mapApiError } from '@/shared/lib/format';
+import type { LoginOptions } from '@/services/authApi';
 
 interface GoogleAccountsWindow {
   google?: {
@@ -28,16 +29,33 @@ export const LoginForm: React.FC = () => {
   const [codeSent, setCodeSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [options, setOptions] = useState<LoginOptions | null>(null);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [optionsAttempt, setOptionsAttempt] = useState(0);
+  const signingIn = useRef(false);
 
   const googleBtnRef = useRef<HTMLDivElement>(null);
+  const developmentOtpEnabled = import.meta.env.DEV && options?.developmentOtpEnabled === true;
+  const googleClientId = options?.googleClientId;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setOptionsError(null);
+    authApi.getLoginOptions(controller.signal).then((loginOptions) => {
+      if (!controller.signal.aborted) setOptions(loginOptions);
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setOptionsError(mapApiError(error, 'Unable to load sign-in options'));
+    });
+    return () => controller.abort();
+  }, [optionsAttempt]);
 
   // Initialize Google OAuth
   useEffect(() => {
-    const clientId =
-      import.meta.env.VITE_GOOGLE_CLIENT_ID ||
-      '558208753253-gr5lji587t11l5m63d5udea4msbvbcds.apps.googleusercontent.com';
+    if (!googleClientId) return;
 
     const handleGoogleCredential = async (response: { credential: string }) => {
+      if (signingIn.current) return;
+      signingIn.current = true;
       try {
         setLoading(true);
         setError(null);
@@ -46,6 +64,7 @@ export const LoginForm: React.FC = () => {
       } catch (err: unknown) {
         setError(mapApiError(err, 'Google authentication failed'));
       } finally {
+        signingIn.current = false;
         setLoading(false);
       }
     };
@@ -56,7 +75,7 @@ export const LoginForm: React.FC = () => {
       const google = getGoogle();
       if (google?.accounts?.id && googleBtnRef.current) {
         google.accounts.id.initialize({
-          client_id: clientId,
+          client_id: googleClientId,
           callback: handleGoogleCredential,
         });
         google.accounts.id.renderButton(googleBtnRef.current, {
@@ -79,7 +98,7 @@ export const LoginForm: React.FC = () => {
       }, 200);
       return () => clearInterval(interval);
     }
-  }, [setSessionToken]);
+  }, [googleClientId, setSessionToken]);
 
   const handleMobileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     // Extract only digits
@@ -98,6 +117,7 @@ export const LoginForm: React.FC = () => {
 
   const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!developmentOtpEnabled || signingIn.current) return;
     const cleanMobile = mobile.trim();
     if (!cleanMobile) {
       setError('Mobile number required');
@@ -112,31 +132,32 @@ export const LoginForm: React.FC = () => {
       return;
     }
 
+    signingIn.current = true;
     try {
       setLoading(true);
       setError(null);
       setDevOtp(null);
       const res = await authApi.requestOtp(cleanMobile);
       setCodeSent(true);
-      if (import.meta.env.DEV && res.devOtp) {
-        setDevOtp(res.devOtp);
-        setCode(res.devOtp);
-      }
+      setDevOtp(res.devOtp ?? null);
     } catch (err: unknown) {
       setError(mapApiError(err, 'Failed to send code'));
     } finally {
+      signingIn.current = false;
       setLoading(false);
     }
   };
 
   const handleVerifyCode = async (e?: React.FormEvent, directCode?: string) => {
     if (e) e.preventDefault();
+    if (!developmentOtpEnabled || signingIn.current) return;
     const codeToVerify = directCode || code;
     if (codeToVerify.length !== 6) {
       setError('6 digits required');
       return;
     }
 
+    signingIn.current = true;
     try {
       setLoading(true);
       setError(null);
@@ -145,6 +166,7 @@ export const LoginForm: React.FC = () => {
     } catch (err: unknown) {
       setError(mapApiError(err, 'Invalid code'));
     } finally {
+      signingIn.current = false;
       setLoading(false);
     }
   };
@@ -154,19 +176,24 @@ export const LoginForm: React.FC = () => {
       <h1 className="text-xl font-semibold text-text text-center tracking-tight">Sign in</h1>
 
       {error && <Alert variant="error">{error}</Alert>}
+      {optionsError && (
+        <>
+          <Alert variant="error">{optionsError}</Alert>
+          <Button onClick={() => setOptionsAttempt((attempt) => attempt + 1)} variant="secondary">Retry</Button>
+        </>
+      )}
+      {!options && !optionsError && <p role="status" className="text-sm text-muted">Loading sign-in options…</p>}
 
-      {/* Google Sign In container */}
-      <div className="flex justify-center min-h-[44px]">
-        <div ref={googleBtnRef} />
-      </div>
+      {googleClientId && (
+        <div className="flex justify-center min-h-[44px]">
+          <div ref={googleBtnRef} />
+        </div>
+      )}
+      {options && !googleClientId && <Alert variant="error">Google sign-in is unavailable.</Alert>}
 
-      <div className="flex items-center gap-3">
-        <div className="flex-1 h-px bg-border" />
-        <span className="text-xs text-muted uppercase tracking-wider">or</span>
-        <div className="flex-1 h-px bg-border" />
-      </div>
+      {developmentOtpEnabled && <p className="text-sm text-muted">Development phone sign-in</p>}
 
-      {!codeSent ? (
+      {developmentOtpEnabled && (!codeSent ? (
         <form onSubmit={handleSendCode} noValidate className="flex flex-col gap-4">
           <Field
             label="Mobile number"
@@ -230,10 +257,17 @@ export const LoginForm: React.FC = () => {
             disabled={loading}
           />
 
-          {import.meta.env.DEV && devOtp && (
-            <div className="flex items-center gap-2 p-2 rounded bg-surface-2 border border-border text-xs font-mono">
-              <span className="text-accent font-semibold">Dev only:</span>
-              <span className="text-text">{devOtp}</span>
+          {devOtp && (
+            <div
+              onClick={() => setCode(devOtp)}
+              className="flex items-center justify-between p-2 rounded bg-surface-2 border border-border text-xs font-mono cursor-pointer hover:border-accent transition-colors"
+              title="Click to auto-fill code"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-accent font-semibold">Dev OTP:</span>
+                <span className="text-text font-bold tracking-wider">{devOtp}</span>
+              </div>
+              <span className="text-[10px] text-muted uppercase">Auto-filled</span>
             </div>
           )}
 
@@ -241,7 +275,7 @@ export const LoginForm: React.FC = () => {
             Verify
           </Button>
         </form>
-      )}
+      ))}
     </div>
   );
 };

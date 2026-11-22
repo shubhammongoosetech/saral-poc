@@ -1,15 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import { useTransactionsQuery } from '@/features/wallet/useWalletQueries';
 import { Card } from '@/shared/ui/Card';
+import { Alert } from '@/shared/ui/Alert';
+import { Button } from '@/shared/ui/Button';
 import { Badge } from '@/shared/ui/Badge';
 import { Skeleton } from '@/shared/ui/Skeleton';
 import { EmptyState } from '@/shared/ui/EmptyState';
 import { CopyButton } from '@/shared/ui/CopyButton';
-import { formatRelativeTime, truncateAddress, getExplorerTxUrl } from '@/shared/lib/format';
+import { formatRelativeTime, truncateAddress, getExplorerTxUrl, mapApiError } from '@/shared/lib/format';
 import { IconSend, IconReceive, IconExternal } from '@/shared/ui/icons';
 
 export const Activity: React.FC = () => {
-  const { data, isLoading } = useTransactionsQuery();
+  const { data, error, isLoading, isRefetching, refetch } = useTransactionsQuery();
   const [filter, setFilter] = useState<'all' | 'sent' | 'received'>('all');
 
   const filtered = useMemo(() => {
@@ -27,6 +29,16 @@ export const Activity: React.FC = () => {
         <Skeleton className="h-10 w-64" />
         <Skeleton className="h-72 w-full" />
       </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="w-full max-w-md mx-auto flex flex-col gap-4 p-6">
+        <h1 className="text-lg font-semibold text-text">Unable to load activity</h1>
+        <Alert variant="error">{mapApiError(error, 'Check your access or try again.')}</Alert>
+        <Button variant="secondary" onClick={() => refetch()} loading={isRefetching}>Reload Activity</Button>
+      </Card>
     );
   }
 

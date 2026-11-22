@@ -5,10 +5,19 @@ export function truncateAddress(addr: string, start = 6, end = 4): string {
 }
 
 export function formatAmount(val: string | number, maxDecimals = 4): string {
+  const minDecimals = Math.min(4, maxDecimals);
+  if (typeof val === 'string' && /^\d+(\.\d+)?$/.test(val)) {
+    const [whole, fraction = ''] = val.split('.');
+    if (fraction.length <= maxDecimals) {
+      const tail = fraction.replace(/0+$/, '').padEnd(minDecimals, '0');
+      const separator = new Intl.NumberFormat().formatToParts(1.1).find(({ type }) => type === 'decimal')?.value ?? '.';
+      return BigInt(whole).toLocaleString() + (tail ? separator + tail : '');
+    }
+  }
   const num = typeof val === 'number' ? val : parseFloat(val);
-  if (isNaN(num)) return '0.0000';
+  if (!Number.isFinite(num)) return 'Unavailable';
   return num.toLocaleString(undefined, {
-    minimumFractionDigits: 4,
+    minimumFractionDigits: minDecimals,
     maximumFractionDigits: maxDecimals,
   });
 }
@@ -38,27 +47,23 @@ export function mapApiError(err: unknown, fallback = 'Request failed'): string {
     message?: string;
   };
 
-  const code =
-    errObj.response?.data?.code ||
-    errObj.response?.data?.error_code ||
-    errObj.code;
-
-  const rawMsg =
-    errObj.response?.data?.error ||
-    errObj.response?.data?.message ||
-    errObj.message ||
-    '';
+  const code = [errObj.response?.data?.code, errObj.response?.data?.error_code, errObj.code]
+    .find((value) => typeof value === 'string' && value.length > 0);
+  const rawMsg = [errObj.response?.data?.error, errObj.response?.data?.message, errObj.message]
+    .find((value) => typeof value === 'string' && value.length > 0) || '';
 
   const normalized = (code || rawMsg).toUpperCase();
 
   if (normalized.includes('MFA_REQUIRED')) return 'MFA verification required';
+  if (normalized === 'SIGNING_UNAVAILABLE') return 'Transaction signing is unavailable';
+  if (normalized === 'LOCATION_REQUIRED') return 'Allow location access to verify your working location';
   if (normalized.includes('OUTSIDE_HOURS') || normalized.includes('WORKING_HOURS')) {
     return 'Outside authorized working hours';
   }
   if (normalized.includes('LOCATION') || normalized.includes('GEO') || normalized.includes('RADIUS')) {
     return 'Outside authorized location';
   }
-  if (normalized.includes('POLICY')) return 'Transaction violates working policy';
+  if (normalized.includes('POLICY')) return 'Access denied by your working policy';
   if (normalized.includes('INSUFFICIENT')) return 'Insufficient balance';
   if (normalized.includes('INVALID_OTP') || normalized.includes('OTP')) return 'Invalid verification code';
   if (normalized.includes('EXPIRED')) return 'Session expired';
@@ -75,7 +80,7 @@ export function mapApiError(err: unknown, fallback = 'Request failed'): string {
 
 export function getExplorerTxUrl(chain?: string, txHash?: string): string {
   if (!txHash) return '';
-  const cleanHash = txHash.trim();
+  const cleanHash = encodeURIComponent(txHash.trim());
   const c = (chain || '').toLowerCase();
 
   if (c.includes('bitcoin') || c.includes('btc')) {

@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { profileApi, walletApi } from '@/shared/api/endpoints';
 import { ProfileResponse } from '@/shared/api/types';
 import { useSession } from '@/features/auth/useSession';
-import { getCurrentCoords } from '@/shared/hooks/useLocation';
 import { mapApiError } from '@/shared/lib/format';
 import { AuthLayout } from '@/app/layouts/AuthLayout';
 import { Button } from '@/shared/ui/Button';
@@ -48,8 +47,7 @@ export const Review: React.FC = () => {
     try {
       setConfirming(true);
       setError(null);
-      const coords = await getCurrentCoords();
-      const res = await walletApi.checkAccess(coords.lat, coords.lng);
+      const res = await walletApi.checkAccess();
       setLastAccessCheck(res);
 
       if (res.allowed) {

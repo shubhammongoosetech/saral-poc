@@ -70,8 +70,8 @@ func (cm *CommitmentMatrix) VerifyRowPolynomial(
 		actualCommit := cryptography.PedersenCommitment(rowPoly.Coeffs[l], rowBlindPoly.Coeffs[l])
 
 		// Expected commit = \sum_{j=0}^{k-1} i^j * C_{j,l}
-		expectedCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
-		iPow := cryptography.NewFieldElement(1)
+		expectedCommit := i.Curve().Identity()
+		iPow := i.Curve().Scalar(1)
 		for j := 0; j < cm.Rows; j++ {
 			term := cm.Points[j][l].ScalarMult(iPow)
 			expectedCommit = expectedCommit.Add(term)
@@ -115,8 +115,8 @@ func (cm *CommitmentMatrix) VerifyColPolynomial(
 		actualCommit := cryptography.PedersenCommitment(colPoly.Coeffs[j], colBlindPoly.Coeffs[j])
 
 		// Expected commit = \sum_{l=0}^{k-1} i^l * C_{j,l}
-		expectedCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
-		iPow := cryptography.NewFieldElement(1)
+		expectedCommit := i.Curve().Identity()
+		iPow := i.Curve().Scalar(1)
 		for l := 0; l < cm.Cols; l++ {
 			term := cm.Points[j][l].ScalarMult(iPow)
 			expectedCommit = expectedCommit.Add(term)
@@ -141,10 +141,10 @@ func (cm *CommitmentMatrix) VerifyPoint(
 	}
 	actualCommit := cryptography.PedersenCommitment(p, pPrime)
 
-	expectedCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
-	uPow := cryptography.NewFieldElement(1)
+	expectedCommit := i.Curve().Identity()
+	uPow := i.Curve().Scalar(1)
 	for u := 0; u < cm.Rows; u++ {
-		vPow := cryptography.NewFieldElement(1)
+		vPow := i.Curve().Scalar(1)
 		for v := 0; v < cm.Cols; v++ {
 			uvScalar := uPow.Mul(vPow)
 			term := cm.Points[u][v].ScalarMult(uvScalar)
@@ -168,8 +168,8 @@ func (cm *CommitmentMatrix) VerifyShare(
 	}
 	actualCommit := cryptography.PedersenCommitment(share, sharePrime)
 
-	expectedCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
-	uPow := cryptography.NewFieldElement(1)
+	expectedCommit := i.Curve().Identity()
+	uPow := i.Curve().Scalar(1)
 	for u := 0; u < cm.Rows; u++ {
 		term := cm.Points[u][0].ScalarMult(uPow)
 		expectedCommit = expectedCommit.Add(term)
@@ -181,8 +181,8 @@ func (cm *CommitmentMatrix) VerifyShare(
 
 // ComputeShareCommitment computes Q_i = \sum_{u=0}^{k-1} i^u * C_{u, 0}
 func (cm *CommitmentMatrix) ComputeShareCommitment(i *cryptography.FieldElement) *cryptography.CurvePoint {
-	expectedCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
-	uPow := cryptography.NewFieldElement(1)
+	expectedCommit := i.Curve().Identity()
+	uPow := i.Curve().Scalar(1)
 	for u := 0; u < cm.Rows; u++ {
 		term := cm.Points[u][0].ScalarMult(uPow)
 		expectedCommit = expectedCommit.Add(term)
@@ -205,6 +205,10 @@ func (cm *CommitmentMatrix) ToHexMatrix() [][]string {
 
 // ParseCommitmentMatrixFromHex parses a 2D array of hex strings into a CommitmentMatrix
 func ParseCommitmentMatrixFromHex(hexMatrix [][]string) (*CommitmentMatrix, error) {
+	return ParseCommitmentMatrixForCurve(hexMatrix, cryptography.CurveP256)
+}
+
+func ParseCommitmentMatrixForCurve(hexMatrix [][]string, curve cryptography.Curve) (*CommitmentMatrix, error) {
 	if len(hexMatrix) == 0 || len(hexMatrix[0]) == 0 {
 		return nil, ErrInvalidCommitmentDimensions
 	}
@@ -218,7 +222,7 @@ func ParseCommitmentMatrixFromHex(hexMatrix [][]string) (*CommitmentMatrix, erro
 		}
 		pts[j] = make([]*cryptography.CurvePoint, cols)
 		for l := 0; l < cols; l++ {
-			pt, err := cryptography.ParseCurvePointFromHex(hexMatrix[j][l])
+			pt, err := curve.ParsePoint(hexMatrix[j][l])
 			if err != nil {
 				return nil, fmt.Errorf("invalid commitment point at [%d][%d]: %w", j, l, err)
 			}
@@ -232,4 +236,3 @@ func ParseCommitmentMatrixFromHex(hexMatrix [][]string) (*CommitmentMatrix, erro
 		Points: pts,
 	}, nil
 }
-
