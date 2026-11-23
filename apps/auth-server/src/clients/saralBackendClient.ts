@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { KeyManager } from '../auth/token';
+import { DomainName, DOMAINS_MAP } from '../config/env';
 
 export class SaralBackendError extends Error {
   public code: number;
@@ -40,6 +41,11 @@ export interface DkgStartParams {
   k?: number;
   t?: number;
   committee?: string[];
+  walletId?: string;
+  keyId?: string;
+  userId?: string;
+  curve?: string;
+  chainFamily?: string;
 }
 
 export interface DkgStartResponse {
@@ -103,6 +109,7 @@ export interface DerivePublicKeyResponse {
   curve: string;
   threshold: number;
   masterPublicKey: string;
+  derivedAddress?: string;
 }
 
 export interface CoordinatorStatusResponse {
@@ -113,25 +120,79 @@ export interface CoordinatorStatusResponse {
   timestamp: string;
 }
 
+function isDomainName(val: unknown): val is DomainName {
+  return val === 'foundation' || val === 'public' || val === 'private';
+}
+
+function inferDomainFromCommittee(committeeId?: string): DomainName {
+  if (!committeeId) return 'foundation';
+  if (committeeId.includes('public')) return 'public';
+  if (committeeId.includes('private')) return 'private';
+  return 'foundation';
+}
+
 export class SaralBackendClient {
-  private coordinatorUrl: string;
+  public coordinatorUrls: Record<DomainName, string>;
   private internalToken: string;
   private timeoutMs: number;
   private reqSeq: number = 1;
 
-  constructor(config: { coordinatorUrl?: string; internalToken?: string; timeoutMs?: number } = {}) {
-    this.coordinatorUrl = (config.coordinatorUrl || process.env.COORDINATOR_URL || 'http://localhost:9001').replace(/\/$/, '');
+  constructor(
+    config: {
+      coordinatorUrl?: string;
+      coordinatorUrls?: Partial<Record<DomainName, string>>;
+      internalToken?: string;
+      timeoutMs?: number;
+    } = {}
+  ) {
+    const defaultFoundation =
+      config.coordinatorUrl ||
+      process.env.FOUNDATION_COORDINATOR_URL ||
+      process.env.COORDINATOR_URL ||
+      DOMAINS_MAP?.foundation?.coordinatorUrl ||
+      'http://localhost:9001';
+
+    this.coordinatorUrls = {
+      foundation: (config.coordinatorUrls?.foundation || defaultFoundation).replace(/\/$/, ''),
+      public: (
+        config.coordinatorUrls?.public ||
+        process.env.PUBLIC_COORDINATOR_URL ||
+        DOMAINS_MAP?.public?.coordinatorUrl ||
+        'http://localhost:9002'
+      ).replace(/\/$/, ''),
+      private: (
+        config.coordinatorUrls?.private ||
+        process.env.PRIVATE_COORDINATOR_URL ||
+        DOMAINS_MAP?.private?.coordinatorUrl ||
+        'http://localhost:9003'
+      ).replace(/\/$/, ''),
+    };
+
     this.internalToken = config.internalToken || process.env.SARAL_INTERNAL_TOKEN || '';
     this.timeoutMs = config.timeoutMs || 8000;
+  }
+
+  public get coordinatorUrl(): string {
+    return this.coordinatorUrls.foundation;
+  }
+
+  public set coordinatorUrl(url: string) {
+    this.coordinatorUrls.foundation = url.replace(/\/$/, '');
+  }
+
+  public getCoordinatorUrl(domain: DomainName = 'foundation'): string {
+    return this.coordinatorUrls[domain] || this.coordinatorUrls.foundation;
   }
 
   public async rpcCall<T = unknown>(
     method: string,
     params: Record<string, unknown> = {},
-    customToken?: string
+    customToken?: string,
+    domain: DomainName = 'foundation'
   ): Promise<T> {
     const correlationId = `corr-${crypto.randomUUID()}`;
-    const endpoint = this.coordinatorUrl.endsWith('/rpc') ? this.coordinatorUrl : `${this.coordinatorUrl}/rpc`;
+    const baseUrl = this.getCoordinatorUrl(domain);
+    const endpoint = baseUrl.endsWith('/rpc') ? baseUrl : `${baseUrl}/rpc`;
 
     // Issue genuine EdDSA token for service authorization
     let bearerToken = customToken;
@@ -177,7 +238,7 @@ export class SaralBackendClient {
 
         if (!resp.ok) {
           throw new SaralBackendError(
-            `HTTP error from Go Coordinator (${resp.status}): ${resp.statusText}`,
+            `HTTP error from Go Coordinator [${domain}] (${resp.status}): ${resp.statusText}`,
             -32000,
             undefined,
             correlationId
@@ -210,35 +271,114 @@ export class SaralBackendClient {
       }
     }
 
-    throw lastError || new SaralBackendError('Go Coordinator connection failed after retries', -32603);
+    throw lastError || new SaralBackendError(`Go Coordinator [${domain}] connection failed after retries`, -32603);
   }
 
   /**
-   * Orchestrates first-time DKG across committee nodes.
+   * Helper that executes the same operation across all 3 domains in parallel.
+   * Rejects immediately if ANY domain fails (Strict Fail-Closed).
    */
-  public async startDkg(params: DkgStartParams = {}): Promise<DkgStartResponse> {
-    return this.rpcCall<DkgStartResponse>('saral_startDkg', params as Record<string, unknown>);
+  public async runOnAllDomains<T>(
+    fn: (domain: DomainName) => Promise<T>
+  ): Promise<Record<DomainName, T>> {
+    const domains: DomainName[] = ['foundation', 'public', 'private'];
+    const entries = await Promise.all(
+      domains.map(async (d) => {
+        const val = await fn(d);
+        return [d, val] as const;
+      })
+    );
+    return Object.fromEntries(entries) as Record<DomainName, T>;
   }
 
   /**
-   * Retrieves status and node completion counts for an active DKG session.
+   * Orchestrates DKG across committee nodes for a specific domain.
    */
-  public async getDkgStatus(sessionId: string): Promise<DkgStatusResponse> {
-    return this.rpcCall<DkgStatusResponse>('saral_getDkgStatus', { sessionId });
+  public async startDkg(
+    domainOrParams?: DomainName | DkgStartParams,
+    maybeParams?: DkgStartParams
+  ): Promise<DkgStartResponse> {
+    let domain: DomainName = 'foundation';
+    let params: DkgStartParams = {};
+
+    if (isDomainName(domainOrParams)) {
+      domain = domainOrParams;
+      params = maybeParams || {};
+    } else if (domainOrParams) {
+      params = domainOrParams;
+      domain = inferDomainFromCommittee(params.committeeId);
+    }
+
+    return this.rpcCall<DkgStartResponse>('saral_startDkg', params as Record<string, unknown>, undefined, domain);
   }
 
   /**
-   * Retrieves public key from completed DKG session.
+   * Retrieves status and node completion counts for an active DKG session on a domain.
    */
-  public async getDkgPublicKey(sessionId: string): Promise<DkgPublicKeyResponse> {
-    return this.rpcCall<DkgPublicKeyResponse>('saral_getDkgPublicKey', { sessionId });
+  public async getDkgStatus(
+    domainOrSessionId: DomainName | string,
+    maybeSessionId?: string
+  ): Promise<DkgStatusResponse> {
+    let domain: DomainName = 'foundation';
+    let sessionId: string = '';
+
+    if (isDomainName(domainOrSessionId)) {
+      domain = domainOrSessionId;
+      sessionId = maybeSessionId || '';
+    } else {
+      sessionId = domainOrSessionId;
+      if (sessionId.includes('public')) domain = 'public';
+      else if (sessionId.includes('private')) domain = 'private';
+    }
+
+    return this.rpcCall<DkgStatusResponse>('saral_getDkgStatus', { sessionId }, undefined, domain);
   }
 
   /**
-   * Recomputes returning user's aggregate signing public key Y from verified distributed key shares
+   * Retrieves public key from completed DKG session on a domain.
+   */
+  public async getDkgPublicKey(
+    domainOrSessionId: DomainName | string,
+    maybeSessionId?: string
+  ): Promise<DkgPublicKeyResponse> {
+    let domain: DomainName = 'foundation';
+    let sessionId: string = '';
+
+    if (isDomainName(domainOrSessionId)) {
+      domain = domainOrSessionId;
+      sessionId = maybeSessionId || '';
+    } else {
+      sessionId = domainOrSessionId;
+      if (sessionId.includes('public')) domain = 'public';
+      else if (sessionId.includes('private')) domain = 'private';
+    }
+
+    return this.rpcCall<DkgPublicKeyResponse>('saral_getDkgPublicKey', { sessionId }, undefined, domain);
+  }
+
+  /**
+   * Recomputes domain aggregate signing public key Y_domain from verified distributed key shares
    * WITHOUT EVER exposing or reconstructing the complete private scalar x.
    */
-  public async derivePublicKey(params: DerivePublicKeyParams): Promise<DerivePublicKeyResponse> {
+  public async derivePublicKey(
+    domainOrParams: DomainName | DerivePublicKeyParams,
+    maybeParams?: DerivePublicKeyParams
+  ): Promise<DerivePublicKeyResponse> {
+    let domain: DomainName = 'foundation';
+    let params: DerivePublicKeyParams;
+
+    if (isDomainName(domainOrParams)) {
+      domain = domainOrParams;
+      params = maybeParams!;
+    } else {
+      params = domainOrParams;
+      domain = inferDomainFromCommittee(params.committeeId);
+      if (params.dkgSessionId) {
+        if (params.dkgSessionId.includes('public')) domain = 'public';
+        else if (params.dkgSessionId.includes('private')) domain = 'private';
+      }
+    }
+
     // Generate scoped authorization token binding user and wallet identities
     const scopedToken = KeyManager.getInstance().issueScopedToken({
       sub: params.userId,
@@ -255,20 +395,21 @@ export class SaralBackendClient {
     return this.rpcCall<DerivePublicKeyResponse>(
       'saral_derivePublicKey',
       (params as unknown) as Record<string, unknown>,
-      scopedToken
+      scopedToken,
+      domain
     );
   }
 
-  public async getCoordinatorStatus(): Promise<CoordinatorStatusResponse> {
-    return this.rpcCall<CoordinatorStatusResponse>('saral_getCoordinatorStatus');
+  public async getCoordinatorStatus(domain: DomainName = 'foundation'): Promise<CoordinatorStatusResponse> {
+    return this.rpcCall<CoordinatorStatusResponse>('saral_getCoordinatorStatus', {}, undefined, domain);
   }
 
-  public async getNetworkStatus(): Promise<unknown> {
-    return this.rpcCall('saral_getNetworkStatus');
+  public async getNetworkStatus(domain: DomainName = 'foundation'): Promise<unknown> {
+    return this.rpcCall('saral_getNetworkStatus', {}, undefined, domain);
   }
 
-  public async getDomainStatus(): Promise<unknown> {
-    return this.rpcCall('saral_getDomainStatus');
+  public async getDomainStatus(domain: DomainName = 'foundation'): Promise<unknown> {
+    return this.rpcCall('saral_getDomainStatus', {}, undefined, domain);
   }
 }
 

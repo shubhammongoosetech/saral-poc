@@ -9,6 +9,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +53,7 @@ type Server struct {
 	avssSessions   map[string]*AVSSSessionInfo
 	dkgSessions    map[string]*DKGSessionMeta
 	wallets        map[string]*WalletRecord
+	storageDir     string
 	avssMu         sync.RWMutex
 	walletMu       sync.RWMutex
 }
@@ -63,7 +66,15 @@ func NewServer(
 	peerCoordinatorURLs []string,
 	relayCoord *relay.RelayCoordinator,
 ) *Server {
-	return &Server{
+	storageDir := os.Getenv("STORAGE_DIR")
+	if storageDir == "" {
+		storageDir = os.Getenv("DKG_STORAGE_DIR")
+	}
+	if storageDir == "" {
+		storageDir = filepath.Join("data", "coordinator", strings.ToLower(string(domain)))
+	}
+
+	s := &Server{
 		domain:         domain,
 		registry:       registry,
 		monitor:        monitor,
@@ -75,6 +86,79 @@ func NewServer(
 		avssSessions:   make(map[string]*AVSSSessionInfo),
 		dkgSessions:    make(map[string]*DKGSessionMeta),
 		wallets:        make(map[string]*WalletRecord),
+		storageDir:     storageDir,
+	}
+
+	_ = os.MkdirAll(storageDir, 0o700)
+	s.loadPersistedSessions()
+
+	return s
+}
+
+// SetStorageDir configures session persistence directory and reloads saved sessions
+func (s *Server) SetStorageDir(dir string) {
+	s.avssMu.Lock()
+	s.storageDir = dir
+	_ = os.MkdirAll(dir, 0o700)
+	s.avssMu.Unlock()
+	s.loadPersistedSessions()
+}
+
+// persistSession atomically saves non-secret DKG public session metadata to disk
+func (s *Server) persistSession(meta *DKGSessionMeta) {
+	if s.storageDir == "" || meta == nil || meta.SessionID == "" {
+		return
+	}
+	_ = os.MkdirAll(s.storageDir, 0o700)
+	filePath := filepath.Join(s.storageDir, fmt.Sprintf("%s.json", meta.SessionID))
+	tmpPath := filePath + ".tmp"
+
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		log.Printf("[SARAL Coordinator - %s] Warning: Failed to marshal session %s: %v", s.domain, meta.SessionID, err)
+		return
+	}
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		log.Printf("[SARAL Coordinator - %s] Warning: Failed to write temp session %s: %v", s.domain, meta.SessionID, err)
+		return
+	}
+	if err := os.Rename(tmpPath, filePath); err != nil {
+		log.Printf("[SARAL Coordinator - %s] Warning: Failed to atomic-rename session file %s: %v", s.domain, meta.SessionID, err)
+	}
+}
+
+// loadPersistedSessions reads persisted public DKG sessions from disk on startup
+func (s *Server) loadPersistedSessions() {
+	if s.storageDir == "" {
+		return
+	}
+	entries, err := os.ReadDir(s.storageDir)
+	if err != nil {
+		return
+	}
+	loaded := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(s.storageDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var meta DKGSessionMeta
+		if err := json.Unmarshal(data, &meta); err == nil && meta.SessionID != "" {
+			s.avssMu.Lock()
+			if s.dkgSessions == nil {
+				s.dkgSessions = make(map[string]*DKGSessionMeta)
+			}
+			s.dkgSessions[meta.SessionID] = &meta
+			s.avssMu.Unlock()
+			loaded++
+		}
+	}
+	if loaded > 0 {
+		log.Printf("[SARAL Coordinator - %s] Loaded %d persisted DKG session(s) from %s", s.domain, loaded, s.storageDir)
 	}
 }
 

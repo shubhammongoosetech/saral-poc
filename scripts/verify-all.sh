@@ -31,12 +31,12 @@ echo -e "\n${BLUE}[3/4] Running AVSS, ABBA Consensus & Proactive Cryptography Su
 npm run test:all-crypto
 echo -e "${GREEN}✓ All cryptographic test vectors & distributed protocols PASSED.${NC}"
 
-# 4. Docker Backend Cluster Status
-echo -e "\n${BLUE}[4/4] Verifying Docker 21-node cluster health...${NC}"
+# 4. Docker Backend Cluster Status & 3-Domain Health
+echo -e "\n${BLUE}[4/4] Verifying 3-Domain cluster health across 15 nodes and 3 coordinators...${NC}"
 RUNNING_CONTAINERS=$(docker ps --filter "name=saral-prod" --format "{{.Names}}" | wc -l)
 echo "   • Active SARAL containers: $RUNNING_CONTAINERS / 21"
 if [ "$RUNNING_CONTAINERS" -ge 21 ]; then
-  echo -e "${GREEN}✓ All 21 Docker backend nodes and coordinators are active.${NC}"
+  echo -e "${GREEN}✓ All 21 Docker backend nodes and 3 coordinators (Foundation, Public, Private) are active.${NC}"
 else
   echo -e "${YELLOW}⚠️  Note: $RUNNING_CONTAINERS / 21 containers detected. Run 'npm run setup' to start all 21.${NC}"
 fi

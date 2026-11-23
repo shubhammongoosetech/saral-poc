@@ -124,79 +124,108 @@ else
   echo -e "${GREEN}✓ All 21 DKG backend containers are healthy and running.${NC}"
 fi
 
-# Step 7: Live Verification of 3-of-5 DKG Consensus & Multi-Chain Derivation
-echo -e "\n${BLUE}[6/6] Verifying live Dealerless 3-of-5 DKG & address derivation...${NC}"
+# Step 7: Live Verification of 3-Domain DKG Consensus & Multi-Chain Derivation
+echo -e "\n${BLUE}[6/6] Verifying live 3-Domain Dealerless DKG across Foundation, Public & Private...${NC}"
 npx tsx -e '
 import { saralBackendClient } from "./apps/auth-server/src/clients/saralBackendClient";
+import { DOMAINS, DOMAINS_MAP } from "./apps/auth-server/src/config/env";
+import { addSecp256k1PublicKeys, addEd25519PublicKeys } from "./apps/auth-server/src/utils/curveMath";
+import { deriveAddressFromDkgPublicKey } from "./apps/auth-server/src/services/walletService";
 
 async function verify() {
-  const sessionId = "dkg-verify-" + Date.now();
-  console.log("   • Starting Dealerless DKG session:", sessionId);
-  const start = await saralBackendClient.startDkg({
-    committeeId: "committee-foundation",
-    sessionId,
-    committee: ["saral-foundation-1", "saral-foundation-2", "saral-foundation-3", "saral-foundation-4", "saral-foundation-5"],
-    n: 5,
-    k: 3,
-    t: 1,
-  });
+  const sessionIds = {
+    foundation: "dkg-foundation-verify-" + Date.now(),
+    public: "dkg-public-verify-" + Date.now(),
+    private: "dkg-private-verify-" + Date.now(),
+  };
 
-  if (!start || !start.success) {
-    throw new Error("Failed to start DKG session");
-  }
-
-  // Poll until completed
-  let done = false;
-  for (let i = 0; i < 20; i++) {
-    await new Promise(r => setTimeout(r, 250));
-    const st = await saralBackendClient.getDkgStatus(sessionId);
-    if (st?.state === "COMPLETED" || (st?.completedNodes && st.completedNodes >= 3)) {
-      done = true;
-      console.log(`   • DKG Consensus COMPLETED (${st.completedNodes}/5 nodes decided)`);
-      break;
+  console.log("   • Starting 3-Domain DKG sessions across 15 nodes in 3 domains...");
+  await saralBackendClient.runOnAllDomains(async (domainName) => {
+    const cfg = DOMAINS_MAP[domainName];
+    const start = await saralBackendClient.startDkg(domainName, {
+      committeeId: cfg.committeeId,
+      sessionId: sessionIds[domainName],
+      committee: cfg.nodeIds,
+      n: cfg.n,
+      k: cfg.k,
+      t: cfg.t,
+      walletId: "wal-verify",
+      userId: "user-verify",
+    });
+    if (!start || !start.success) {
+      throw new Error(`Failed to start DKG on domain ${domainName}`);
     }
+  });
+
+  // Poll until completed on all 3 domains
+  const completedDomains = new Set();
+  for (let i = 0; i < 25; i++) {
+    await new Promise(r => setTimeout(r, 250));
+    for (const d of DOMAINS) {
+      if (completedDomains.has(d.name)) continue;
+      try {
+        const st = await saralBackendClient.getDkgStatus(d.name, sessionIds[d.name]);
+        if (st?.state === "COMPLETED" || (st?.completedNodes && st.completedNodes >= d.k)) {
+          completedDomains.add(d.name);
+          console.log(`   • Domain ${d.name.toUpperCase()} DKG Consensus COMPLETED (${st.completedNodes || d.k}/${d.n} nodes decided)`);
+        }
+      } catch (_) {}
+    }
+    if (completedDomains.size === DOMAINS.length) break;
   }
 
-  if (!done) {
-    throw new Error("DKG Consensus timed out across 3-of-5 threshold nodes");
+  if (completedDomains.size < DOMAINS.length) {
+    throw new Error(`DKG Consensus timed out across threshold nodes (${completedDomains.size}/3 completed)`);
   }
 
-  // Test address derivation for MST (secp256k1)
-  const mst = await saralBackendClient.derivePublicKey({
-    walletId: "wal-verify",
-    userId: "user-verify",
-    keyId: "key-mst-verify",
-    dkgSessionId: sessionId,
-    committeeId: "committee-foundation",
-    curve: "secp256k1",
-    chainFamily: "mst",
-  });
+  // Derive MST public key points on all 3 domains and combine
+  const mstPoints = await Promise.all(DOMAINS.map(d =>
+    saralBackendClient.derivePublicKey(d.name, {
+      walletId: "wal-verify",
+      userId: "user-verify",
+      keyId: "key-mst-verify",
+      dkgSessionId: sessionIds[d.name],
+      committeeId: d.committeeId,
+      curve: "secp256k1",
+      chainFamily: "mst",
+    }).then(r => r.masterPublicKey)
+  ));
+  const mstCombined = addSecp256k1PublicKeys(mstPoints);
+  const mstAddr = deriveAddressFromDkgPublicKey("mst", mstCombined);
 
-  // Test address derivation for Solana (ed25519)
-  const sol = await saralBackendClient.derivePublicKey({
-    walletId: "wal-verify",
-    userId: "user-verify",
-    keyId: "key-sol-verify",
-    dkgSessionId: sessionId,
-    committeeId: "committee-foundation",
-    curve: "ed25519",
-    chainFamily: "solana",
-  });
+  // Derive Solana public key points on all 3 domains and combine
+  const solPoints = await Promise.all(DOMAINS.map(d =>
+    saralBackendClient.derivePublicKey(d.name, {
+      walletId: "wal-verify",
+      userId: "user-verify",
+      keyId: "key-sol-verify",
+      dkgSessionId: sessionIds[d.name],
+      committeeId: d.committeeId,
+      curve: "ed25519",
+      chainFamily: "solana",
+    }).then(r => r.masterPublicKey)
+  ));
+  const solCombined = addEd25519PublicKeys(solPoints);
+  const solAddr = deriveAddressFromDkgPublicKey("solana", solCombined);
 
-  // Test address derivation for Bitcoin (secp256k1 taproot)
-  const btc = await saralBackendClient.derivePublicKey({
-    walletId: "wal-verify",
-    userId: "user-verify",
-    keyId: "key-btc-verify",
-    dkgSessionId: sessionId,
-    committeeId: "committee-foundation",
-    curve: "secp256k1",
-    chainFamily: "bitcoin",
-  });
+  // Derive Bitcoin public key points on all 3 domains and combine
+  const btcPoints = await Promise.all(DOMAINS.map(d =>
+    saralBackendClient.derivePublicKey(d.name, {
+      walletId: "wal-verify",
+      userId: "user-verify",
+      keyId: "key-btc-verify",
+      dkgSessionId: sessionIds[d.name],
+      committeeId: d.committeeId,
+      curve: "secp256k1",
+      chainFamily: "bitcoin",
+    }).then(r => r.masterPublicKey)
+  ));
+  const btcCombined = addSecp256k1PublicKeys(btcPoints);
+  const btcAddr = deriveAddressFromDkgPublicKey("bitcoin", btcCombined);
 
-  console.log("\x1b[32m   ✓ MST Testnet Address:    " + mst.derivedAddress + "\x1b[0m");
-  console.log("\x1b[32m   ✓ Solana Devnet Address:  " + sol.derivedAddress + "\x1b[0m");
-  console.log("\x1b[32m   ✓ Bitcoin Testnet Address: " + btc.derivedAddress + "\x1b[0m");
+  console.log("\x1b[32m   ✓ MST Testnet Address (3-Domain Combined):    " + mstAddr + "\x1b[0m");
+  console.log("\x1b[32m   ✓ Solana Devnet Address (3-Domain Combined):  " + solAddr + "\x1b[0m");
+  console.log("\x1b[32m   ✓ Bitcoin Testnet Address (3-Domain Combined): " + btcAddr + "\x1b[0m");
 }
 
 verify().catch(e => {

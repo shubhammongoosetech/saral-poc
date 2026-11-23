@@ -17,6 +17,8 @@ import (
 type DKGSessionMeta struct {
 	SessionID              string                            `json:"sessionId"`
 	CommitteeID            string                            `json:"committeeId"`
+	WalletID               string                            `json:"walletId,omitempty"`
+	UserID                 string                            `json:"userId,omitempty"`
 	Epoch                  uint64                            `json:"epoch"`
 	N                      int                               `json:"n"`
 	K                      int                               `json:"k"`
@@ -126,15 +128,17 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 	req.N = n
 
 	// Default threshold parameters:
-	// For n = 15: k = 5, t = 4
-	// For n = 5: strictly 3-of-5 threshold (k = 3, t = 1, polynomial degree k - 1 = 2)
+	// Each coordinator handles only its own domain's nodes (n=5, k=3, t=1)
 	if req.K == 0 && req.T == 0 {
-		if req.N == 15 {
-			req.K = 5
-			req.T = 4
-		} else if req.N == 5 {
+		if req.N == 5 {
 			req.K = 3
 			req.T = 1
+		} else {
+			req.T = (req.N - 1) / 3
+			if req.T < 1 {
+				req.T = 1
+			}
+			req.K = req.N - 2*req.T
 		}
 	}
 
@@ -145,8 +149,14 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 	if req.SessionID == "" {
 		req.SessionID = fmt.Sprintf("dkg-%s-%d", strings.ToLower(string(s.domain)), time.Now().UnixNano())
 	}
+	expectedCommitteeID := fmt.Sprintf("committee-%s", strings.ToLower(string(s.domain)))
 	if req.CommitteeID == "" {
-		req.CommitteeID = fmt.Sprintf("comm-%d", req.N)
+		req.CommitteeID = expectedCommitteeID
+	} else if req.CommitteeID != expectedCommitteeID {
+		return nil, &JsonRpcErr{
+			Code:    -32602,
+			Message: fmt.Sprintf("invalid committeeId %q for %s coordinator: expected %q", req.CommitteeID, s.domain, expectedCommitteeID),
+		}
 	}
 
 	// Step 1: Initialize session on each committee node with authenticated bindings
@@ -211,16 +221,27 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 		}
 	}
 
+	curve := req.Curve
+	if curve == "" {
+		if strings.EqualFold(req.ChainFamily, "solana") {
+			curve = "ed25519"
+		} else {
+			curve = "secp256k1"
+		}
+	}
+
 	meta := &DKGSessionMeta{
 		SessionID:    req.SessionID,
 		CommitteeID:  req.CommitteeID,
+		WalletID:     req.WalletID,
+		UserID:       req.UserID,
 		Epoch:        1,
 		N:            req.N,
 		K:            req.K,
 		T:            req.T,
 		State:        "CONTRIBUTIONS_STARTED",
 		Committee:    normalizedCommittee,
-		Curve:        "NIST P-256",
+		Curve:        curve,
 		Participants: participants,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
@@ -232,6 +253,8 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 	}
 	s.dkgSessions[req.SessionID] = meta
 	s.avssMu.Unlock()
+
+	s.persistSession(meta)
 
 	return map[string]interface{}{
 		"success":     true,
@@ -320,6 +343,8 @@ func (s *Server) handleGetDKGStatus(params json.RawMessage) (interface{}, *JsonR
 		meta.MasterSigningPublicKey = agreedSigningKey
 		meta.MasterSecretCommitment = agreedSecretCommit
 		meta.QualifiedSet = agreedQUAL
+		meta.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		s.persistSession(meta)
 	}
 
 	return map[string]interface{}{
@@ -441,10 +466,21 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 	if sessionID == "" {
 		sessionID = req.KeyID
 	}
-	committeeID := req.CommitteeID
-	if committeeID == "" {
-		committeeID = "committee-foundation"
+	if sessionID == "" {
+		return nil, &JsonRpcErr{Code: -32602, Message: "dkgSessionId is required"}
 	}
+
+	expectedCommitteeID := fmt.Sprintf("committee-%s", strings.ToLower(string(s.domain)))
+	if req.CommitteeID == "" {
+		return nil, &JsonRpcErr{Code: -32602, Message: fmt.Sprintf("committeeId is required (expected %s)", expectedCommitteeID)}
+	}
+	if req.CommitteeID != expectedCommitteeID {
+		return nil, &JsonRpcErr{
+			Code:    -32602,
+			Message: fmt.Sprintf("invalid committeeId %q for %s coordinator: expected %q", req.CommitteeID, s.domain, expectedCommitteeID),
+		}
+	}
+
 	epoch := req.Epoch
 	if epoch == 0 {
 		epoch = 1
@@ -452,36 +488,42 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 
 	s.avssMu.RLock()
 	var meta *DKGSessionMeta
-	if s.dkgSessions != nil {
-		if sessionID != "" {
-			meta = s.dkgSessions[sessionID]
-		}
-		if meta == nil && committeeID != "" {
-			for _, m := range s.dkgSessions {
-				if m.CommitteeID == committeeID {
-					meta = m
-					break
-				}
-			}
-		}
+	if s.dkgSessions != nil && sessionID != "" {
+		meta = s.dkgSessions[sessionID]
 	}
 	s.avssMu.RUnlock()
 
-	var committee []string
-	kThreshold := 0
-	if meta != nil && len(meta.Committee) > 0 {
-		committee = meta.Committee
-		kThreshold = meta.K
-	} else {
-		for _, n := range s.registry.GetAllNodes() {
-			committee = append(committee, n.NodeID)
+	if meta == nil {
+		return nil, &JsonRpcErr{
+			Code:    -32004,
+			Message: fmt.Sprintf("DKG session %q not found on coordinator", sessionID),
 		}
-		if len(committee) == 15 {
-			kThreshold = 5
-		} else {
-			// Strictly 3-of-5 threshold for 5-node committees
-			kThreshold = 3
+	}
+
+	// Verify session bindings
+	if meta.CommitteeID != req.CommitteeID {
+		return nil, &JsonRpcErr{
+			Code:    -32001,
+			Message: fmt.Sprintf("committeeId mismatch: session has %s, request specified %s", meta.CommitteeID, req.CommitteeID),
 		}
+	}
+	if meta.WalletID != "" && req.WalletID != "" && meta.WalletID != req.WalletID {
+		return nil, &JsonRpcErr{
+			Code:    -32001,
+			Message: fmt.Sprintf("walletId mismatch: session bound to %s, request specified %s", meta.WalletID, req.WalletID),
+		}
+	}
+	if meta.UserID != "" && req.UserID != "" && meta.UserID != req.UserID {
+		return nil, &JsonRpcErr{
+			Code:    -32001,
+			Message: fmt.Sprintf("userId mismatch: session bound to %s, request specified %s", meta.UserID, req.UserID),
+		}
+	}
+
+	committee := meta.Committee
+	kThreshold := meta.K
+	if kThreshold <= 0 {
+		kThreshold = 3
 	}
 
 	curveName := "secp256k1"
@@ -522,7 +564,7 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 			defer wg.Done()
 			payload := map[string]interface{}{
 				"sessionId":   sessionID,
-				"committeeId": committeeID,
+				"committeeId": req.CommitteeID,
 				"epoch":       epoch,
 				"userId":      req.UserID,
 				"walletId":    req.WalletID,
@@ -600,7 +642,7 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 		"walletId":        req.WalletID,
 		"keyId":           req.KeyID,
 		"sessionId":       sessionID,
-		"committeeId":     committeeID,
+		"committeeId":     req.CommitteeID,
 		"epoch":           epoch,
 		"curve":           curveName,
 		"threshold":       kThreshold,

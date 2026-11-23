@@ -176,66 +176,10 @@ func RegisterAVSSRoutes(
 		})
 	})
 
-	// POST /node/avss/reconstruct — Isolated test reconstruction workflow
+	// POST /node/avss/reconstruct — HARD DISABLED BY PROTOCOL POLICY (Requirement R4)
+	// Private signing keys are NEVER created, assembled, reconstructed, or persisted on any server, node, or coordinator.
 	mux.HandleFunc("/node/avss/reconstruct", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
-			return
-		}
-		if !auth.ValidateInternalAuth(r) && !auth.ValidateAdminAuth(r) {
-			http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
-
-		var req struct {
-			SessionID string `json:"sessionId"`
-			Shares    []struct {
-				NodeID     string `json:"nodeId"`
-				NodeIndex  int    `json:"nodeIndex"`
-				ShareHex   string `json:"shareHex"`
-				BlindShare string `json:"blindShareHex"`
-			} `json:"shares"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, `{"error":"Invalid request payload"}`, http.StatusBadRequest)
-			return
-		}
-
-		reconShares := make([]*avss.ReconstructionShare, len(req.Shares))
-		for idx, s := range req.Shares {
-			shVal, err := cryptography.NewFieldElementFromHex(s.ShareHex)
-			if err != nil {
-				http.Error(w, `{"error":"Invalid share scalar"}`, http.StatusBadRequest)
-				return
-			}
-			bVal, err := cryptography.NewFieldElementFromHex(s.BlindShare)
-			if err != nil {
-				http.Error(w, `{"error":"Invalid blind share scalar"}`, http.StatusBadRequest)
-				return
-			}
-			reconShares[idx] = &avss.ReconstructionShare{
-				NodeID:     s.NodeID,
-				NodeIndex:  s.NodeIndex,
-				Share:      shVal,
-				BlindShare: bVal,
-			}
-		}
-
-		result, err := avssEngine.ExecuteTestReconstruction(req.SessionID, reconShares)
-		if err != nil {
-			http.Error(w, `{"error":"Reconstruction failed: `+err.Error()+`"}`, http.StatusBadRequest)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		// Never expose raw secret in non-test mode; return proof and commitment
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":           true,
-			"validShares":       result.ValidShareCount,
-			"thresholdRequired": result.ThresholdRequired,
-			"secretCommitment":  result.SecretCommitment.Hex(),
-			"verified":          true,
-		})
+		http.Error(w, `{"error":"Forbidden: Secret reconstruction is strictly prohibited by SARAL Protocol Security Policy R4"}`, http.StatusForbidden)
 	})
 
 	// GET /node/proactive/status

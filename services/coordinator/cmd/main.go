@@ -29,6 +29,7 @@ func main() {
 	peersFlag := flag.String("peers", getEnv("PEER_COORDINATORS", ""), "Comma-separated peer coordinator endpoints")
 	mtlsPortFlag := flag.Int("mtls-port", getEnvInt("MTLS_PORT", 9443), "Port for TLS 1.3 mTLS server (0 to disable)")
 	tlsDirFlag := flag.String("tls-dir", getEnv("TLS_DIR", "/etc/saral/tls"), "Directory for TLS certs")
+	storageDirFlag := flag.String("storage-dir", getEnv("STORAGE_DIR", ""), "Directory for persistent DKG public sessions")
 	flag.Parse()
 
 	domain := membership.DomainType(strings.ToUpper(*domainFlag))
@@ -67,6 +68,9 @@ func main() {
 
 	// 6. Mount JSON-RPC and Health endpoints
 	rpcServer := rpc.NewServer(domain, registry, monitor, verifierClient, peers, relayCoord)
+	if *storageDirFlag != "" {
+		rpcServer.SetStorageDir(*storageDirFlag)
+	}
 	http.Handle("/", rpcServer)
 	http.Handle("/rpc", rpcServer)
 

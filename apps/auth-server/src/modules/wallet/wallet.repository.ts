@@ -20,7 +20,7 @@ export class WalletRepository {
     userId: string;
     walletId: string;
     status?: string;
-    keyReferences: Record<string, string>;
+    keyReferences: Record<string, any>;
   }): Promise<WalletIdentity> {
     return prisma.$transaction(async (tx) => {
       const wallet = await tx.walletIdentity.create({
@@ -32,8 +32,10 @@ export class WalletRepository {
         },
       });
 
-      // Insert individual key references
-      const entries = Object.entries(data.keyReferences);
+      // Insert individual key references (scalar string keys only)
+      const entries = Object.entries(data.keyReferences).filter(
+        ([_, v]) => typeof v === 'string'
+      ) as [string, string][];
       if (entries.length > 0) {
         await tx.walletKeyReference.createMany({
           data: entries.map(([chain, keyRef]) => ({
@@ -52,7 +54,7 @@ export class WalletRepository {
 
   public async updateWalletKeyReferences(
     walletId: string,
-    keyReferences: Record<string, string>
+    keyReferences: Record<string, any>
   ): Promise<WalletIdentity> {
     return prisma.$transaction(async (tx) => {
       const wallet = await tx.walletIdentity.update({
@@ -63,7 +65,9 @@ export class WalletRepository {
         },
       });
 
-      const entries = Object.entries(keyReferences);
+      const entries = Object.entries(keyReferences).filter(
+        ([_, v]) => typeof v === 'string'
+      ) as [string, string][];
       for (const [chain, keyRef] of entries) {
         await tx.walletKeyReference.upsert({
           where: {

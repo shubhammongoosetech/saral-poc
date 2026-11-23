@@ -1,22 +1,30 @@
 /**
  * SARAL Protocol V3 — Core Wallet Service
  *
- * Implements:
- * 1. Genuine 3-of-5 DKG-Backed Blockchain Address Derivation.
- * 2. Strict Zero Address & Zero Public Key Persistence in Database.
- * 3. Elimination of HMAC-based Address Fallbacks.
- * 4. Curve-Specific Compliance:
- *    - MST Testnet: secp256k1 Keccak-256 + EIP-55 mixed-case checksum
- *    - Solana Devnet: Ed25519 32-byte public key Base58
- *    - Bitcoin Testnet: secp256k1 BIP-341 Taproot output-key tweak + BIP-350 Bech32m (tb1p...)
- * 5. Strict Fail-Closed Security: No fake addresses, no random strings, clear errors.
- * 6. Migration & Legacy HMAC Detection for old fake addresses.
+ * Implements 3-Domain Separation of Powers Architecture:
+ * 1. For BOTH new and returning users, all 3 domains MUST take part:
+ *    Foundation (5 nodes) + Public (5 nodes) + Private (5 nodes) = 15 nodes.
+ * 2. Exactly ONE wallet per user (unique userId constraint). Same user -> same wallet, always.
+ * 3. Returning user reuses the exact same 3-domain DKG sessions created at initial wallet creation.
+ *    Never runs a new DKG for a user who already has a READY wallet.
+ * 4. STRICT ZERO-SECRET PERSISTENCE (Requirement R4):
+ *    Private signing keys are NEVER created, assembled, reconstructed, or persisted on any server,
+ *    coordinator, node, database, log, or client device. Only public points and encrypted per-node
+ *    shares inside each node's local AES-256-GCM vault exist.
+ * 5. ZERO ADDRESS & ZERO PUBLIC KEY PERSISTENCE (Requirement R5):
+ *    Addresses and public keys are NEVER stored in the database.
+ *    They are re-derived in RAM at every login from the 3 domains via:
+ *      Y_wallet = Y_foundation + Y_public + Y_private
+ * 6. DYNAMIC NODE COUNTS & THRESHOLDS FROM ENV (Requirement R6):
+ *    All parameters are sourced dynamically from DOMAINS configuration.
  */
 
 import crypto from 'crypto';
 import { DataStore, WalletMetadataRecord } from '../storage/store';
 import { evaluateWorkingPolicy } from './policyService';
 import { saralBackendClient } from '../clients/saralBackendClient';
+import { DOMAINS, DOMAINS_MAP } from '../config/env';
+import { addSecp256k1PublicKeys, addEd25519PublicKeys } from '../utils/curveMath';
 import {
   toEip55Checksum,
   deriveEvmAddressFromPublicKey,
@@ -166,7 +174,7 @@ export function deriveMultiChainAddresses(
     mstAddress = deriveAddressFromDkgPublicKey('mst', mstKey);
   } else {
     throw new Error(
-      `CRITICAL SECURITY VIOLATION: Refusing to derive MST address from non-public-key reference "${mstKey}". Addresses must be derived exclusively from verified 3-of-5 DKG public keys.`
+      `CRITICAL SECURITY VIOLATION: Refusing to derive MST address from non-public-key reference "${mstKey}". Addresses must be derived exclusively from verified 3-domain DKG public keys.`
     );
   }
 
@@ -174,7 +182,7 @@ export function deriveMultiChainAddresses(
     solAddress = deriveAddressFromDkgPublicKey('solana', solKey);
   } else {
     throw new Error(
-      `CRITICAL SECURITY VIOLATION: Refusing to derive Solana address from non-public-key reference "${solKey}". Addresses must be derived exclusively from verified 3-of-5 DKG public keys.`
+      `CRITICAL SECURITY VIOLATION: Refusing to derive Solana address from non-public-key reference "${solKey}". Addresses must be derived exclusively from verified 3-domain DKG public keys.`
     );
   }
 
@@ -182,7 +190,7 @@ export function deriveMultiChainAddresses(
     btcAddress = deriveAddressFromDkgPublicKey('bitcoin', btcKey);
   } else {
     throw new Error(
-      `CRITICAL SECURITY VIOLATION: Refusing to derive Bitcoin address from non-public-key reference "${btcKey}". Addresses must be derived exclusively from verified 3-of-5 DKG public keys.`
+      `CRITICAL SECURITY VIOLATION: Refusing to derive Bitcoin address from non-public-key reference "${btcKey}". Addresses must be derived exclusively from verified 3-domain DKG public keys.`
     );
   }
 
@@ -235,7 +243,13 @@ const inFlightCreations = new Map<
 
 /**
  * Recomputes returning user's wallet public key and multi-chain addresses directly from
- * verified distributed key shares on the Go Coordinator without ever reconstructing private keys.
+ * verified distributed key shares on the 3 Domain Coordinators without ever reconstructing private keys.
+ *
+ * Curve Point Combination:
+ *   Y_mst = Y_foundation_mst + Y_public_mst + Y_private_mst (secp256k1)
+ *   Y_sol = Y_foundation_sol + Y_public_sol + Y_private_sol (ed25519)
+ *   Y_btc = Y_foundation_btc + Y_public_btc + Y_private_btc (secp256k1)
+ *
  * STRICT FAIL-CLOSED: Never falls back to HMAC or arbitrary random addresses!
  */
 export async function recomputeWalletAddressesFromShares(
@@ -264,83 +278,109 @@ export async function recomputeWalletAddressesFromShares(
   }
 
   const keyRefs = wallet.keyReferences || {};
-  const dkgSessionId = keyRefs.dkgSessionId;
+  const dkgSessionIds = keyRefs.dkgSessionIds;
 
+  // Strict 3-Domain Invariant: All 3 domain session IDs must be present
+  if (
+    !dkgSessionIds ||
+    !dkgSessionIds.foundation ||
+    !dkgSessionIds.public ||
+    !dkgSessionIds.private
+  ) {
+    const err: any = new Error(
+      'Wallet incomplete or legacy: all 3 domain sessions (foundation, public, private) are strictly required. Re-onboarding required.'
+    );
+    err.statusCode = 409;
+    throw err;
+  }
+
+  // 1. MST EVM (secp256k1) — Query all 3 domains concurrently & add points
   let mstPubkey = '';
+  try {
+    const mstDomainPoints = await Promise.all(
+      DOMAINS.map(async (domain) => {
+        const resp = await saralBackendClient.derivePublicKey({
+          walletId: wallet.walletId,
+          userId,
+          keyId: keyRefs.mst,
+          dkgSessionId: dkgSessionIds[domain.name],
+          committeeId: domain.committeeId,
+          curve: 'secp256k1',
+          chainFamily: 'mst',
+        });
+        if (!resp?.masterPublicKey) {
+          throw new Error(`Missing masterPublicKey from ${domain.name} domain for MST`);
+        }
+        return resp.masterPublicKey;
+      })
+    );
+    mstPubkey = addSecp256k1PublicKeys(mstDomainPoints);
+  } catch (err: any) {
+    throw new Error(
+      `CRITICAL_SECURITY_ERROR: Failed to derive 3-domain public key for MST: ${err.message}. Fail-closed active.`
+    );
+  }
+
+  // 2. Solana (ed25519) — Query all 3 domains concurrently & add points
   let solPubkey = '';
+  try {
+    const solDomainPoints = await Promise.all(
+      DOMAINS.map(async (domain) => {
+        const resp = await saralBackendClient.derivePublicKey({
+          walletId: wallet.walletId,
+          userId,
+          keyId: keyRefs.solana,
+          dkgSessionId: dkgSessionIds[domain.name],
+          committeeId: domain.committeeId,
+          curve: 'ed25519',
+          chainFamily: 'solana',
+        });
+        if (!resp?.masterPublicKey) {
+          throw new Error(`Missing masterPublicKey from ${domain.name} domain for Solana`);
+        }
+        return resp.masterPublicKey;
+      })
+    );
+    solPubkey = addEd25519PublicKeys(solDomainPoints);
+  } catch (err: any) {
+    throw new Error(
+      `CRITICAL_SECURITY_ERROR: Failed to derive 3-domain public key for Solana: ${err.message}. Fail-closed active.`
+    );
+  }
+
+  // 3. Bitcoin (secp256k1) — Query all 3 domains concurrently & add points
   let btcPubkey = '';
-
-  // 1. MST EVM (secp256k1)
   try {
-    const mstResp = await saralBackendClient.derivePublicKey({
-      walletId: wallet.walletId,
-      userId,
-      keyId: keyRefs.mst,
-      dkgSessionId,
-      committeeId: 'committee-foundation',
-      curve: 'secp256k1',
-      chainFamily: 'mst',
-    });
-    if (mstResp?.masterPublicKey) {
-      mstPubkey = mstResp.masterPublicKey;
-    } else {
-      throw new Error('Missing master public key in response');
-    }
+    const btcDomainPoints = await Promise.all(
+      DOMAINS.map(async (domain) => {
+        const resp = await saralBackendClient.derivePublicKey({
+          walletId: wallet.walletId,
+          userId,
+          keyId: keyRefs.bitcoin,
+          dkgSessionId: dkgSessionIds[domain.name],
+          committeeId: domain.committeeId,
+          curve: 'secp256k1',
+          chainFamily: 'bitcoin',
+        });
+        if (!resp?.masterPublicKey) {
+          throw new Error(`Missing masterPublicKey from ${domain.name} domain for Bitcoin`);
+        }
+        return resp.masterPublicKey;
+      })
+    );
+    btcPubkey = addSecp256k1PublicKeys(btcDomainPoints);
   } catch (err: any) {
     throw new Error(
-      `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for MST: ${err.message}. Fail-closed active.`
+      `CRITICAL_SECURITY_ERROR: Failed to derive 3-domain public key for Bitcoin: ${err.message}. Fail-closed active.`
     );
   }
 
-  // 2. Solana (ed25519)
-  try {
-    const solResp = await saralBackendClient.derivePublicKey({
-      walletId: wallet.walletId,
-      userId,
-      keyId: keyRefs.solana,
-      dkgSessionId,
-      committeeId: 'committee-foundation',
-      curve: 'ed25519',
-      chainFamily: 'solana',
-    });
-    if (solResp?.masterPublicKey) {
-      solPubkey = solResp.masterPublicKey;
-    } else {
-      throw new Error('Missing master public key in response');
-    }
-  } catch (err: any) {
-    throw new Error(
-      `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for Solana: ${err.message}. Fail-closed active.`
-    );
-  }
-
-  // 3. Bitcoin (secp256k1)
-  try {
-    const btcResp = await saralBackendClient.derivePublicKey({
-      walletId: wallet.walletId,
-      userId,
-      keyId: keyRefs.bitcoin,
-      dkgSessionId,
-      committeeId: 'committee-foundation',
-      curve: 'secp256k1',
-      chainFamily: 'bitcoin',
-    });
-    if (btcResp?.masterPublicKey) {
-      btcPubkey = btcResp.masterPublicKey;
-    } else {
-      throw new Error('Missing master public key in response');
-    }
-  } catch (err: any) {
-    throw new Error(
-      `CRITICAL_SECURITY_ERROR: Failed to obtain verified 3-of-5 DKG public key for Bitcoin: ${err.message}. Fail-closed active.`
-    );
-  }
-
+  // Derive addresses strictly in RAM — zero database / file / log persistence
   const addresses = deriveMultiChainAddresses(wallet.walletId, {
     mst: mstPubkey,
     solana: solPubkey,
     bitcoin: btcPubkey,
-    dkgSessionId,
+    dkgSessionId: dkgSessionIds.foundation,
   });
 
   return {
@@ -365,6 +405,17 @@ export async function createOrGetWallet(userId: string): Promise<{
   // Check if wallet already exists
   const existing = store.getWalletByUserId(userId);
   if (existing && existing.status === 'READY') {
+    const sessionIds = existing.keyReferences?.dkgSessionIds;
+    const is3Domain = sessionIds && sessionIds.foundation && sessionIds.public && sessionIds.private;
+    if (!is3Domain) {
+      existing.status = 'LEGACY_SINGLE_DOMAIN';
+      await store.saveWallet(existing);
+      const err: any = new Error(
+        'Legacy single-domain wallet detected. Protocol requires 3-domain security. Re-onboarding required.'
+      );
+      err.statusCode = 409;
+      throw err;
+    }
     const derived = await recomputeWalletAddressesFromShares(userId);
     return {
       wallet: existing,
@@ -383,6 +434,17 @@ export async function createOrGetWallet(userId: string): Promise<{
       // Re-check existing wallet after acquiring lock
       const doubleCheck = store.getWalletByUserId(userId);
       if (doubleCheck && doubleCheck.status === 'READY') {
+        const sessionIds = doubleCheck.keyReferences?.dkgSessionIds;
+        const is3Domain = sessionIds && sessionIds.foundation && sessionIds.public && sessionIds.private;
+        if (!is3Domain) {
+          doubleCheck.status = 'LEGACY_SINGLE_DOMAIN';
+          await store.saveWallet(doubleCheck);
+          const err: any = new Error(
+            'Legacy single-domain wallet detected. Protocol requires 3-domain security. Re-onboarding required.'
+          );
+          err.statusCode = 409;
+          throw err;
+        }
         const derived = await recomputeWalletAddressesFromShares(userId);
         return {
           wallet: doubleCheck,
@@ -391,21 +453,26 @@ export async function createOrGetWallet(userId: string): Promise<{
         };
       }
 
-      // First-time creation with stable opaque identifiers (Section 6)
-      const walletId = `wal-${crypto.randomUUID()}`;
+      // Check if DKG was already in progress with existing session IDs
+      let walletId = doubleCheck?.walletId || `wal-${crypto.randomUUID()}`;
       const now = new Date().toISOString();
 
-      // Distinct stable opaque chain-specific key references (Section 6)
-      let dkgSessionId = `dkg-foundation-${crypto.randomUUID()}`;
-      const keyMst = `key-mst-${crypto.randomBytes(8).toString('hex')}`;
-      const keySol = `key-sol-${crypto.randomBytes(8).toString('hex')}`;
-      const keyBtc = `key-btc-${crypto.randomBytes(8).toString('hex')}`;
+      let dkgSessionIds = doubleCheck?.keyReferences?.dkgSessionIds || {
+        foundation: `dkg-foundation-${crypto.randomUUID()}`,
+        public: `dkg-public-${crypto.randomUUID()}`,
+        private: `dkg-private-${crypto.randomUUID()}`,
+      };
+
+      const keyMst = doubleCheck?.keyReferences?.mst || `key-mst-${crypto.randomBytes(8).toString('hex')}`;
+      const keySol = doubleCheck?.keyReferences?.solana || `key-sol-${crypto.randomBytes(8).toString('hex')}`;
+      const keyBtc = doubleCheck?.keyReferences?.bitcoin || `key-btc-${crypto.randomBytes(8).toString('hex')}`;
 
       const keyReferences = {
         mst: keyMst,
         solana: keySol,
         bitcoin: keyBtc,
-        dkgSessionId,
+        dkgSessionId: dkgSessionIds.foundation,
+        dkgSessionIds,
       };
 
       const pendingWallet: WalletMetadataRecord = {
@@ -413,65 +480,74 @@ export async function createOrGetWallet(userId: string): Promise<{
         walletId,
         status: 'DKG_IN_PROGRESS',
         keyReferences,
-        createdAt: now,
+        createdAt: doubleCheck?.createdAt || now,
         updatedAt: now,
       };
-      store.saveWallet(pendingWallet);
+      await store.saveWallet(pendingWallet);
 
-      console.log(`[DKG] Initiating Dealerless 3-of-5 DKG on Coordinator for user ${userId}...`);
-      const dkgSession = await saralBackendClient.startDkg({
-        committeeId: 'committee-foundation',
-        sessionId: dkgSessionId,
-        committee: [
-          'saral-foundation-1',
-          'saral-foundation-2',
-          'saral-foundation-3',
-          'saral-foundation-4',
-          'saral-foundation-5',
-        ],
-        n: 5,
-        k: 3,
-        t: 1,
+      console.log(`[DKG] Initiating 3-Domain Dealerless DKG across Foundation, Public, and Private domains for user ${userId}...`);
+
+      // Start DKGs on ALL 3 domains in parallel
+      await saralBackendClient.runOnAllDomains(async (domainName) => {
+        const domainConfig = DOMAINS_MAP[domainName];
+        return saralBackendClient.startDkg({
+          committeeId: domainConfig.committeeId,
+          sessionId: dkgSessionIds[domainName],
+          committee: domainConfig.nodeIds,
+          n: domainConfig.n,
+          k: domainConfig.k,
+          t: domainConfig.t,
+          walletId,
+          userId,
+        });
       });
-      if (dkgSession && dkgSession.sessionId) {
-        dkgSessionId = dkgSession.sessionId;
-        keyReferences.dkgSessionId = dkgSessionId;
-      }
-      console.log(`[DKG] Dealerless DKG session initialized: ${dkgSessionId}`);
 
-      // Await genuine 3-of-5 DKG consensus across the foundation committee nodes
-      let dkgCompleted = false;
+      console.log(`[DKG] 3-Domain DKG sessions initialized:`, dkgSessionIds);
+
+      // Await genuine DKG consensus across all 3 domains
       const pollStart = Date.now();
       const maxPollTime = 15000;
-      while (Date.now() - pollStart < maxPollTime) {
-        try {
-          const status = await saralBackendClient.getDkgStatus(dkgSessionId);
-          if (status?.state === 'COMPLETED' || (status?.completedNodes && status.completedNodes >= 3)) {
-            dkgCompleted = true;
-            break;
-          }
-        } catch (_) {}
+      const completedDomains = new Set<string>();
+
+      while (Date.now() - pollStart < maxPollTime && completedDomains.size < DOMAINS.length) {
+        await Promise.all(
+          DOMAINS.map(async (domain) => {
+            if (completedDomains.has(domain.name)) return;
+            try {
+              const status = await saralBackendClient.getDkgStatus(dkgSessionIds[domain.name]);
+              if (
+                status?.state === 'COMPLETED' ||
+                (status?.completedNodes && status.completedNodes >= domain.k)
+              ) {
+                completedDomains.add(domain.name);
+              }
+            } catch (_) {}
+          })
+        );
+        if (completedDomains.size === DOMAINS.length) break;
         await new Promise((r) => setTimeout(r, 250));
       }
 
-      if (!dkgCompleted) {
+      if (completedDomains.size < DOMAINS.length) {
         const errorWallet: WalletMetadataRecord = {
           userId,
           walletId,
           status: 'ERROR',
-          error: 'DKG consensus timed out across threshold nodes',
+          error: `3-Domain DKG consensus timed out. Completed domains: ${Array.from(completedDomains).join(', ')} of 3.`,
           keyReferences,
-          createdAt: now,
+          createdAt: pendingWallet.createdAt,
           updatedAt: new Date().toISOString(),
         };
-        store.saveWallet(errorWallet);
-        throw new Error('Failed to obtain verified 3-of-5 DKG public key: consensus timed out. Fail-closed active.');
+        await store.saveWallet(errorWallet);
+        throw new Error(
+          `Failed to obtain verified 3-domain DKG public keys: consensus timed out on 1 or more domains. Fail-closed active.`
+        );
       }
 
       pendingWallet.status = 'KEY_READY';
-      store.saveWallet(pendingWallet);
+      await store.saveWallet(pendingWallet);
 
-      // Derive addresses from the real DKG shares via Coordinator
+      // Derive addresses from the real 3-domain shares via Coordinators
       const derived = await recomputeWalletAddressesFromShares(userId);
 
       const readyWallet: WalletMetadataRecord = {
@@ -479,7 +555,7 @@ export async function createOrGetWallet(userId: string): Promise<{
         walletId,
         status: 'READY',
         keyReferences,
-        createdAt: now,
+        createdAt: pendingWallet.createdAt,
         updatedAt: new Date().toISOString(),
       };
       await store.saveWallet(readyWallet);
@@ -487,7 +563,7 @@ export async function createOrGetWallet(userId: string): Promise<{
       store.logSecurity({
         id: crypto.randomUUID(),
         userId,
-        eventType: 'WALLET_CREATED_ONE_USER_ONE_WALLET',
+        eventType: 'WALLET_CREATED_THREE_DOMAIN',
         severity: 'INFO',
         details: { walletId, keyReferences },
         timestamp: now,
@@ -509,7 +585,7 @@ export async function createOrGetWallet(userId: string): Promise<{
 
 /**
  * Retrieves the user's addresses on-the-fly, strictly enforcing Working Policy.
- * Dynamically resolves from genuine 3-of-5 DKG shares in RAM.
+ * Dynamically resolves from genuine 3-domain DKG shares in RAM.
  */
 export async function getAuthenticatedWalletAddresses(
   userId: string,

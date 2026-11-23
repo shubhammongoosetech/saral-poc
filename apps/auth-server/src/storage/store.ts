@@ -69,6 +69,7 @@ export interface WalletMetadataRecord {
     | 'READY'
     | 'UNAVAILABLE'
     | 'ERROR'
+    | 'LEGACY_SINGLE_DOMAIN'
     | string;
   error?: string;
   keyReferences: {
@@ -76,6 +77,11 @@ export interface WalletMetadataRecord {
     solana?: string;
     bitcoin?: string;
     dkgSessionId?: string;
+    dkgSessionIds?: {
+      foundation: string;
+      public: string;
+      private: string;
+    };
   };
   createdAt: string;
   updatedAt: string;
@@ -234,11 +240,18 @@ export class DataStore {
       // Sync Wallets via Prisma
       const wallets = await prisma.walletIdentity.findMany();
       for (const w of wallets) {
+        let status = (w.status as any) || 'READY';
+        const keyRefs = (w.keyReferences as any) || {};
+        const sessionIds = keyRefs.dkgSessionIds;
+        const is3Domain = sessionIds && sessionIds.foundation && sessionIds.public && sessionIds.private;
+        if (!is3Domain && (keyRefs.dkgSessionId || (sessionIds && !is3Domain))) {
+          status = 'LEGACY_SINGLE_DOMAIN';
+        }
         this.data.wallets[w.userId] = {
           userId: w.userId,
           walletId: w.walletId,
-          status: (w.status as any) || 'READY',
-          keyReferences: (w.keyReferences as any) || {},
+          status,
+          keyReferences: keyRefs,
           createdAt: w.createdAt.toISOString(),
           updatedAt: w.updatedAt.toISOString(),
         };

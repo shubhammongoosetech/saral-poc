@@ -30,12 +30,12 @@ type ReconstructedSecret struct {
 }
 
 // ReconstructSecret executes strictly isolated verifiable share reconstruction for test workflows:
-// 1. Checks that at least k valid shares from distinct participants are provided.
-// 2. Verifies each share against the public commitment matrix: Commit(S_i, S'_i) == C(i, 0).
-// 3. Computes Lagrange coefficients at x = 0.
-// 4. Interpolates secret s = \sum \lambda_i S_i mod q and blinding s' = \sum \lambda_i S'_i mod q.
-// 5. Verifies reconstructed secret against C_{0, 0}: Commit(s, s') == C_{0, 0}.
-// 6. Returns error if fewer than k shares, or if any share is corrupted.
+//
+// HARD SECURITY INVARIANT (Requirement R4):
+// Secret reconstruction is NEVER reachable in any wallet or production key flow.
+// Private signing keys are NEVER created, assembled, reconstructed, or persisted on any server, node,
+// coordinator, database, or client device. Only public points (Y_i = x_i*G) and encrypted shares
+// in local AES-256-GCM vaults exist.
 func ReconstructSecret(
 	shares []*ReconstructionShare,
 	commitMatrix *CommitmentMatrix,

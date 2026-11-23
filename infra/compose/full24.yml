@@ -34,6 +34,15 @@ services:
       NODE_ENV: development
       ENABLE_DEV_AUTH: "true"
       DATABASE_URL: "postgresql://saral:saral_secret@postgres:5432/saral"
+      FOUNDATION_COORDINATOR_URL: "http://coordinator-foundation:9001"
+      PUBLIC_COORDINATOR_URL: "http://coordinator-public:9002"
+      PRIVATE_COORDINATOR_URL: "http://coordinator-private:9003"
+      SARAL_FOUNDATION_NODES: "5"
+      SARAL_FOUNDATION_THRESHOLD: "3"
+      SARAL_PUBLIC_NODES: "5"
+      SARAL_PUBLIC_THRESHOLD: "3"
+      SARAL_PRIVATE_NODES: "5"
+      SARAL_PRIVATE_THRESHOLD: "3"
     depends_on:
       postgres:
         condition: service_healthy
