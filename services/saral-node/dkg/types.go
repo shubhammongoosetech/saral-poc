@@ -23,14 +23,9 @@ const (
 
 // DKG Protocol Relay Message Types
 const (
-	MessageTypeDKGInit           = "DKG_INIT"
-	MessageTypeDKGContribution   = "DKG_CONTRIBUTION"
-	MessageTypeDKGAVSSComplete   = "DKG_AVSS_COMPLETE"
-	MessageTypeDKGQualifiedSet   = "DKG_QUALIFIED_SET"
-	MessageTypeDKGAgreement      = "DKG_AGREEMENT"
-	MessageTypeDKGPublicKey      = "DKG_PUBLIC_KEY"
-	MessageTypeDKGComplete       = "DKG_COMPLETE"
-	MessageTypeDKGAbort          = "DKG_ABORT"
+	MessageTypeDKGInit         = "DKG_INIT"
+	MessageTypeDKGContribution = "DKG_CONTRIBUTION"
+	MessageTypeDKGComplete     = "DKG_COMPLETE"
 )
 
 var (
@@ -90,35 +85,6 @@ type DKGContributionMessage struct {
 	CommitmentMatrix    [][]string `json:"commitmentMatrix"`    // hex matrix
 	Curve               string     `json:"curve,omitempty"`
 	Timestamp           int64      `json:"timestamp"`
-}
-
-// DKGAVSSCompleteMessage signals that a node has completed verification of a peer's AVSS sharing
-type DKGAVSSCompleteMessage struct {
-	SessionID   string `json:"sessionId"`
-	CommitteeID string `json:"committeeId"`
-	NodeID      string `json:"nodeId"`
-	DealerID    string `json:"dealerId"`
-	Timestamp   int64  `json:"timestamp"`
-}
-
-// DKGQualifiedSetMessage proposes or announces an agreed qualified contributor set
-type DKGQualifiedSetMessage struct {
-	SessionID    string   `json:"sessionId"`
-	CommitteeID  string   `json:"committeeId"`
-	ProposerID   string   `json:"proposerId"`
-	QualifiedSet []string `json:"qualifiedSet"`
-	Timestamp    int64    `json:"timestamp"`
-}
-
-// DKGPublicKeyMessage broadcasts a node's derived public share commitment and master public key
-type DKGPublicKeyMessage struct {
-	SessionID        string `json:"sessionId"`
-	CommitteeID      string `json:"committeeId"`
-	NodeID           string `json:"nodeId"`
-	NodeIndex        int    `json:"nodeIndex"`
-	PublicShareCommit string `json:"publicShareCommit"`
-	MasterPublicKey  string `json:"masterPublicKey"`
-	Timestamp        int64  `json:"timestamp"`
 }
 
 // DKGCompleteNotification notifies coordinators that a node has successfully finalized DKG

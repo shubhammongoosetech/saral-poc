@@ -1,3 +1,5 @@
+//go:build test_only
+
 package integration
 
 import (

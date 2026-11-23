@@ -17,7 +17,6 @@ const (
 	MessageTypeHybridDKGEcho         = "HYBRID_DKG_ECHO"
 	MessageTypeHybridDKGReady        = "HYBRID_DKG_READY"
 	MessageTypeHybridDKGLeaderChange = "HYBRID_DKG_LEADER_CHANGE"
-	MessageTypeHybridDKGRecovery     = "HYBRID_DKG_RECOVERY"
 )
 
 // ValidityCertificate is issued by a participant when a dealer's HybridVSS instance completes.
