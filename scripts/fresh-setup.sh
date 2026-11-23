@@ -46,12 +46,10 @@ fi
 echo -e "${GREEN}✓ Cryptographic keys and cluster secrets verified.${NC}"
 
 # Step 3: Compile Static Go Microservice Binaries
-echo -e "\n${BLUE}[2/6] Compiling Go microservices (CGO_ENABLED=0 GOOS=linux)...${NC}"
-mkdir -p services/saral-node/bin services/coordinator/bin services/verifier/bin
+echo -e "\n${BLUE}[2/6] Compiling Go SARAL node microservice (CGO_ENABLED=0 GOOS=linux)...${NC}"
+mkdir -p services/saral-node/bin
 (cd services/saral-node && CGO_ENABLED=0 GOOS=linux go build -o bin/saral-node ./cmd/main.go)
-(cd services/coordinator && CGO_ENABLED=0 GOOS=linux go build -o bin/coordinator ./cmd/main.go)
-(cd services/verifier && CGO_ENABLED=0 GOOS=linux go build -o bin/verifier ./cmd/main.go)
-echo -e "${GREEN}✓ Go microservices compiled successfully.${NC}"
+echo -e "${GREEN}✓ Go SARAL node microservice compiled successfully.${NC}"
 
 # Step 4: Build Prisma Client & Sync Database
 echo -e "\n${BLUE}[3/6] Generating Prisma ORM Client & syncing database...${NC}"
@@ -63,18 +61,12 @@ else
   echo -e "${YELLOW}⚠️  PostgreSQL on localhost:5432 is offline. Skipping database schema push.${NC}"
 fi
 
-# Step 5: Start 21 DKG Backend Containers in Docker
-echo -e "\n${BLUE}[4/6] Starting 21 DKG backend containers in Docker...${NC}"
+# Step 5: Start 15 DKG Backend Containers in Docker
+echo -e "\n${BLUE}[4/6] Starting 15 DKG backend containers in Docker...${NC}"
 docker compose -f infra/compose/full24.yml up -d \
   node-f1 node-f2 node-f3 node-f4 node-f5 \
   node-p1 node-p2 node-p3 node-p4 node-p5 \
-  node-r1 node-r2 node-r3 node-r4 node-r5 \
-  coordinator-foundation coordinator-public coordinator-private \
-  verifier-foundation verifier-public verifier-private 2>/dev/null || true
-
-docker start \
-  saral-prod-verifier-foundation saral-prod-verifier-public saral-prod-verifier-private \
-  saral-prod-coord-foundation saral-prod-coord-public saral-prod-coord-private 2>/dev/null || true
+  node-r1 node-r2 node-r3 node-r4 node-r5 2>/dev/null || true
 
 # Step 6: Provision Keys, Secrets & Binaries into Containers
 echo -e "\n${BLUE}[5/6] Provisioning binaries, verification keys & secrets to containers...${NC}"
@@ -83,16 +75,8 @@ echo -e "\n${BLUE}[5/6] Provisioning binaries, verification keys & secrets to co
 sleep 2
 node scripts/sync-genesis.js 2>/dev/null || true
 
-# Verifiers receive auth_public_key.pem
-for c in saral-prod-verifier-foundation saral-prod-verifier-public saral-prod-verifier-private; do
-  docker exec $c mkdir -p /keys 2>/dev/null || true
-  docker cp infra/config/auth_public_key.pem $c:/keys/auth_public_key.pem 2>/dev/null || true
-  docker restart $c >/dev/null
-done
-
-# Coordinators and Nodes
+# Nodes
 SERVICES_WITH_TOKEN=(
-  saral-prod-coord-foundation saral-prod-coord-public saral-prod-coord-private
   saral-prod-node-f1 saral-prod-node-f2 saral-prod-node-f3 saral-prod-node-f4 saral-prod-node-f5
   saral-prod-node-p1 saral-prod-node-p2 saral-prod-node-p3 saral-prod-node-p4 saral-prod-node-p5
   saral-prod-node-r1 saral-prod-node-r2 saral-prod-node-r3 saral-prod-node-r4 saral-prod-node-r5
@@ -104,11 +88,7 @@ for c in "${SERVICES_WITH_TOKEN[@]}"; do
   cat infra/config/genesis_participants.json | docker exec -i $c sh -c "cat > /run/secrets/saral_genesis_participants.json 2>/dev/null || true"
   cat infra/config/auth_public_key.pem | docker exec -i $c sh -c "cat > /run/secrets/auth_ed25519_pub.pem 2>/dev/null || true"
   # Deploy latest compiled binary
-  if [[ "$c" =~ saral-prod-node ]]; then
-    docker cp services/saral-node/bin/saral-node $c:/usr/local/bin/saral-node 2>/dev/null || true
-  elif [[ "$c" =~ saral-prod-coord ]]; then
-    docker cp services/coordinator/bin/coordinator $c:/usr/local/bin/coordinator 2>/dev/null || true
-  fi
+  docker cp services/saral-node/bin/saral-node $c:/usr/local/bin/saral-node 2>/dev/null || true
   docker restart $c >/dev/null &
 done
 wait

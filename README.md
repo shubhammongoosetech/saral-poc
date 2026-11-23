@@ -9,12 +9,17 @@ Read the [SARAL code roadmap](docs/SARAL-Code-Roadmap.pdf) for the UI-to-node fl
 ```text
 React web app -> Express auth API -> PostgreSQL wallet and session metadata
                        |
-                       +-> Foundation coordinator -> 5 Foundation nodes
-                       +-> Public coordinator     -> 5 Public nodes
-                       +-> Private coordinator    -> 5 Private nodes
+                       +-> SARAL Nodes Mesh (Direct P2P, In-Process Auth Verification)
+                             - 5 Foundation Nodes (saral-foundation-1..5)
+                             - 5 Public Nodes     (saral-public-1..5)
+                             - 5 Private Nodes    (saral-private-1..5)
 ```
 
-Each domain has its own verifier. Each node persists its own encrypted DKG shares. The application database stores one wallet row per account, with opaque key and session references. The auth server derives addresses on demand from verified public keys.
+The system operates strictly as a 2-component architecture:
+1. **Web2 Authentication System (`apps/auth-server`)**: User auth, Google OAuth, phone OTP, RFC 6238 TOTP MFA, session management, working policy evaluation, and user-to-wallet mapping.
+2. **SARAL Node (`services/saral-node`)**: Decentralized DKG, Kate-Huang-Goldberg AVSS, proactive secret sharing, direct P2P mesh relay, encrypted key-share vault storage, and cryptographic point operations. Token verification is performed directly in-process via Ed25519 signatures.
+
+Each node persists its own encrypted DKG shares in a local vault. The application database stores one wallet row per account, with opaque key and session references. The auth server derives addresses on demand from verified public keys without central key persistence.
 
 | Start here | Follow the code |
 | --- | --- |
@@ -22,7 +27,7 @@ Each domain has its own verifier. Each node persists its own encrypted DKG share
 | Google, OTP, and MFA | [Auth routes](apps/auth-server/src/routes/auth.ts), [Google verification](apps/auth-server/src/auth/google.ts), [MFA service](apps/auth-server/src/services/mfaService.ts) |
 | Wallet page and network calls | [Wallet](apps/web/src/features/wallet/Wallet.tsx), [wallet API](apps/web/src/services/walletApi.ts) |
 | API, policy, and wallet persistence | [Wallet routes](apps/auth-server/src/routes/wallet.ts), [policy service](apps/auth-server/src/services/policyService.ts), [wallet service](apps/auth-server/src/services/walletService.ts), [store](apps/auth-server/src/storage/store.ts) |
-| Three-domain RPC, DKG, and node storage | [Coordinator client](apps/auth-server/src/clients/saralBackendClient.ts), [coordinator DKG](services/coordinator/internal/rpc/dkg.go), [node DKG engine](services/saral-node/dkg/engine.go), [encrypted share store](services/saral-node/vault/share_store.go) |
+| Three-domain P2P, DKG, and node storage | [Node mesh client](apps/auth-server/src/clients/saralBackendClient.ts), [node DKG engine](services/saral-node/dkg/engine.go), [P2P relay router](services/saral-node/internal/relay/router.go), [encrypted share store](services/saral-node/vault/share_store.go) |
 
 ## Run locally on Windows
 
@@ -112,7 +117,7 @@ npm.cmd run test:go
 npm.cmd run test:all-crypto
 ```
 
-The browser tests cover session and wallet transitions. The architecture tests exercise wallet lifecycle, cryptographic scope, and persistence. Run Docker checks against the running stack when verifying coordinator connectivity and actual testnet calls.
+The browser tests cover session and wallet transitions. The architecture tests exercise wallet lifecycle, cryptographic scope, and persistence. Run Docker checks against the running stack when verifying node mesh connectivity and actual testnet calls.
 
 Verification on `saral-mohit-new` includes:
 - **Zero-Persistence Guarantee:** Verified that PostgreSQL contains zero private keys, zero public keys, and zero addresses.

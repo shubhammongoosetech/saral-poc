@@ -14,11 +14,11 @@
     "npm": ">=10.0.0"
   },
   "scripts": {
-    "clean": "rm -rf services/coordinator/bin services/saral-node/bin services/verifier/bin apps/*/dist",
+    "clean": "rm -rf services/saral-node/bin apps/*/dist",
     "clean:all": "bash scripts/clean-all.sh",
     "setup": "node scripts/docker-stack.cjs nodes",
     "verify": "bash scripts/verify-all.sh",
-    "build:go": "go build -o services/coordinator/bin/coordinator ./services/coordinator/cmd/main.go && go build -o services/verifier/bin/verifier ./services/verifier/cmd/main.go && go build -o services/saral-node/bin/saral-node ./services/saral-node/cmd/main.go",
+    "build:go": "go build -o services/saral-node/bin/saral-node ./services/saral-node/cmd/main.go",
     "build:apps": "npm --prefix apps/auth-server run build && npm --prefix apps/web run build",
     "build": "npm run build:go && npm run build:apps",
     "prisma:generate": "npm --prefix apps/auth-server run prisma:generate",

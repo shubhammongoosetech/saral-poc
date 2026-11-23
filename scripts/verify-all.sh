@@ -32,13 +32,13 @@ npm run test:all-crypto
 echo -e "${GREEN}✓ All cryptographic test vectors & distributed protocols PASSED.${NC}"
 
 # 4. Docker Backend Cluster Status
-echo -e "\n${BLUE}[4/4] Verifying Docker 21-node cluster health...${NC}"
-RUNNING_CONTAINERS=$(docker ps --filter "name=saral-prod" --format "{{.Names}}" | wc -l)
-echo "   • Active SARAL containers: $RUNNING_CONTAINERS / 21"
-if [ "$RUNNING_CONTAINERS" -ge 21 ]; then
-  echo -e "${GREEN}✓ All 21 Docker backend nodes and coordinators are active.${NC}"
+echo -e "\n${BLUE}[4/4] Verifying Docker 15-node cluster health...${NC}"
+RUNNING_CONTAINERS=$(docker ps --filter "name=saral-prod-node" --format "{{.Names}}" | wc -l)
+echo "   • Active SARAL node containers: $RUNNING_CONTAINERS / 15"
+if [ "$RUNNING_CONTAINERS" -ge 15 ]; then
+  echo -e "${GREEN}✓ All 15 Docker backend SARAL nodes are active.${NC}"
 else
-  echo -e "${YELLOW}⚠️  Note: $RUNNING_CONTAINERS / 21 containers detected. Run 'npm run setup' to start all 21.${NC}"
+  echo -e "${YELLOW}⚠️  Note: $RUNNING_CONTAINERS / 15 nodes detected. Run 'npm run setup' to start all 15.${NC}"
 fi
 
 echo -e "\n${GREEN}======================================================================${NC}"

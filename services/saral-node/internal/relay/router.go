@@ -31,7 +31,6 @@ type RelayRouter struct {
 	idMgr               *identity.IdentityManager
 	domain              string
 	p2pMgr              *p2p.P2PManager
-	coordinatorURL      string
 	vaultDir            string
 	trustedParticipants map[string]membership.ParticipantEntry // Canonical NodeID -> ParticipantEntry
 	seenMessages        map[string]*RelayAck
@@ -60,14 +59,12 @@ func NewRelayRouter(
 	idMgr *identity.IdentityManager,
 	domain string,
 	p2pMgr *p2p.P2PManager,
-	coordinatorURL string,
 	vaultDir string,
 ) *RelayRouter {
 	r := &RelayRouter{
 		idMgr:               idMgr,
 		domain:              strings.ToUpper(domain),
 		p2pMgr:              p2pMgr,
-		coordinatorURL:      coordinatorURL,
 		vaultDir:            vaultDir,
 		trustedParticipants: make(map[string]membership.ParticipantEntry),
 		seenMessages:        make(map[string]*RelayAck),
@@ -85,7 +82,6 @@ func NewRelayRouter(
 	r.loadGenesisParticipants()
 
 	go r.cleanupLoop()
-	go r.syncParticipantsLoop()
 
 	return r
 }
@@ -187,54 +183,24 @@ func (r *RelayRouter) saveSeenMessagesToDisk() {
 	}
 }
 
-func (r *RelayRouter) syncParticipantsLoop() {
-	if r.coordinatorURL == "" {
-		return
+func (r *RelayRouter) GetParticipantEndpoint(nodeID string) string {
+	nodeID, _ = membership.NormalizeNodeID(nodeID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if entry, ok := r.trustedParticipants[nodeID]; ok {
+		return entry.Endpoint
 	}
-
-	// Initial sync
-	r.fetchParticipantsFromCoordinator()
-
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-r.stopChan:
-			return
-		case <-ticker.C:
-			r.fetchParticipantsFromCoordinator()
-		}
-	}
+	return ""
 }
 
-func (r *RelayRouter) fetchParticipantsFromCoordinator() {
-	if r.coordinatorURL == "" {
-		return
+func (r *RelayRouter) GetAllParticipants() map[string]membership.ParticipantEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	res := make(map[string]membership.ParticipantEntry, len(r.trustedParticipants))
+	for k, v := range r.trustedParticipants {
+		res[k] = v
 	}
-
-	url := strings.TrimRight(r.coordinatorURL, "/") + "/registry/participants"
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return
-	}
-	req.Header.Set("X-Saral-Internal-Token", auth.GetInternalToken())
-
-	resp, err := r.httpClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return
-	}
-	defer resp.Body.Close()
-
-	var partResp struct {
-		Participants map[string]membership.ParticipantEntry `json:"participants"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&partResp); err == nil {
-		for _, p := range partResp.Participants {
-			r.RegisterTrustedParticipant(p)
-		}
-	}
+	return res
 }
 
 func (r *RelayRouter) cleanupLoop() {
@@ -364,35 +330,33 @@ func (r *RelayRouter) Send(req RelaySendRequest) (*DeliveryRecord, error) {
 	// Routing Decision:
 	// 1. Direct P2P if target is a known connected peer
 	var destURL string
-	isDirectP2P := false
 
 	if r.p2pMgr != nil {
 		for _, peer := range r.p2pMgr.GetPeers() {
 			normPeer, _ := membership.NormalizeNodeID(peer.NodeID)
 			if normPeer == targetNode && peer.Connected {
 				destURL = peer.Endpoint + "/p2p/relay"
-				isDirectP2P = true
 				break
 			}
 		}
 	}
 
-	// 2. If not direct P2P, forward through Coordinator
-	if !isDirectP2P {
-		if r.coordinatorURL == "" {
+	// 2. Direct P2P via registered trusted participants
+	if destURL == "" {
+		r.mu.RLock()
+		entry, found := r.trustedParticipants[targetNode]
+		r.mu.RUnlock()
+		if found && entry.Endpoint != "" {
+			destURL = strings.TrimRight(entry.Endpoint, "/") + "/p2p/relay"
+		} else {
 			record.State = StateFailed
-			record.Error = "no route to destination: peer not directly connected and coordinatorURL not configured"
+			record.Error = fmt.Sprintf("no route to destination: peer %s not connected and not found in trusted participants", targetNode)
 			record.UpdatedAt = time.Now().UnixMilli()
 			return record, fmt.Errorf("%s", record.Error)
 		}
-		destURL = strings.TrimRight(r.coordinatorURL, "/") + "/relay/forward"
 	}
 
-	if isDirectP2P {
-		record.State = StateSent
-	} else {
-		record.State = StateForwarded
-	}
+	record.State = StateSent
 	record.UpdatedAt = time.Now().UnixMilli()
 
 	// Safe dispatch with retries and exponential backoff

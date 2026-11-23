@@ -1,4 +1,4 @@
-package rpc
+package crypto
 
 import (
 	"crypto/elliptic"
@@ -354,18 +354,22 @@ func InterpolatePublicContributionsAtZeroForCurve(indices []int, points []*Curve
 	}
 }
 
-// --- Keccak-256 Hash Implementation ---
+// Keccak-256 implementation (standard EVM Keccak)
+const (
+	keccakRounds = 24
+	rate256      = 1088 / 8 // 136 bytes
+)
 
 var keccakRoundConstants = [24]uint64{
-	0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
-	0x000000000000808b, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
-	0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
-	0x000000008000808b, 0x800000000000008b, 0x8000000000008089, 0x8000000000008003,
-	0x8000000000008002, 0x8000000000000080, 0x000000000000800a, 0x800000008000000a,
+	0x0000000000000001, 0x0000000000008082, 0x800000000000808A, 0x8000000080008000,
+	0x000000000000808B, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+	0x000000000000008A, 0x0000000000000088, 0x0000000080008009, 0x000000008000000A,
+	0x000000008000808B, 0x800000000000008B, 0x8000000000008089, 0x8000000000008003,
+	0x8000000000008002, 0x8000000000000080, 0x000000000000800A, 0x800000008000000A,
 	0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
 }
 
-var keccakRot = [5][5]uint{
+var keccakRotations = [5][5]uint{
 	{0, 36, 3, 41, 18},
 	{1, 44, 10, 45, 2},
 	{62, 6, 43, 15, 61},
@@ -373,102 +377,73 @@ var keccakRot = [5][5]uint{
 	{27, 20, 39, 8, 14},
 }
 
-func keccakF1600(state *[5][5]uint64) {
-	for round := 0; round < 24; round++ {
-		var C [5]uint64
+func keccakF1600(state *[25]uint64) {
+	for round := 0; round < keccakRounds; round++ {
+		var c [5]uint64
 		for x := 0; x < 5; x++ {
-			C[x] = state[x][0] ^ state[x][1] ^ state[x][2] ^ state[x][3] ^ state[x][4]
+			c[x] = state[x] ^ state[x+5] ^ state[x+10] ^ state[x+15] ^ state[x+20]
 		}
-		var D [5]uint64
+		var d [5]uint64
 		for x := 0; x < 5; x++ {
-			D[x] = C[(x+4)%5] ^ bits.RotateLeft64(C[(x+1)%5], 1)
+			d[x] = c[(x+4)%5] ^ bits.RotateLeft64(c[(x+1)%5], 1)
 		}
-		for x := 0; x < 5; x++ {
-			for y := 0; y < 5; y++ {
-				state[x][y] ^= D[x]
-			}
+		for i := 0; i < 25; i++ {
+			state[i] ^= d[i%5]
 		}
 
-		var B [5][5]uint64
+		var b [5][5]uint64
 		for x := 0; x < 5; x++ {
 			for y := 0; y < 5; y++ {
-				B[y][(2*x+3*y)%5] = bits.RotateLeft64(state[x][y], int(keccakRot[x][y]))
+				b[y][(2*x+3*y)%5] = bits.RotateLeft64(state[x+5*y], int(keccakRotations[x][y]))
 			}
 		}
 
 		for x := 0; x < 5; x++ {
 			for y := 0; y < 5; y++ {
-				state[x][y] = B[x][y] ^ ((^B[(x+1)%5][y]) & B[(x+2)%5][y])
+				state[x+5*y] = b[x][y] ^ ((^b[(x+1)%5][y]) & b[(x+2)%5][y])
 			}
 		}
 
-		state[0][0] ^= keccakRoundConstants[round]
+		state[0] ^= keccakRoundConstants[round]
 	}
 }
 
-// Keccak256 computes standard Ethereum Keccak-256 hash.
+// Keccak256 computes the standard Ethereum Keccak-256 hash
 func Keccak256(data []byte) []byte {
-	rate := 136
-	var state [5][5]uint64
-
+	var state [25]uint64
 	offset := 0
-	for offset+rate <= len(data) {
-		for i := 0; i < rate/8; i++ {
-			x := i % 5
-			y := i / 5
-			w := uint64(data[offset+i*8]) |
-				uint64(data[offset+i*8+1])<<8 |
-				uint64(data[offset+i*8+2])<<16 |
-				uint64(data[offset+i*8+3])<<24 |
-				uint64(data[offset+i*8+4])<<32 |
-				uint64(data[offset+i*8+5])<<40 |
-				uint64(data[offset+i*8+6])<<48 |
-				uint64(data[offset+i*8+7])<<56
-			state[x][y] ^= w
+	for offset < len(data) {
+		chunkSize := len(data) - offset
+		if chunkSize > rate256 {
+			chunkSize = rate256
 		}
-		keccakF1600(&state)
-		offset += rate
+		for i := 0; i < chunkSize; i++ {
+			laneIndex := i / 8
+			byteIndex := i % 8
+			state[laneIndex] ^= uint64(data[offset+i]) << (byteIndex * 8)
+		}
+		offset += chunkSize
+		if chunkSize == rate256 {
+			keccakF1600(&state)
+		}
 	}
 
-	padded := make([]byte, rate)
-	rem := len(data) - offset
-	copy(padded, data[offset:])
-	padded[rem] = 0x01
-	padded[rate-1] |= 0x80
-
-	for i := 0; i < rate/8; i++ {
-		x := i % 5
-		y := i / 5
-		w := uint64(padded[i*8]) |
-			uint64(padded[i*8+1])<<8 |
-			uint64(padded[i*8+2])<<16 |
-			uint64(padded[i*8+3])<<24 |
-			uint64(padded[i*8+4])<<32 |
-			uint64(padded[i*8+5])<<40 |
-			uint64(padded[i*8+6])<<48 |
-			uint64(padded[i*8+7])<<56
-		state[x][y] ^= w
-	}
+	remaining := len(data) % rate256
+	state[remaining/8] ^= uint64(0x01) << ((remaining % 8) * 8)
+	state[(rate256-1)/8] ^= uint64(0x80) << (((rate256 - 1) % 8) * 8)
 	keccakF1600(&state)
 
 	out := make([]byte, 32)
 	for i := 0; i < 4; i++ {
-		x := i % 5
-		y := i / 5
-		w := state[x][y]
-		out[i*8] = byte(w)
-		out[i*8+1] = byte(w >> 8)
-		out[i*8+2] = byte(w >> 16)
-		out[i*8+3] = byte(w >> 24)
-		out[i*8+4] = byte(w >> 32)
-		out[i*8+5] = byte(w >> 40)
-		out[i*8+6] = byte(w >> 48)
-		out[i*8+7] = byte(w >> 56)
+		lane := state[i]
+		for j := 0; j < 8; j++ {
+			out[i*8+j] = byte(lane >> (j * 8))
+		}
 	}
 	return out
 }
 
-// DeriveEvmAddress derives standard EIP-55 checksummed EVM address from uncompressed secp256k1 point
+// DeriveEvmAddress derives standard checksummed Ethereum/EVM address from secp256k1 point
 func DeriveEvmAddress(pt *CurvePoint) string {
 	pubBytes := make([]byte, 64)
 	xBytes := pt.X.Bytes()
@@ -661,3 +636,93 @@ func EncodeBech32m(hrp string, witnessVersion int, program []byte) string {
 	}
 	return res.String()
 }
+
+// WalletPublicContribution represents a verified public point contribution from a committee member.
+type WalletPublicContribution struct {
+	Index  int
+	Point  *CurvePoint
+	Master [sha256.Size]byte
+}
+
+// ReconstructVerifiedWalletKey reconstructs only the public point for an exact wallet key.
+func ReconstructVerifiedWalletKey(contributions []WalletPublicContribution, curve string) (string, *CurvePoint, error) {
+	// Each matching commitment is attested by at least three distinct registered members.
+	// Try each possible triple so a faulty response cannot displace other usable contributions.
+	for i, first := range contributions {
+		for j := i + 1; j < len(contributions); j++ {
+			second := contributions[j]
+			if first.Master != second.Master || first.Index == second.Index {
+				continue
+			}
+			for _, third := range contributions[j+1:] {
+				if first.Master != third.Master || first.Index == third.Index || second.Index == third.Index {
+					continue
+				}
+				point, err := InterpolatePublicContributionsAtZeroForCurve(
+					[]int{first.Index, second.Index, third.Index},
+					[]*CurvePoint{first.Point, second.Point, third.Point},
+					curve,
+				)
+				if err != nil || !ValidWalletPublicPoint(point, curve) {
+					continue
+				}
+				key := fmt.Sprintf("04%064x%064x", point.X, point.Y)
+				encoded, err := hex.DecodeString(key)
+				if err == nil && sha256.Sum256(encoded) == first.Master {
+					return key, point, nil
+				}
+			}
+		}
+	}
+	return "", nil, fmt.Errorf("no threshold of wallet shares matched the verified DKG public key commitment")
+}
+
+// DecodeWalletPublicPoint parses and validates a raw hex uncompressed point.
+func DecodeWalletPublicPoint(raw, curve string) (*CurvePoint, error) {
+	if len(raw) != 130 || !strings.HasPrefix(raw, "04") {
+		return nil, fmt.Errorf("invalid wallet public point encoding")
+	}
+	encoded, err := hex.DecodeString(raw)
+	if err != nil {
+		return nil, err
+	}
+	point := &CurvePoint{X: new(big.Int).SetBytes(encoded[1:33]), Y: new(big.Int).SetBytes(encoded[33:])}
+	if !ValidWalletPublicPoint(point, curve) {
+		return nil, fmt.Errorf("invalid wallet public point for %s", curve)
+	}
+	return point, nil
+}
+
+// ValidWalletPublicPoint checks whether the point lies on the specified curve and is valid.
+func ValidWalletPublicPoint(point *CurvePoint, curve string) bool {
+	if point == nil || point.X == nil || point.Y == nil || point.X.Sign() < 0 || point.Y.Sign() < 0 {
+		return false
+	}
+	x, y := point.X, point.Y
+	x2 := new(big.Int).Mul(x, x)
+	y2 := new(big.Int).Mul(y, y)
+	switch curve {
+	case "secp256k1":
+		if x.Cmp(Secp256k1P) >= 0 || y.Cmp(Secp256k1P) >= 0 {
+			return false
+		}
+		rhs := new(big.Int).Mul(x2, x)
+		rhs.Add(rhs, big.NewInt(7)).Mod(rhs, Secp256k1P)
+		return y2.Mod(y2, Secp256k1P).Cmp(rhs) == 0
+	case "ed25519":
+		if x.Cmp(Ed25519P) >= 0 || y.Cmp(Ed25519P) >= 0 || (x.Sign() == 0 && y.Cmp(big.NewInt(1)) == 0) {
+			return false
+		}
+		lhs := new(big.Int).Sub(y2, x2)
+		lhs.Mod(lhs, Ed25519P)
+		rhs := new(big.Int).Mul(x2, y2)
+		rhs.Mul(rhs, Ed25519D).Add(rhs, big.NewInt(1)).Mod(rhs, Ed25519P)
+		if lhs.Cmp(rhs) != 0 {
+			return false
+		}
+		orderX, orderY := Ed25519ScalarMult(x, y, Ed25519L)
+		return orderX.Sign() == 0 && orderY.Cmp(big.NewInt(1)) == 0
+	}
+	return false
+}
+

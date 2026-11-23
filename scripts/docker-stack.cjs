@@ -57,12 +57,9 @@ async function main() {
   if (mode === 'full') {
     compose(['up', '-d', '--build', '--wait']);
   } else {
-    const domains = ['foundation', 'public', 'private'];
-    const verifiers = domains.map((domain) => `verifier-${domain}`);
     const nodes = ['f', 'p', 'r'].flatMap((prefix) =>
       Array.from({ length: 5 }, (_, index) => `node-${prefix}${index + 1}`));
-    const coordinators = domains.map((domain) => `coordinator-${domain}`);
-    compose(['up', '-d', '--build', '--no-deps', '--wait', ...verifiers, ...nodes, ...coordinators]);
+    compose(['up', '-d', '--build', '--no-deps', '--wait', ...nodes]);
   }
 
   // Synchronize genesis participants with freshly booted node vault identities
@@ -70,8 +67,7 @@ async function main() {
     const { execSync } = require('node:child_process');
     console.log('[docker-stack] Synchronizing node genesis identities...');
     execSync('node scripts/sync-genesis.js', { cwd: root, stdio: 'inherit' });
-    compose(['restart', 'coordinator-foundation', 'coordinator-public', 'coordinator-private']);
-    console.log('[docker-stack] Coordinators reloaded with synchronized genesis participants.');
+    console.log('[docker-stack] Node genesis participants synchronized.');
   } catch (err) {
     console.warn('[docker-stack] Notice during genesis sync:', err.message);
   }

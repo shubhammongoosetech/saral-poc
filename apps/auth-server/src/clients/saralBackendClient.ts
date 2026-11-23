@@ -1,6 +1,9 @@
+import fs from 'fs';
+import path from 'path';
 import crypto from 'crypto';
 import { KeyManager } from '../auth/token';
 import { WalletDomain } from '../config/wallet';
+import { isKnownInsecureSecret } from '../config/auth';
 
 export class SaralBackendError extends Error {
   public code: number;
@@ -111,7 +114,8 @@ export interface DerivePublicKeyResponse {
   masterPublicKey: string;
 }
 
-export interface CoordinatorStatusResponse {
+export interface NodeStatusResponse {
+  nodeId?: string;
   domain: string;
   status: string;
   enrolledNodes: number;
@@ -119,24 +123,49 @@ export interface CoordinatorStatusResponse {
   timestamp: string;
 }
 
+export type CoordinatorStatusResponse = NodeStatusResponse;
+
 export class SaralBackendClient {
-  private coordinatorUrls: Record<WalletDomain, string>;
+  private nodeUrls: Record<WalletDomain, string>;
   private internalToken: string;
   private timeoutMs: number;
   private reqSeq: number = 1;
 
   constructor(config: {
+    nodeUrl?: string;
+    nodeUrls?: Partial<Record<WalletDomain, string>>;
     coordinatorUrl?: string;
     coordinatorUrls?: Partial<Record<WalletDomain, string>>;
     internalToken?: string;
     timeoutMs?: number;
   } = {}) {
-    this.coordinatorUrls = {
-      foundation: config.coordinatorUrls?.foundation || config.coordinatorUrl || process.env.COORDINATOR_URL || 'http://localhost:9001',
-      public: config.coordinatorUrls?.public || process.env.COORDINATOR_PUBLIC_URL || 'http://localhost:9002',
-      private: config.coordinatorUrls?.private || process.env.COORDINATOR_PRIVATE_URL || 'http://localhost:9003',
+    this.nodeUrls = {
+      foundation: config.nodeUrls?.foundation || config.nodeUrl || config.coordinatorUrls?.foundation || config.coordinatorUrl || process.env.SARAL_NODE_FOUNDATION_URL || process.env.SARAL_NODE_URL || process.env.COORDINATOR_URL || 'http://localhost:8001',
+      public: config.nodeUrls?.public || config.coordinatorUrls?.public || process.env.SARAL_NODE_PUBLIC_URL || process.env.COORDINATOR_PUBLIC_URL || 'http://localhost:8006',
+      private: config.nodeUrls?.private || config.coordinatorUrls?.private || process.env.SARAL_NODE_PRIVATE_URL || process.env.COORDINATOR_PRIVATE_URL || 'http://localhost:8011',
     };
-    this.internalToken = config.internalToken || process.env.SARAL_INTERNAL_TOKEN || '';
+
+    let token = config.internalToken || process.env.SARAL_INTERNAL_TOKEN || '';
+    if (!token || isKnownInsecureSecret(token)) {
+      const candidates = [
+        process.env.SARAL_INTERNAL_TOKEN_FILE,
+        '/run/secrets/saral_internal_token',
+        path.resolve(process.cwd(), 'infra/secrets/internal_token.secret'),
+        path.resolve(__dirname, '../../../infra/secrets/internal_token.secret'),
+      ].filter(Boolean) as string[];
+      for (const p of candidates) {
+        try {
+          if (fs.existsSync(p)) {
+            const val = fs.readFileSync(p, 'utf8').trim();
+            if (val && !isKnownInsecureSecret(val)) {
+              token = val;
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    this.internalToken = token;
     this.timeoutMs = config.timeoutMs || 15000;
   }
 
@@ -148,8 +177,8 @@ export class SaralBackendClient {
     domain: WalletDomain = 'foundation',
   ): Promise<T> {
     const correlationId = `corr-${crypto.randomUUID()}`;
-    const coordinatorUrl = this.coordinatorUrls[domain].replace(/\/$/, '');
-    const endpoint = coordinatorUrl.endsWith('/rpc') ? coordinatorUrl : `${coordinatorUrl}/rpc`;
+    const nodeUrl = this.nodeUrls[domain].replace(/\/$/, '');
+    const endpoint = nodeUrl.endsWith('/rpc') ? nodeUrl : `${nodeUrl}/rpc`;
 
     // Issue genuine EdDSA token for service authorization
     const bearerToken = customToken ?? KeyManager.getInstance().issueToken('auth-server', 'operator', true);
@@ -190,7 +219,7 @@ export class SaralBackendClient {
 
         if (!resp.ok) {
           throw new SaralBackendError(
-            `HTTP error from Go Coordinator (${resp.status}): ${resp.statusText}`,
+            `HTTP error from SARAL Node (${resp.status}): ${resp.statusText}`,
             -32000,
             undefined,
             correlationId
@@ -223,7 +252,7 @@ export class SaralBackendClient {
       }
     }
 
-    throw lastError || new SaralBackendError('Go Coordinator connection failed after retries', -32603);
+    throw lastError || new SaralBackendError('SARAL Node connection failed after retries', -32603);
   }
 
   /**
@@ -291,8 +320,12 @@ export class SaralBackendClient {
     );
   }
 
+  public async getNodeStatus(domain: WalletDomain = 'foundation'): Promise<NodeStatusResponse> {
+    return this.rpcCall<NodeStatusResponse>('saral_getNodeStatus', {}, undefined, 0, domain);
+  }
+
   public async getCoordinatorStatus(): Promise<CoordinatorStatusResponse> {
-    return this.rpcCall<CoordinatorStatusResponse>('saral_getCoordinatorStatus');
+    return this.getNodeStatus();
   }
 
   public async getNetworkStatus(): Promise<unknown> {

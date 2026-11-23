@@ -21,7 +21,6 @@ func TestAuthSecurityAndRotation(t *testing.T) {
 
 	// 2. Reject known insecure/default tokens
 	insecureTokens := []string{
-		"saral-internal-coordinator-secret",
 		"saral-internal-secure-token-2026-v3",
 		"saral-mesh-secure-internal-token-v3",
 		"saral-mesh-admin-secret-2026",

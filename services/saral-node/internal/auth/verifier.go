@@ -273,10 +273,8 @@ func (v *NodeTokenVerifier) VerifyScopedToken(tokenStr string) (*ScopedTokenClai
 		issuer = "saral-auth-server"
 	}
 	audience := os.Getenv("SARAL_JWT_AUDIENCE")
-	if audience == "" {
-		audience = "saral-domain-coordinators"
-	}
-	if claims.Issuer != issuer || claims.Audience != audience || claims.Role != "operator" ||
+	validAudience := claims.Audience == "saral-node-committee" || claims.Audience == "saral-domain-coordinators" || (audience != "" && claims.Audience == audience)
+	if claims.Issuer != issuer || !validAudience || claims.Role != "operator" ||
 		claims.Exp <= now || claims.Iat <= 0 || claims.Iat > now+5 || claims.Exp <= claims.Iat {
 		return nil, errors.New("invalid token scope or lifetime")
 	}

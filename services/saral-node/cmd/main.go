@@ -32,7 +32,6 @@ func main() {
 	p2pPortFlag := flag.Int("p2p-port", getEnvInt("P2P_PORT", 28001), "P2P port for peer communications")
 	peersFlag := flag.String("peers", getEnv("PEER_NODES", ""), "Comma-separated peer endpoints")
 	vaultDirFlag := flag.String("vault-dir", getEnv("VAULT_DIR", ""), "Vault directory for persistent identity")
-	coordinatorURLFlag := flag.String("coordinator-url", getEnv("COORDINATOR_URL", ""), "Domain Coordinator URL")
 	mtlsPortFlag := flag.Int("mtls-port", getEnvInt("MTLS_PORT", 8443), "Port for TLS 1.3 mTLS server (0 to disable)")
 	tlsDirFlag := flag.String("tls-dir", getEnv("TLS_DIR", "/etc/saral/tls"), "Directory for TLS certs")
 	flag.Parse()
@@ -68,19 +67,7 @@ func main() {
 	defer p2pMgr.Stop()
 
 	// 4. Initialize Relay Router
-	coordURL := *coordinatorURLFlag
-	if coordURL == "" {
-		domainOffset := 0
-		switch domain {
-		case "PUBLIC":
-			domainOffset = 1
-		case "PRIVATE":
-			domainOffset = 2
-		}
-		coordURL = fmt.Sprintf("http://coordinator-%s:%d", strings.ToLower(domain), 9001+domainOffset)
-	}
-
-	relayRouter := relay.NewRelayRouter(idMgr, domain, p2pMgr, coordURL, *vaultDirFlag)
+	relayRouter := relay.NewRelayRouter(idMgr, domain, p2pMgr, *vaultDirFlag)
 	defer relayRouter.Stop()
 
 	// 4b. Initialize AVSS & Proactive Cryptosystems Engines
@@ -328,6 +315,7 @@ func main() {
 	rpc.RegisterRoutes(mux, idMgr, domain, *nodeIndexFlag, p2pMgr, relayRouter, startTime)
 	rpc.RegisterAVSSRoutes(mux, avssEngine, proactiveMgr)
 	rpc.RegisterDKGRoutes(mux, dkgEngine)
+	rpc.RegisterJSONRPCRoutes(mux, idMgr, domain, *nodeIndexFlag, p2pMgr, relayRouter, dkgEngine, startTime)
 
 	// 6. Setup TLS 1.3 / mTLS Server & Client
 	mtlsPort := *mtlsPortFlag
@@ -358,8 +346,8 @@ func main() {
 	}
 
 	addr := fmt.Sprintf(":%d", *portFlag)
-	log.Printf("[SARAL Node - %s] Listening at http://localhost%s (P2P Mesh with %d configured peers, Coordinator: %s)",
-		domain, addr, len(cleanedPeers), *coordinatorURLFlag)
+	log.Printf("[SARAL Node - %s] Listening at http://localhost%s (P2P Mesh with %d configured peers)",
+		domain, addr, len(cleanedPeers))
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("SARAL Node server fatal error: %v", err)

@@ -17,24 +17,25 @@ describe('SARAL Protocol V3 — Internal Backend Client & Multi-Chain Address De
     expect(typeof client.startDkg).toBe('function');
     expect(typeof client.getDkgPublicKey).toBe('function');
     expect(typeof client.derivePublicKey).toBe('function');
+    expect(typeof client.getNodeStatus).toBe('function');
     expect(typeof client.getCoordinatorStatus).toBe('function');
     expect(typeof client.getNetworkStatus).toBe('function');
     expect(typeof client.getDomainStatus).toBe('function');
   });
 
-  it('accepts custom coordinator URL and options', () => {
+  it('accepts custom node URL and options', () => {
     const client = new SaralBackendClient({
-      coordinatorUrl: 'http://custom-coordinator:9002',
+      nodeUrl: 'http://custom-node:8001',
       timeoutMs: 5000,
     });
     expect(client).toBeDefined();
   });
 
   it('formats JSON-RPC payload correctly and structures SaralBackendError', () => {
-    const err = new SaralBackendError('COORDINATOR_UNAVAILABLE', -32000, { detail: 'timeout' }, 'corr-123');
+    const err = new SaralBackendError('NODE_UNAVAILABLE', -32000, { detail: 'timeout' }, 'corr-123');
     expect(err.name).toBe('SaralBackendError');
     expect(err.code).toBe(-32000);
-    expect(err.message).toBe('COORDINATOR_UNAVAILABLE');
+    expect(err.message).toBe('NODE_UNAVAILABLE');
     expect(err.data).toEqual({ detail: 'timeout' });
     expect(err.correlationId).toBe('corr-123');
   });

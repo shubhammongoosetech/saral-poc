@@ -63,9 +63,9 @@ describe('SARAL Protocol V3 — Critical Wallet Address Derivation & Security Fi
     const user = await prisma.user.create({ data: { id: crypto.randomUUID(), loginMethod: 'google' } });
     const start = vi.mocked(saralBackendClient.startDkg);
     const callsBefore = start.mock.calls.length;
-    vi.mocked(saralBackendClient.derivePublicKey).mockRejectedValueOnce(new Error('Temporary coordinator failure'));
+    vi.mocked(saralBackendClient.derivePublicKey).mockRejectedValueOnce(new Error('Temporary node failure'));
     try {
-      await expect(createOrGetWallet(user.id)).rejects.toThrow('Temporary coordinator failure');
+      await expect(createOrGetWallet(user.id)).rejects.toThrow('Temporary node failure');
       const reserved = await store.loadWallet(user.id);
       expect(reserved?.status).toBe('KEY_READY');
       const resumed = await createOrGetWallet(user.id);

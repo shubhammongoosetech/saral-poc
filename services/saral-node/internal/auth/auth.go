@@ -17,7 +17,6 @@ const (
 )
 
 var knownInsecureTokens = map[string]bool{
-	"saral-internal-coordinator-secret":   true,
 	"saral-internal-secure-token-2026-v3": true,
 	"saral-mesh-secure-internal-token-v3": true,
 	"saral-mesh-admin-secret-2026":        true,

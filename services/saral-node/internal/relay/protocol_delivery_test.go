@@ -21,7 +21,7 @@ func TestProtocolRelayWaitsForAcceptanceAndRequiresDestinationEncryption(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewRelayRouter(destination, "FOUNDATION", nil, "", dir)
+	router := NewRelayRouter(destination, "FOUNDATION", nil, dir)
 	defer router.Stop()
 	router.RegisterTrustedParticipant(membership.ParticipantEntry{
 		NodeID: source, Domain: "FOUNDATION", PublicKeyHex: sender.Identity.PublicKeyHex,

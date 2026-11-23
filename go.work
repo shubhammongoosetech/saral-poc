@@ -1,9 +1,7 @@
 go 1.23
 
 use (
-	./services/coordinator
 	./services/saral-node
-	./services/verifier
 	./tests/architecture
 	./tests/avss
 	./tests/cryptography

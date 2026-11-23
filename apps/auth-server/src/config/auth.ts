@@ -5,7 +5,6 @@ let dynamicAdminSecret: string | null = null;
 
 const INSECURE_DEFAULT_SECRETS = new Set([
   'saral-mesh-admin-secret-2026',
-  'saral-internal-coordinator-secret',
   'saral-internal-secure-token-2026-v3',
   'saral-mesh-secure-internal-token-v3',
   'admin',

@@ -102,7 +102,7 @@ export class KeyManager {
   private constructor() {
     this.activeKid = process.env.SARAL_JWT_ACTIVE_KID || 'saral-auth-ed25519-2026-01';
     this.issuer = process.env.SARAL_JWT_ISSUER || 'saral-auth-server';
-    this.audience = process.env.SARAL_JWT_AUDIENCE || 'saral-domain-coordinators';
+    this.audience = process.env.SARAL_JWT_AUDIENCE || 'saral-node-committee';
 
     const rawKeyDir = process.env.KEY_DIR || '';
     const candidates = [
