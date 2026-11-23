@@ -142,6 +142,11 @@ func (im *IdentityManager) Sign(data []byte) string {
 	return hex.EncodeToString(sig)
 }
 
+// GetPrivateKey returns the node's Ed25519 private key.
+func (im *IdentityManager) GetPrivateKey() ed25519.PrivateKey {
+	return im.privateKey
+}
+
 func VerifySignature(pubKeyHex string, data []byte, sigHex string) bool {
 	pubBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil || len(pubBytes) != ed25519.PublicKeySize {

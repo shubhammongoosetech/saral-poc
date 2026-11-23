@@ -142,6 +142,17 @@ func (r *RelayRouter) RegisterTrustedParticipant(p membership.ParticipantEntry) 
 	}
 }
 
+// GetTrustedPublicKeys returns the map of NodeID -> Ed25519 signing public key hex
+func (r *RelayRouter) GetTrustedPublicKeys() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	res := make(map[string]string, len(r.trustedParticipants))
+	for k, v := range r.trustedParticipants {
+		res[k] = v.PublicKeyHex
+	}
+	return res
+}
+
 func (r *RelayRouter) loadSeenMessagesFromDisk() {
 	if r.vaultDir == "" {
 		return

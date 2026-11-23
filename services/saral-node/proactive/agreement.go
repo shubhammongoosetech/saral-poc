@@ -135,6 +135,11 @@ func NewValidatedAgreementInstance(
 	}
 
 	// Auto-initialize threshold common coin keys for committee
+	// [SECURITY NOTICE - NOT UNPREDICTABLE / TEST ONLY / SIMULATION]
+	// In production, threshold coin keys MUST be generated via a separate DKG protocol instance
+	// or trusted setup. Deriving coin seeds from public committee and epoch strings provides
+	// deterministic pseudo-random common coin behavior for proactive refresh consensus testing
+	// and is NOT cryptographically unpredictable to an adversary who knows the committee parameters.
 	coinSeed := fmt.Sprintf("saral-proactive-coin-%s-epoch-%d", committeeID, epoch)
 	shares, _, err := cryptography.SetupThresholdCoinKeys(committeeID, committee, t, coinSeed)
 	if err == nil {

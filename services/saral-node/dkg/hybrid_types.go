@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	MessageTypeHybridDKGCertificate  = "HYBRID_DKG_CERT"
 	MessageTypeHybridDKGProposal     = "HYBRID_DKG_PROPOSAL"
 	MessageTypeHybridDKGEcho         = "HYBRID_DKG_ECHO"
 	MessageTypeHybridDKGReady        = "HYBRID_DKG_READY"

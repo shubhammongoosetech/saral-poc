@@ -32,8 +32,17 @@ func main() {
 	storageDirFlag := flag.String("storage-dir", getEnv("STORAGE_DIR", ""), "Directory for persistent DKG public sessions")
 	flag.Parse()
 
-	domain := membership.DomainType(strings.ToUpper(*domainFlag))
+	domainStr := strings.ToUpper(*domainFlag)
+	domain := membership.DomainType(domainStr)
 	log.Printf("[SARAL Coordinator - %s] Initializing on port %d...", domain, *portFlag)
+
+	// Validate Kate-Huang-Goldberg HybridVSS parameters: n >= 3t + 2f + 1
+	nodesCount := getEnvInt(fmt.Sprintf("SARAL_%s_NODES", domainStr), *nodesFlag)
+	tVal := getEnvInt(fmt.Sprintf("SARAL_%s_FAULTS_T", domainStr), getEnvInt("SARAL_FAULTS_T", 1))
+	fVal := getEnvInt(fmt.Sprintf("SARAL_%s_CRASH_F", domainStr), getEnvInt("SARAL_CRASH_F", 0))
+	if err := rpc.ValidateHybridVSSParameters(nodesCount, tVal, fVal); err != nil {
+		log.Fatalf("[SARAL Coordinator - %s] Fatal: %v", domain, err)
+	}
 
 	// 1. Setup Node Registry
 	var registry *membership.NodeRegistry

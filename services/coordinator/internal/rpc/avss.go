@@ -59,6 +59,16 @@ func ValidateProactiveParameters(n, k, t int) error {
 	return nil
 }
 
+// ValidateHybridVSSParameters verifies the Kate-Huang-Goldberg bound:
+// n >= 3t + 2f + 1
+func ValidateHybridVSSParameters(n, t, f int) error {
+	required := 3*t + 2*f + 1
+	if n < required {
+		return fmt.Errorf("HybridVSS bound violated: requires n >= 3t + 2f + 1 (got n=%d, required=%d for t=%d, f=%d)", n, required, t, f)
+	}
+	return nil
+}
+
 // getNodeEndpoint resolves the HTTP endpoint for a given node ID
 func (s *Server) getNodeEndpoint(nodeID string) string {
 	if n, ok := s.registry.GetNode(nodeID); ok && n.Endpoint != "" {

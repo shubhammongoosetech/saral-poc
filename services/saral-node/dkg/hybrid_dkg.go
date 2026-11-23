@@ -36,6 +36,7 @@ type HybridDKGInstance struct {
 	K           int
 	T           int
 	F           int // crash failure bound
+	Curve       string
 
 	// Round-based Leader State (Figure 3)
 	Round         int
@@ -111,6 +112,14 @@ func NewHybridDKGInstance(
 	}
 	inst.CurrentLeader = inst.getLeaderForRound(1)
 	return inst
+}
+
+// GetCurve returns the designated curve or defaults to nist-p256
+func (inst *HybridDKGInstance) GetCurve() string {
+	if inst != nil && inst.Curve != "" {
+		return inst.Curve
+	}
+	return "nist-p256"
 }
 
 // getLeaderForRound returns the deterministic leader for a round using cyclic permutation pi(r).
@@ -525,8 +534,18 @@ func (inst *HybridDKGInstance) CombineDKGShares(
 	copy(sortedQUAL, agreedQUAL)
 	sort.Strings(sortedQUAL)
 
-	combinedShare := cryptography.NewFieldElement(0)
-	combinedBlind := cryptography.NewFieldElement(0)
+	curve := inst.GetCurve()
+	if inst.Curve == "" {
+		for _, v := range vssShares {
+			if v != nil && v.Curve != "" {
+				curve = v.Curve
+				break
+			}
+		}
+	}
+	ord := cryptography.GetCurveOrder(curve)
+	combinedShare := cryptography.NewFieldElementWithOrder(0, ord)
+	combinedBlind := cryptography.NewFieldElementWithOrder(0, ord)
 
 	for _, dealerID := range sortedQUAL {
 		vssSess, exists := vssShares[dealerID]
@@ -538,7 +557,7 @@ func (inst *HybridDKGInstance) CombineDKGShares(
 	}
 
 	// 3. Master Secret Commitment: C = \sum_{d \in QUAL} C^{(d)}_{0,0}
-	masterSecretCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	masterSecretCommit := cryptography.ZeroPointForCurve(curve)
 	for _, dealerID := range sortedQUAL {
 		commit, exists := peerCommitments[dealerID]
 		if !exists || commit == nil {
@@ -548,7 +567,7 @@ func (inst *HybridDKGInstance) CombineDKGShares(
 	}
 
 	// 4. Master Signing Public Key: Y = \sum_{d \in QUAL} V_d = x * G
-	masterSigningPubKey := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	masterSigningPubKey := cryptography.ZeroPointForCurve(curve)
 	hasExplicitPublicKeys := true
 	for _, dealerID := range sortedQUAL {
 		pk, exists := peerPublicKeys[dealerID]
@@ -566,8 +585,8 @@ func (inst *HybridDKGInstance) CombineDKGShares(
 	shareCommitment := cryptography.PedersenCommitment(combinedShare, combinedBlind)
 
 	// Mathematical consistency verification against commitment matrices
-	selfIdxFE := cryptography.NewFieldElement(int64(inst.SelfIndex))
-	expectedShareCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	selfIdxFE := cryptography.NewFieldElementWithOrder(int64(inst.SelfIndex), ord)
+	expectedShareCommit := cryptography.ZeroPointForCurve(curve)
 	for _, dealerID := range sortedQUAL {
 		cm := peerCommitmentMatrices[dealerID]
 		if cm == nil {
@@ -580,9 +599,14 @@ func (inst *HybridDKGInstance) CombineDKGShares(
 		return nil, errors.New("cryptographic consistency failed: share commitment does not match aggregated matrix commitments")
 	}
 
+	propHash := inst.DecidedProposalHash
+	if propHash == "" {
+		propHash = ComputeProposalHash(inst.SessionID, inst.CommitteeID, inst.Round, inst.CurrentLeader, sortedQUAL)
+	}
+
 	return &HybridDKGResult{
 		AgreedQUAL:             sortedQUAL,
-		ProposalHash:           inst.DecidedProposalHash,
+		ProposalHash:           propHash,
 		CombinedShare:          combinedShare,
 		CombinedBlindShare:     combinedBlind,
 		MasterSigningPublicKey: masterSigningPubKey,

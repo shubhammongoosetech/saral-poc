@@ -58,6 +58,7 @@ type Session struct {
 	N           int
 	K           int
 	T           int
+	F           int
 	Curve       string
 	Committee   []string // List of NodeIDs in canonical order
 
@@ -150,7 +151,7 @@ func (s *Session) CanSendReady() bool {
 			echoCount++
 		}
 	}
-	if echoCount >= s.N-s.T {
+	if echoCount >= HybridVSSEchoQuorum(s.N, s.T) {
 		return true
 	}
 
@@ -161,14 +162,14 @@ func (s *Session) CanSendReady() bool {
 			readyCount++
 		}
 	}
-	if readyCount >= s.T+1 {
+	if readyCount >= HybridVSSReadyStepQuorum(s.T) {
 		return true
 	}
 
 	return false
 }
 
-// CanComplete checks if the node has received >= k + t valid READYs agreeing on commitments
+// CanComplete checks if the node has received >= HybridVSSCompletionQuorum valid READYs agreeing on commitments
 func (s *Session) CanComplete() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -187,8 +188,8 @@ func (s *Session) CanComplete() bool {
 		}
 	}
 
-	// Completion predicate: >= k + t READY messages
-	return readyCount >= s.K+s.T
+	// Completion predicate: >= HybridVSSCompletionQuorum READY messages
+	return readyCount >= HybridVSSCompletionQuorum(s.N, s.T, s.F)
 }
 
 // FinalizeShare derives and locks in the final secret share S_i = a_i(0)

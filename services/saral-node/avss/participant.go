@@ -263,13 +263,17 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 	}
 
 	var readyMsgsToSend []*ReadyMessage
-	// Check if we can send READY (via n-t ECHOs rule OR t+1 READYs amplification rule)
-	if !s.SentReady && s.RowPoly != nil && (len(s.ReceivedEchos) >= s.N-s.T || readyCount >= s.T+1) {
+	echoQuorum := HybridVSSEchoQuorum(s.N, s.T)
+	readyStepQuorum := HybridVSSReadyStepQuorum(s.T)
+	completionQuorum := HybridVSSCompletionQuorum(s.N, s.T, s.F)
+
+	// Check if we can send READY (via HybridVSSEchoQuorum ECHOs rule OR HybridVSSReadyStepQuorum READYs amplification rule)
+	if !s.SentReady && s.RowPoly != nil && (len(s.ReceivedEchos) >= echoQuorum || readyCount >= readyStepQuorum) {
 		readyMsgsToSend = s.generateReadyMessages()
 	}
 
-	// Check if completion rule is satisfied (>= k + t READYs)
-	if s.State != StateSharingCompleted && s.RowPoly != nil && readyCount >= s.K+s.T {
+	// Check if completion rule is satisfied (>= HybridVSSCompletionQuorum READYs)
+	if s.State != StateSharingCompleted && s.RowPoly != nil && readyCount >= completionQuorum {
 		s.Share = s.RowPoly.Coeffs[0]
 		s.BlindShare = s.RowBlindPoly.Coeffs[0]
 		selfIndexFE := cryptography.NewFieldElementWithOrder(int64(s.SelfIndex), curveOrder)
@@ -318,13 +322,16 @@ func (s *Session) ProcessReadyMessage(ready *ReadyMessage) (bool, []*ReadyMessag
 	s.ReceivedReadys[ready.SenderID] = ready
 
 	var readyMsgsToSend []*ReadyMessage
-	// Amplification rule: if >= t + 1 READYs received and not yet sent READY and we have polynomials
-	if !s.SentReady && s.RowPoly != nil && len(s.ReceivedReadys) >= s.T+1 {
+	readyStepQuorum := HybridVSSReadyStepQuorum(s.T)
+	completionQuorum := HybridVSSCompletionQuorum(s.N, s.T, s.F)
+
+	// Amplification rule: if >= readyStepQuorum READYs received and not yet sent READY and we have polynomials
+	if !s.SentReady && s.RowPoly != nil && len(s.ReceivedReadys) >= readyStepQuorum {
 		readyMsgsToSend = s.generateReadyMessages()
 	}
 
-	// Completion rule: if >= k + t READYs received and we have polynomials
-	if s.State != StateSharingCompleted && s.RowPoly != nil && len(s.ReceivedReadys) >= s.K+s.T {
+	// Completion rule: if >= completionQuorum READYs received and we have polynomials
+	if s.State != StateSharingCompleted && s.RowPoly != nil && len(s.ReceivedReadys) >= completionQuorum {
 		s.Share = s.RowPoly.Coeffs[0]
 		s.BlindShare = s.RowBlindPoly.Coeffs[0]
 		selfIndexFE := cryptography.NewFieldElementWithOrder(int64(s.SelfIndex), curveOrder)

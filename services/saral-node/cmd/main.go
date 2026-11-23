@@ -43,6 +43,14 @@ func main() {
 		defaultID = fmt.Sprintf("saral-%s-%d", strings.ToLower(domain), *nodeIndexFlag)
 	}
 
+	// Validate Kate-Huang-Goldberg HybridVSS parameters: n >= 3t + 2f + 1
+	nodesCount := getEnvInt(fmt.Sprintf("SARAL_%s_NODES", domain), getEnvInt("TOTAL_NODES", 5))
+	tVal := getEnvInt(fmt.Sprintf("SARAL_%s_FAULTS_T", domain), getEnvInt("SARAL_FAULTS_T", 1))
+	fVal := getEnvInt(fmt.Sprintf("SARAL_%s_CRASH_F", domain), getEnvInt("SARAL_CRASH_F", 0))
+	if err := avss.ValidateHybridVSSParameters(nodesCount, tVal, fVal); err != nil {
+		log.Fatalf("[SARAL Node - %s] Fatal: %v", domain, err)
+	}
+
 	startTime := time.Now()
 
 	// 1. Load or Generate Persistent Ed25519 Identity
@@ -96,6 +104,7 @@ func main() {
 	avssEngine := avss.NewEngine(idMgr.Identity.NodeID, domain, *vaultDirFlag, shareStore, relayAdapter)
 	proactiveMgr := proactive.NewManager(idMgr.Identity.NodeID, domain, shareStore, avssEngine, relayAdapter)
 	dkgEngine := dkg.NewEngine(idMgr.Identity.NodeID, domain, *vaultDirFlag, shareStore, avssEngine, relayAdapter)
+	dkgEngine.SetIdentity(idMgr.GetPrivateKey(), relayRouter.GetTrustedPublicKeys())
 	avssEngine.AddCompletionListener(dkgEngine.OnAVSSSubprotocolCompleted)
 
 	// Register AVSS and Proactive relay message handlers
@@ -147,6 +156,68 @@ func main() {
 		return proactiveMgr.HandleEpochStart(&startMsg)
 	})
 
+	// HybridDKG Message Handlers (Kate-Huang-Goldberg Leader-Based Protocol)
+	relayRouter.RegisterMessageHandler(dkg.MessageTypeHybridDKGCertificate, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var cert dkg.ValidityCertificate
+		if err := json.Unmarshal(rawBytes, &cert); err != nil {
+			return err
+		}
+		return dkgEngine.HandleHybridDKGCertificate(&cert)
+	})
+
+	relayRouter.RegisterMessageHandler(dkg.MessageTypeHybridDKGProposal, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var prop dkg.LeaderProposalMessage
+		if err := json.Unmarshal(rawBytes, &prop); err != nil {
+			return err
+		}
+		return dkgEngine.HandleHybridDKGProposal(&prop)
+	})
+
+	relayRouter.RegisterMessageHandler(dkg.MessageTypeHybridDKGEcho, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var echo dkg.ProposalEchoMessage
+		if err := json.Unmarshal(rawBytes, &echo); err != nil {
+			return err
+		}
+		return dkgEngine.HandleHybridDKGEcho(&echo)
+	})
+
+	relayRouter.RegisterMessageHandler(dkg.MessageTypeHybridDKGReady, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var ready dkg.ProposalReadyMessage
+		if err := json.Unmarshal(rawBytes, &ready); err != nil {
+			return err
+		}
+		return dkgEngine.HandleHybridDKGReady(&ready)
+	})
+
+	relayRouter.RegisterMessageHandler(dkg.MessageTypeHybridDKGLeaderChange, func(msg *relay.RelayMessage) error {
+		rawBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			return err
+		}
+		var lc dkg.LeaderChangeMessage
+		if err := json.Unmarshal(rawBytes, &lc); err != nil {
+			return err
+		}
+		return dkgEngine.HandleHybridDKGLeaderChange(&lc)
+	})
+
+	// Proactive Refresh Agreement Handlers
 	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementPropose, func(msg *relay.RelayMessage) error {
 		rawBytes, err := json.Marshal(msg.Payload)
 		if err != nil {
@@ -156,12 +227,7 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &propMsg); err != nil {
 			return err
 		}
-		dkgErr := dkgEngine.HandleAgreementPropose(&propMsg)
-		proErr := proactiveMgr.HandleAgreementPropose(&propMsg)
-		if dkgErr == nil || proErr == nil {
-			return nil
-		}
-		return dkgErr
+		return proactiveMgr.HandleAgreementPropose(&propMsg)
 	})
 
 	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementEcho, func(msg *relay.RelayMessage) error {
@@ -173,12 +239,7 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &echoMsg); err != nil {
 			return err
 		}
-		dkgErr := dkgEngine.HandleAgreementEcho(&echoMsg)
-		proErr := proactiveMgr.HandleAgreementEcho(&echoMsg)
-		if dkgErr == nil || proErr == nil {
-			return nil
-		}
-		return dkgErr
+		return proactiveMgr.HandleAgreementEcho(&echoMsg)
 	})
 
 	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementReady, func(msg *relay.RelayMessage) error {
@@ -190,12 +251,7 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &readyMsg); err != nil {
 			return err
 		}
-		dkgErr := dkgEngine.HandleAgreementReady(&readyMsg)
-		proErr := proactiveMgr.HandleAgreementReady(&readyMsg)
-		if dkgErr == nil || proErr == nil {
-			return nil
-		}
-		return dkgErr
+		return proactiveMgr.HandleAgreementReady(&readyMsg)
 	})
 
 	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementVote, func(msg *relay.RelayMessage) error {
@@ -207,12 +263,7 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &voteMsg); err != nil {
 			return err
 		}
-		dkgErr := dkgEngine.HandleAgreementVote(&voteMsg)
-		proErr := proactiveMgr.HandleAgreementVote(&voteMsg)
-		if dkgErr == nil || proErr == nil {
-			return nil
-		}
-		return dkgErr
+		return proactiveMgr.HandleAgreementVote(&voteMsg)
 	})
 
 	relayRouter.RegisterMessageHandler(proactive.MessageTypeAgreementCoinShare, func(msg *relay.RelayMessage) error {
@@ -224,12 +275,7 @@ func main() {
 		if err := json.Unmarshal(rawBytes, &coinMsg); err != nil {
 			return err
 		}
-		dkgErr := dkgEngine.HandleAgreementCoinShare(&coinMsg)
-		proErr := proactiveMgr.HandleAgreementCoinShare(&coinMsg)
-		if dkgErr == nil || proErr == nil {
-			return nil
-		}
-		return dkgErr
+		return proactiveMgr.HandleAgreementCoinShare(&coinMsg)
 	})
 
 	relayRouter.RegisterMessageHandler(dkg.MessageTypeDKGInit, func(msg *relay.RelayMessage) error {

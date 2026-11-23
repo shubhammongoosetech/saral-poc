@@ -1,28 +1,32 @@
 package dkg
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/saral-protocol/saral-poc/services/saral-node/avss"
 	"github.com/saral-protocol/saral-poc/services/saral-node/cryptography"
-	"github.com/saral-protocol/saral-poc/services/saral-node/proactive"
 	"github.com/saral-protocol/saral-poc/services/saral-node/vault"
 )
 
 // Engine orchestrates Dealerless DKG sessions on a SARAL node
 type Engine struct {
-	NodeID     string
-	Domain     string
-	VaultDir   string
-	ShareStore *vault.ShareStore
-	AVSSEngine *avss.Engine
-	Relay      avss.RelaySender
+	NodeID      string
+	Domain      string
+	VaultDir    string
+	ShareStore  *vault.ShareStore
+	AVSSEngine  *avss.Engine
+	Relay       avss.RelaySender
+	PrivateKey  ed25519.PrivateKey
+	PeerPubKeys map[string]string
 
 	sessions map[string]*Session
 	mu       sync.RWMutex
@@ -36,14 +40,23 @@ func NewEngine(
 	relay avss.RelaySender,
 ) *Engine {
 	return &Engine{
-		NodeID:     nodeID,
-		Domain:     domain,
-		VaultDir:   vaultDir,
-		ShareStore: shareStore,
-		AVSSEngine: avssEngine,
-		Relay:      relay,
-		sessions:   make(map[string]*Session),
+		NodeID:      nodeID,
+		Domain:      domain,
+		VaultDir:    vaultDir,
+		ShareStore:  shareStore,
+		AVSSEngine:  avssEngine,
+		Relay:       relay,
+		PeerPubKeys: make(map[string]string),
+		sessions:    make(map[string]*Session),
 	}
+}
+
+// SetIdentity configures the node's Ed25519 private key and trusted peer public keys for HybridDKG
+func (e *Engine) SetIdentity(privKey ed25519.PrivateKey, peerPubKeys map[string]string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.PrivateKey = privKey
+	e.PeerPubKeys = peerPubKeys
 }
 
 // CreateSession initializes a new DKG session on the node
@@ -90,6 +103,21 @@ func (e *Engine) CreateSessionWithBinding(
 	}
 	sess.Curve = curve
 	sess.ChainFamily = chainFamily
+
+	// Initialize HybridDKG instance with node's Ed25519 identity
+	privKey := e.PrivateKey
+	if len(privKey) == 0 {
+		_, privKey, _ = ed25519.GenerateKey(nil)
+	}
+	peerPubKeys := e.PeerPubKeys
+	if peerPubKeys == nil {
+		peerPubKeys = make(map[string]string)
+	}
+	sess.HybridDKG = NewHybridDKGInstance(
+		sessionID, committeeID, e.NodeID, selfIndex,
+		committee, n, k, t, 0, privKey, peerPubKeys,
+	)
+	sess.HybridDKG.Curve = sess.Curve
 
 	e.sessions[sessionID] = sess
 	log.Printf("[DKG Engine - %s] Session %s created for committee %s (n=%d, k=%d, t=%d, index=%d, wallet=%s, key=%s)",
@@ -149,6 +177,9 @@ func (e *Engine) StartContribution(sessionID string) error {
 	}
 	e.broadcastDKG(sess.Committee, MessageTypeDKGContribution, contribMsg)
 
+	// Start leader timeout monitor to trigger leader change if current leader fails
+	e.startLeaderTimeoutMonitor(sess)
+
 	// 2. Delegate AVSS distribution to local AVSS engine
 	go func() {
 		subSessionID := fmt.Sprintf("dkg-%s-contrib-%s", sessionID, e.NodeID)
@@ -181,92 +212,48 @@ func (e *Engine) OnAVSSSubprotocolCompleted(subSessionID string, avssSess *avss.
 			log.Printf("[DKG Engine - %s] Recorded completed AVSS contribution from dealer %s in session %s (%d/%d verified)",
 				e.NodeID, dealerID, sess.SessionID, len(sess.CompletedSharings), sess.N-sess.T)
 
-			// If ready to propose qualified set, propose automatically
-			if sess.CanProposeQualifiedSet() && !sess.Agreement.IsDecided && !sess.proposed {
-				sess.proposed = true
-				go func(s *Session) {
-					// Wait up to 2 seconds for peer contributions to arrive (all N nodes in normal runs)
-					deadline := time.Now().Add(2 * time.Second)
-					for time.Now().Before(deadline) {
-						s.mu.RLock()
-						count := len(s.CompletedSharings)
-						s.mu.RUnlock()
-						if count >= s.N {
-							break
-						}
-						time.Sleep(30 * time.Millisecond)
-					}
-					if s.Agreement.IsDecided {
-						return
-					}
-					candidateSet := s.GetCandidateQualifiedSet()
-					propMsg := &proactive.AgreementProposeMessage{
-						SessionID:    s.SessionID,
-						CommitteeID:  s.CommitteeID,
-						Epoch:        s.Epoch,
-						ProposerID:   e.NodeID,
-						CandidateSet: candidateSet,
-					}
-					e.proposeQualifiedSet(s, propMsg)
-				}(sess)
+			// 1. Issue and broadcast ValidityCertificate for this dealer
+			sess.ensureHybridDKG()
+			cert, err := sess.HybridDKG.GenerateCompletionCertificate(dealerID, avssSess.CommitmentsHash, sess.Epoch)
+			if err == nil && cert != nil {
+				e.broadcastDKG(sess.Committee, MessageTypeHybridDKGCertificate, cert)
 			}
+
+			// 2. If this node is the leader and can propose, trigger proposal
+			e.checkAndTriggerProposal(sess)
 			break
 		}
 	}
 }
 
-func (e *Engine) proposeQualifiedSet(sess *Session, propMsg *proactive.AgreementProposeMessage) {
-	echo, err := sess.Agreement.ProcessProposal(propMsg)
-	if err == nil && echo != nil {
-		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementEcho, echo)
-	}
-	e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementPropose, propMsg)
+func (e *Engine) checkAndTriggerProposal(sess *Session) {
+	if sess.HybridDKG != nil && sess.HybridDKG.CanPropose() && !sess.HybridDKG.IsDecided && !sess.proposed {
+		sess.proposed = true
+		go func(s *Session) {
+			collectMs := getEnvInt("SARAL_HYBRID_DKG_COLLECT_MS", 150)
+			time.Sleep(time.Duration(collectMs) * time.Millisecond)
 
-	if sess.Agreement.IsDecided {
-		_ = e.finalizeDKG(sess, sess.Agreement.DecidedSet)
-	}
-}
-
-// HandleAgreementPropose processes an incoming qualified set proposal
-func (e *Engine) HandleAgreementPropose(msg *proactive.AgreementProposeMessage) error {
-	sess := e.findSession(msg.SessionID, msg.CommitteeID)
-	if sess == nil {
-		return errors.New("no active DKG session for agreement propose")
-	}
-
-	go func() {
-		// Wait until all dealers in candidateSet have finished AVSS sharing (up to 5s)
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			allDone := true
-			sess.mu.RLock()
-			for _, dealerID := range msg.CandidateSet {
-				if sub, exists := sess.CompletedSharings[dealerID]; !exists || sub == nil || sub.Share == nil {
-					allDone = false
-					break
-				}
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if s.HybridDKG.IsDecided {
+				return
 			}
-			sess.mu.RUnlock()
-			if allDone {
-				break
+			prop, err := s.HybridDKG.CreateProposal()
+			if err != nil {
+				log.Printf("[DKG Engine - %s] Failed to create leader proposal: %v", e.NodeID, err)
+				s.proposed = false
+				return
 			}
-			time.Sleep(20 * time.Millisecond)
-		}
+			log.Printf("[DKG Engine - %s] Leader broadcast proposal for session %s (round %d, QUAL=%v)",
+				e.NodeID, s.SessionID, prop.Round, prop.QualifiedSet)
+			e.broadcastDKG(s.Committee, MessageTypeHybridDKGProposal, prop)
 
-		echo, err := sess.Agreement.ProcessProposal(msg)
-		if err != nil {
-			log.Printf("[DKG Engine - %s] ProcessProposal error from %s: %v", e.NodeID, msg.ProposerID, err)
-			return
-		}
-		if echo != nil {
-			e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementEcho, echo)
-		}
-
-		if sess.Agreement.IsDecided {
-			_ = e.finalizeDKG(sess, sess.Agreement.DecidedSet)
-		}
-	}()
-	return nil
+			echo, err := s.HybridDKG.ProcessProposal(prop)
+			if err == nil && echo != nil {
+				e.broadcastDKG(s.Committee, MessageTypeHybridDKGEcho, echo)
+			}
+		}(sess)
+	}
 }
 
 // HandleDKGInit processes an incoming DKG initialization broadcast
@@ -306,94 +293,159 @@ func (e *Engine) HandleDKGContribution(msg *DKGContributionMessage) error {
 	return nil
 }
 
-// HandleAgreementEcho processes an agreement echo for the qualified set
-func (e *Engine) HandleAgreementEcho(echo *proactive.AgreementEchoMessage) error {
-	sess := e.findSession(echo.SessionID, echo.CommitteeID)
+// HandleHybridDKGCertificate processes an incoming dealer completion certificate
+func (e *Engine) HandleHybridDKGCertificate(cert *ValidityCertificate) error {
+	sess := e.findSession(cert.SessionID, "")
 	if sess == nil {
-		return errors.New("no active DKG session for agreement echo")
+		return errors.New("no active DKG session for certificate")
 	}
 
-	ready, err := sess.Agreement.ProcessEcho(echo)
+	sess.ensureHybridDKG()
+	if err := sess.HybridDKG.RecordCompletionCertificate(cert); err != nil {
+		return err
+	}
+
+	e.checkAndTriggerProposal(sess)
+	return nil
+}
+
+// HandleHybridDKGProposal processes an incoming qualified set proposal from current round leader
+func (e *Engine) HandleHybridDKGProposal(prop *LeaderProposalMessage) error {
+	sess := e.findSession(prop.SessionID, prop.CommitteeID)
+	if sess == nil {
+		return errors.New("no active DKG session for proposal")
+	}
+
+	go func() {
+		// Wait until all dealers in QualifiedSet have finished AVSS sharing locally (up to 4s)
+		deadline := time.Now().Add(4 * time.Second)
+		for time.Now().Before(deadline) {
+			allDone := true
+			sess.mu.RLock()
+			for _, dealerID := range prop.QualifiedSet {
+				if sub, exists := sess.CompletedSharings[dealerID]; !exists || sub == nil || sub.Share == nil {
+					allDone = false
+					break
+				}
+			}
+			sess.mu.RUnlock()
+			if allDone {
+				break
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+
+		echo, err := sess.HybridDKG.ProcessProposal(prop)
+		if err != nil {
+			log.Printf("[DKG Engine - %s] ProcessProposal error from leader %s: %v", e.NodeID, prop.LeaderID, err)
+			return
+		}
+		if echo != nil {
+			e.broadcastDKG(sess.Committee, MessageTypeHybridDKGEcho, echo)
+		}
+	}()
+	return nil
+}
+
+// HandleHybridDKGEcho processes an incoming proposal echo message
+func (e *Engine) HandleHybridDKGEcho(echo *ProposalEchoMessage) error {
+	sess := e.findSession(echo.SessionID, echo.CommitteeID)
+	if sess == nil {
+		return errors.New("no active DKG session for proposal echo")
+	}
+
+	ready, err := sess.HybridDKG.ProcessProposalEcho(echo)
 	if err != nil {
 		return err
 	}
 	if ready != nil {
-		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementReady, ready)
+		e.broadcastDKG(sess.Committee, MessageTypeHybridDKGReady, ready)
 	}
 	return nil
 }
 
-// HandleAgreementReady processes an agreement ready message and checks for consensus decision
-func (e *Engine) HandleAgreementReady(ready *proactive.AgreementReadyMessage) error {
+// HandleHybridDKGReady processes an incoming proposal ready message and checks for consensus decision
+func (e *Engine) HandleHybridDKGReady(ready *ProposalReadyMessage) error {
 	sess := e.findSession(ready.SessionID, ready.CommitteeID)
 	if sess == nil {
-		return errors.New("no active DKG session for agreement ready")
+		return errors.New("no active DKG session for proposal ready")
 	}
 
-	decidedSet, decided, readyToSend, err := sess.Agreement.ProcessReady(ready)
+	decidedQUAL, decided, readyToSend, err := sess.HybridDKG.ProcessProposalReady(ready)
 	if err != nil {
 		return err
 	}
-
 	if readyToSend != nil {
-		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementReady, readyToSend)
+		e.broadcastDKG(sess.Committee, MessageTypeHybridDKGReady, readyToSend)
 	}
-
 	if decided {
-		return e.finalizeDKG(sess, decidedSet)
+		return e.finalizeDKG(sess, decidedQUAL)
 	}
 	return nil
 }
 
-// HandleAgreementVote processes an ABBA vote message
-func (e *Engine) HandleAgreementVote(msg *proactive.AgreementVoteMessage) error {
-	sess := e.findSession(msg.SessionID, msg.CommitteeID)
+// HandleHybridDKGLeaderChange processes an incoming leader change message
+func (e *Engine) HandleHybridDKGLeaderChange(lc *LeaderChangeMessage) error {
+	sess := e.findSession(lc.SessionID, lc.CommitteeID)
 	if sess == nil {
-		return errors.New("no active DKG session for agreement vote")
+		return errors.New("no active DKG session for leader change")
 	}
 
-	nextVote, coinMsg, decided, decidedSet, err := sess.Agreement.ProcessVote(msg)
+	newRound, newLeader, changed, echoLC, err := sess.HybridDKG.ProcessLeaderChange(lc)
 	if err != nil {
 		return err
 	}
-
-	if nextVote != nil {
-		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementVote, nextVote)
+	if echoLC != nil {
+		e.broadcastDKG(sess.Committee, MessageTypeHybridDKGLeaderChange, echoLC)
 	}
-	if coinMsg != nil {
-		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementCoinShare, coinMsg)
-	}
-
-	if decided {
-		return e.finalizeDKG(sess, decidedSet)
+	if changed {
+		log.Printf("[DKG Engine - %s] LEADER ROTATED to %s for round %d in session %s",
+			e.NodeID, newLeader, newRound, sess.SessionID)
+		e.checkAndTriggerProposal(sess)
 	}
 	return nil
 }
 
-// HandleAgreementCoinShare processes an incoming threshold coin share
-func (e *Engine) HandleAgreementCoinShare(msg *proactive.AgreementCoinShareMessage) error {
-	sess := e.findSession(msg.SessionID, msg.CommitteeID)
-	if sess == nil {
-		return errors.New("no active DKG session for agreement coin share")
-	}
+func (e *Engine) startLeaderTimeoutMonitor(sess *Session) {
+	go func() {
+		timeoutMs := getEnvInt("SARAL_HYBRID_DKG_TIMEOUT_MS", 4000)
+		ticker := time.NewTicker(time.Duration(timeoutMs) * time.Millisecond)
+		defer ticker.Stop()
 
-	nextVote, decided, decidedSet, err := sess.Agreement.ProcessCoinShare(msg)
-	if err != nil {
-		return err
-	}
+		for {
+			select {
+			case <-ticker.C:
+				sess.mu.RLock()
+				decided := sess.HybridDKG != nil && sess.HybridDKG.IsDecided
+				completedSharings := len(sess.CompletedSharings)
+				minSharings := sess.N - sess.T
+				sess.mu.RUnlock()
 
-	if nextVote != nil {
-		e.broadcastDKG(sess.Committee, proactive.MessageTypeAgreementVote, nextVote)
-	}
+				if decided {
+					return
+				}
 
-	if decided {
-		return e.finalizeDKG(sess, decidedSet)
-	}
-	return nil
+				if completedSharings >= minSharings {
+					sess.mu.RLock()
+					isLeader := sess.HybridDKG != nil && sess.HybridDKG.SelfID == sess.HybridDKG.CurrentLeader
+					sess.mu.RUnlock()
+
+					if !isLeader {
+						lc, err := sess.HybridDKG.SuspectLeader("leader_proposal_timeout")
+						if err == nil && lc != nil {
+							log.Printf("[DKG Engine - %s] Suspecting leader %s for session %s round %d: %v",
+								e.NodeID, lc.SuspectedLeaderID, sess.SessionID, lc.Round, lc.Reason)
+							e.broadcastDKG(sess.Committee, MessageTypeHybridDKGLeaderChange, lc)
+						}
+					}
+				}
+			}
+		}
+	}()
 }
 
 func (e *Engine) finalizeDKG(sess *Session, agreedQUAL []string) error {
-	log.Printf("[DKG Engine - %s] AGREEMENT DECIDED on Qualified Set QUAL*=%v", e.NodeID, agreedQUAL)
+	log.Printf("[DKG Engine - %s] HYBRID DKG DECIDED on Qualified Set QUAL*=%v", e.NodeID, agreedQUAL)
 
 	if err := sess.AggregateShares(agreedQUAL); err != nil {
 		log.Printf("[DKG Engine - %s] Failed to aggregate shares: %v", e.NodeID, err)
@@ -414,6 +466,15 @@ func (e *Engine) finalizeDKG(sess *Session, agreedQUAL []string) error {
 	}
 	e.broadcastDKG(sess.Committee, MessageTypeDKGComplete, notify)
 	return nil
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	if v := os.Getenv(key); v != "" {
+		if val, err := strconv.Atoi(v); err == nil {
+			return val
+		}
+	}
+	return defaultVal
 }
 
 func (e *Engine) findSession(sessionID, committeeID string) *Session {
@@ -474,10 +535,10 @@ func (e *Engine) GetPublicShareContribution(
 	keyID, sessionID, committeeID, curve string,
 	epoch uint64,
 ) (string, int, uint64, string, *vault.ShareRecordMetadata, error) {
-	if strings.TrimSpace(curve) == "" {
-		return "", 0, 0, "", nil, errors.New("curve parameter is strictly required")
+	normCurve := ""
+	if strings.TrimSpace(curve) != "" {
+		normCurve = cryptography.NormalizeCurveName(curve)
 	}
-	normCurve := cryptography.NormalizeCurveName(curve)
 
 	if epoch == 0 {
 		epoch = 1
@@ -502,7 +563,13 @@ func (e *Engine) GetPublicShareContribution(
 				defer share.Zero()
 
 				vaultCurve := cryptography.NormalizeCurveName(meta.Curve)
-				if vaultCurve != "" && vaultCurve != normCurve {
+				if normCurve == "" {
+					if vaultCurve != "" {
+						normCurve = vaultCurve
+					} else {
+						normCurve = "secp256k1"
+					}
+				} else if vaultCurve != "" && vaultCurve != normCurve {
 					return "", 0, 0, "", nil, fmt.Errorf("curve mismatch: vault record bound to %s, request requested %s", meta.Curve, curve)
 				}
 
@@ -542,7 +609,13 @@ func (e *Engine) GetPublicShareContribution(
 
 	if matchedSession != nil && matchedSession.FinalShare != nil {
 		sessionCurve := cryptography.NormalizeCurveName(matchedSession.Curve)
-		if sessionCurve != "" && sessionCurve != normCurve {
+		if normCurve == "" {
+			if sessionCurve != "" {
+				normCurve = sessionCurve
+			} else {
+				normCurve = "secp256k1"
+			}
+		} else if sessionCurve != "" && sessionCurve != normCurve {
 			return "", 0, 0, "", nil, fmt.Errorf("curve mismatch: session bound to %s, request requested %s", matchedSession.Curve, curve)
 		}
 

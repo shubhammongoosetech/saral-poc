@@ -190,31 +190,23 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 
 		isInternal := auth.ValidateInternalAuth(r) || auth.ValidateAdminAuth(r)
 
-		// 1. Resolve key share from vault or in-memory engine
-		pointHex, nodeIndex, actualEpoch, commit, meta, err := dkgEngine.GetPublicShareContribution(
-			req.KeyID, req.SessionID, req.CommitteeID, req.Curve, req.Epoch,
-		)
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusNotFound)
-			return
-		}
-
-		// 2. INDEPENDENT NODE-LEVEL OWNERSHIP VERIFICATION (Section 11)
-		// If stored share is bound to a user, or caller claims a specific user/wallet identity:
-		if (meta != nil && meta.UserBindingID != "") || req.UserID != "" || req.WalletID != "" {
+		// 1. INDEPENDENT NODE-LEVEL OWNERSHIP & AUTH VERIFICATION (Section 11)
+		var claims *auth.ScopedTokenClaims
+		if !isInternal || req.UserID != "" || req.WalletID != "" || bearerToken != "" {
 			if bearerToken == "" {
 				log.Printf("[SECURITY_ALERT] Missing bearer token for user-bound key on node %s", dkgEngine.NodeID)
-				http.Error(w, `{"error":"SECURITY_ALERT: missing required bearer authorization token for user wallet key"}`, http.StatusForbidden)
+				http.Error(w, `{"error":"SECURITY_ALERT: missing required bearer authorization token for user wallet key"}`, http.StatusUnauthorized)
 				return
 			}
 
 			verifier := auth.GetNodeTokenVerifier()
-			claims, verifyErr := verifier.VerifyScopedToken(bearerToken)
+			c, verifyErr := verifier.VerifyScopedToken(bearerToken)
 			if verifyErr != nil {
 				log.Printf("[SECURITY_ALERT] Invalid token signature/expiry on node %s: %v", dkgEngine.NodeID, verifyErr)
 				http.Error(w, fmt.Sprintf(`{"error":"SECURITY_ALERT: invalid caller authorization: %s"}`, verifyErr.Error()), http.StatusForbidden)
 				return
 			}
+			claims = c
 
 			// Verify required claims:
 			if claims.Operation != "" && claims.Operation != "derive_public_key" {
@@ -229,6 +221,27 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 				return
 			}
 
+			if req.UserID != "" && claims.UserID != "" && claims.UserID != req.UserID {
+				log.Printf("[SECURITY_ALERT] Cross-user access blocked on node %s: token=%s requested=%s", dkgEngine.NodeID, claims.UserID, req.UserID)
+				http.Error(w, `{"error":"SECURITY_ALERT: cross-user access denied"}`, http.StatusForbidden)
+				return
+			}
+		} else if !isInternal {
+			http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+
+		// 2. Resolve key share from vault or in-memory engine
+		pointHex, nodeIndex, actualEpoch, commit, meta, err := dkgEngine.GetPublicShareContribution(
+			req.KeyID, req.SessionID, req.CommitteeID, req.Curve, req.Epoch,
+		)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusNotFound)
+			return
+		}
+
+		// 3. Ownership binding validation against loaded share metadata
+		if claims != nil {
 			tokenUser := claims.UserID
 			if tokenUser == "" {
 				tokenUser = claims.Sub
@@ -255,9 +268,6 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 				http.Error(w, `{"error":"SECURITY_ALERT: wallet binding mismatch"}`, http.StatusForbidden)
 				return
 			}
-		} else if !isInternal {
-			http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
-			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
