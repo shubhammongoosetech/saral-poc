@@ -26,10 +26,11 @@ echo -e "\n${BLUE}[2/4] Running Go Architecture & Multi-Domain Relay Integration
 npm run test:go
 echo -e "${GREEN}✓ All Go architecture & relay network tests PASSED.${NC}"
 
-# 3. Cryptographic AVSS, ABBA & Proactive Refresh Suite
-echo -e "\n${BLUE}[3/4] Running AVSS, ABBA Consensus & Proactive Cryptography Suite...${NC}"
+# 3. Cryptographic AVSS, DKG & Proactive Refresh Suite
+echo -e "\n${BLUE}[3/4] Running AVSS, HybridDKG Consensus & Cryptography Suite...${NC}"
 npm run test:all-crypto
-echo -e "${GREEN}✓ All cryptographic test vectors & distributed protocols PASSED.${NC}"
+(cd services/saral-node && go test -tags test_only -v -run "TestProof" ./dkg/...)
+echo -e "${GREEN}✓ All cryptographic test vectors, proofs & distributed protocols PASSED.${NC}"
 
 # 4. Docker Backend Cluster Status & 3-Domain Health
 echo -e "\n${BLUE}[4/4] Verifying 3-Domain cluster health across 15 nodes and 3 coordinators...${NC}"
