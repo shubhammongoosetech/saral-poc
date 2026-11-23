@@ -11,3 +11,4 @@ BEGIN
         ALTER TABLE "wallets" ADD CONSTRAINT "unique_user_wallet" UNIQUE ("user_id");
     END IF;
 END $$;
+

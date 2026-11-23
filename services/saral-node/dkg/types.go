@@ -88,6 +88,7 @@ type DKGContributionMessage struct {
 	SecretCommitment    string     `json:"secretCommitment"`    // C_{0,0} hex (Pedersen: z_i*G + z'_i*H)
 	PublicKeyCommitment string     `json:"publicKeyCommitment"` // V_i hex (Feldman/signing: z_i*G)
 	CommitmentMatrix    [][]string `json:"commitmentMatrix"`    // hex matrix
+	Curve               string     `json:"curve,omitempty"`
 	Timestamp           int64      `json:"timestamp"`
 }
 

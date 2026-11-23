@@ -38,8 +38,14 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 		return nil, fmt.Errorf("unexpected dealer: got %s, expected %s", msg.DealerID, s.DealerID)
 	}
 
+	if msg.Curve != "" && s.Curve == "" {
+		s.Curve = msg.Curve
+	}
+	curve := s.GetCurve()
+	curveOrder := cryptography.GetCurveOrder(curve)
+
 	// 1. Parse Commitment Matrix
-	commitMatrix, err := ParseCommitmentMatrixFromHex(msg.Commitments)
+	commitMatrix, err := ParseCommitmentMatrixFromHexForCurve(msg.Commitments, curve)
 	if err != nil {
 		s.State = StateSharingFailed
 		s.Error = fmt.Sprintf("invalid commitment matrix: %v", err)
@@ -53,28 +59,28 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 	colBlindCoeffs := make([]*cryptography.FieldElement, len(msg.ColBlindPoly))
 
 	for idx, h := range msg.RowPoly {
-		fe, err := cryptography.NewFieldElementFromHex(h)
+		fe, err := cryptography.NewFieldElementFromHexWithOrder(h, curveOrder)
 		if err != nil {
 			return nil, fmt.Errorf("invalid row poly scalar: %w", err)
 		}
 		rowCoeffs[idx] = fe
 	}
 	for idx, h := range msg.RowBlindPoly {
-		fe, err := cryptography.NewFieldElementFromHex(h)
+		fe, err := cryptography.NewFieldElementFromHexWithOrder(h, curveOrder)
 		if err != nil {
 			return nil, fmt.Errorf("invalid row blind poly scalar: %w", err)
 		}
 		rowBlindCoeffs[idx] = fe
 	}
 	for idx, h := range msg.ColPoly {
-		fe, err := cryptography.NewFieldElementFromHex(h)
+		fe, err := cryptography.NewFieldElementFromHexWithOrder(h, curveOrder)
 		if err != nil {
 			return nil, fmt.Errorf("invalid col poly scalar: %w", err)
 		}
 		colCoeffs[idx] = fe
 	}
 	for idx, h := range msg.ColBlindPoly {
-		fe, err := cryptography.NewFieldElementFromHex(h)
+		fe, err := cryptography.NewFieldElementFromHexWithOrder(h, curveOrder)
 		if err != nil {
 			return nil, fmt.Errorf("invalid col blind poly scalar: %w", err)
 		}
@@ -87,7 +93,7 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 	colBlindPoly := NewPolynomial(colBlindCoeffs)
 
 	// 3. Cryptographic Verification against Commitment Matrix
-	selfIndexFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+	selfIndexFE := cryptography.NewFieldElementWithOrder(int64(s.SelfIndex), curveOrder)
 
 	if !commitMatrix.VerifyRowPolynomial(selfIndexFE, rowPoly, rowBlindPoly) {
 		s.State = StateSharingFailed
@@ -128,7 +134,7 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 	echos := make([]*EchoMessage, len(s.Committee))
 
 	for idx, recipientID := range s.Committee {
-		recipientIndexFE := cryptography.NewFieldElement(int64(idx + 1))
+		recipientIndexFE := cryptography.NewFieldElementWithOrder(int64(idx+1), curveOrder)
 		// p_{self, recipient} = a_{self}(recipient)
 		point := rowPoly.Evaluate(recipientIndexFE)
 		blindPoint := rowBlindPoly.Evaluate(recipientIndexFE)
@@ -142,6 +148,7 @@ func (s *Session) ProcessSendMessage(msg *SendMessage) ([]*EchoMessage, error) {
 			Commitments: msg.Commitments,
 			Point:       point.Hex(),
 			BlindPoint:  blindPoint.Hex(),
+			Curve:       curve,
 			Timestamp:   now,
 		}
 	}
@@ -166,12 +173,18 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 		return nil, ErrDuplicateMessage
 	}
 
+	if echo.Curve != "" && s.Curve == "" {
+		s.Curve = echo.Curve
+	}
+	curve := s.GetCurve()
+	curveOrder := cryptography.GetCurveOrder(curve)
+
 	// Check commitment matrix consistency
 	echoHash := HashCommitments(echo.Commitments)
 	if s.CommitmentsHash == "" {
 		s.CommitmentsHash = echoHash
 		var err error
-		s.Commitments, err = ParseCommitmentMatrixFromHex(echo.Commitments)
+		s.Commitments, err = ParseCommitmentMatrixFromHexForCurve(echo.Commitments, curve)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse commitment matrix from echo: %w", err)
 		}
@@ -180,18 +193,18 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 	}
 
 	// Parse points
-	p, err := cryptography.NewFieldElementFromHex(echo.Point)
+	p, err := cryptography.NewFieldElementFromHexWithOrder(echo.Point, curveOrder)
 	if err != nil {
 		return nil, fmt.Errorf("invalid echo point: %w", err)
 	}
-	pPrime, err := cryptography.NewFieldElementFromHex(echo.BlindPoint)
+	pPrime, err := cryptography.NewFieldElementFromHexWithOrder(echo.BlindPoint, curveOrder)
 	if err != nil {
 		return nil, fmt.Errorf("invalid echo blind point: %w", err)
 	}
 
 	// Verify point cryptographically against C: Commit(p, p') == C(sender, self)
-	senderFE := cryptography.NewFieldElement(int64(senderIdx))
-	selfFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+	senderFE := cryptography.NewFieldElementWithOrder(int64(senderIdx), curveOrder)
+	selfFE := cryptography.NewFieldElementWithOrder(int64(s.SelfIndex), curveOrder)
 	if !s.Commitments.VerifyPoint(senderFE, selfFE, p, pPrime) {
 		return nil, ErrPointVerification
 	}
@@ -216,9 +229,9 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 
 		for sID, e := range s.ReceivedEchos {
 			sIndex := NodeIndexInCommittee(s.Committee, sID)
-			ptVal, _ := cryptography.NewFieldElementFromHex(e.Point)
-			ptBlindVal, _ := cryptography.NewFieldElementFromHex(e.BlindPoint)
-			xs = append(xs, cryptography.NewFieldElement(int64(sIndex)))
+			ptVal, _ := cryptography.NewFieldElementFromHexWithOrder(e.Point, curveOrder)
+			ptBlindVal, _ := cryptography.NewFieldElementFromHexWithOrder(e.BlindPoint, curveOrder)
+			xs = append(xs, cryptography.NewFieldElementWithOrder(int64(sIndex), curveOrder))
 			ys = append(ys, ptVal)
 			ysBlind = append(ysBlind, ptBlindVal)
 			if len(xs) == s.K {
@@ -259,7 +272,7 @@ func (s *Session) ProcessEchoMessage(echo *EchoMessage) ([]*ReadyMessage, error)
 	if s.State != StateSharingCompleted && s.RowPoly != nil && readyCount >= s.K+s.T {
 		s.Share = s.RowPoly.Coeffs[0]
 		s.BlindShare = s.RowBlindPoly.Coeffs[0]
-		selfIndexFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+		selfIndexFE := cryptography.NewFieldElementWithOrder(int64(s.SelfIndex), curveOrder)
 		s.PublicShareCommitment = s.Commitments.ComputeShareCommitment(selfIndexFE)
 		s.PublicSecretCommitment = s.Commitments.SecretCommitment()
 		s.State = StateSharingCompleted
@@ -284,11 +297,17 @@ func (s *Session) ProcessReadyMessage(ready *ReadyMessage) (bool, []*ReadyMessag
 		return false, nil, ErrDuplicateMessage
 	}
 
+	if ready.Curve != "" && s.Curve == "" {
+		s.Curve = ready.Curve
+	}
+	curve := s.GetCurve()
+	curveOrder := cryptography.GetCurveOrder(curve)
+
 	readyHash := HashCommitments(ready.Commitments)
 	if s.CommitmentsHash == "" {
 		s.CommitmentsHash = readyHash
 		var err error
-		s.Commitments, err = ParseCommitmentMatrixFromHex(ready.Commitments)
+		s.Commitments, err = ParseCommitmentMatrixFromHexForCurve(ready.Commitments, curve)
 		if err != nil {
 			return false, nil, fmt.Errorf("failed to parse commitments from ready: %w", err)
 		}
@@ -308,7 +327,7 @@ func (s *Session) ProcessReadyMessage(ready *ReadyMessage) (bool, []*ReadyMessag
 	if s.State != StateSharingCompleted && s.RowPoly != nil && len(s.ReceivedReadys) >= s.K+s.T {
 		s.Share = s.RowPoly.Coeffs[0]
 		s.BlindShare = s.RowBlindPoly.Coeffs[0]
-		selfIndexFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+		selfIndexFE := cryptography.NewFieldElementWithOrder(int64(s.SelfIndex), curveOrder)
 		s.PublicShareCommitment = s.Commitments.ComputeShareCommitment(selfIndexFE)
 		s.PublicSecretCommitment = s.Commitments.SecretCommitment()
 		s.State = StateSharingCompleted
@@ -324,9 +343,11 @@ func (s *Session) generateReadyMessages() []*ReadyMessage {
 	now := time.Now().UnixMilli()
 	readys := make([]*ReadyMessage, len(s.Committee))
 	hexCommit := s.Commitments.ToHexMatrix()
+	curve := s.GetCurve()
+	curveOrder := cryptography.GetCurveOrder(curve)
 
 	for idx, recipientID := range s.Committee {
-		recipientIndexFE := cryptography.NewFieldElement(int64(idx + 1))
+		recipientIndexFE := cryptography.NewFieldElementWithOrder(int64(idx+1), curveOrder)
 		pt := s.RowPoly.Evaluate(recipientIndexFE)
 		blindPt := s.RowBlindPoly.Evaluate(recipientIndexFE)
 
@@ -339,6 +360,7 @@ func (s *Session) generateReadyMessages() []*ReadyMessage {
 			Commitments: hexCommit,
 			Point:       pt.Hex(),
 			BlindPoint:  blindPt.Hex(),
+			Curve:       curve,
 			Timestamp:   now,
 		}
 	}
@@ -361,9 +383,11 @@ func (s *Session) ProcessRecoveryRequest(req *RecoveryRequestMessage) (*Recovery
 		return nil, errors.New("cannot assist recovery: commitments not yet established")
 	}
 
+	curve := s.GetCurve()
+	curveOrder := cryptography.GetCurveOrder(curve)
 	var ptHex, ptBlindHex string
 	if s.RowPoly != nil && s.RowBlindPoly != nil {
-		reqIndexFE := cryptography.NewFieldElement(int64(reqIdx))
+		reqIndexFE := cryptography.NewFieldElementWithOrder(int64(reqIdx), curveOrder)
 		pt := s.RowPoly.Evaluate(reqIndexFE)
 		blindPt := s.RowBlindPoly.Evaluate(reqIndexFE)
 		ptHex = pt.Hex()
@@ -379,6 +403,7 @@ func (s *Session) ProcessRecoveryRequest(req *RecoveryRequestMessage) (*Recovery
 		Commitments: s.Commitments.ToHexMatrix(),
 		Point:       ptHex,
 		BlindPoint:  ptBlindHex,
+		Curve:       curve,
 		Timestamp:   time.Now().UnixMilli(),
 	}, nil
 }
@@ -393,12 +418,18 @@ func (s *Session) ProcessRecoveryResponse(resp *RecoveryResponseMessage) error {
 		return ErrInvalidSender
 	}
 
+	if resp.Curve != "" && s.Curve == "" {
+		s.Curve = resp.Curve
+	}
+	curve := s.GetCurve()
+	curveOrder := cryptography.GetCurveOrder(curve)
+
 	// Verify commitment matrix consistency
 	respHash := HashCommitments(resp.Commitments)
 	if s.CommitmentsHash == "" {
 		s.CommitmentsHash = respHash
 		var err error
-		s.Commitments, err = ParseCommitmentMatrixFromHex(resp.Commitments)
+		s.Commitments, err = ParseCommitmentMatrixFromHexForCurve(resp.Commitments, curve)
 		if err != nil {
 			return fmt.Errorf("failed to parse commitments from recovery response: %w", err)
 		}
@@ -407,17 +438,17 @@ func (s *Session) ProcessRecoveryResponse(resp *RecoveryResponseMessage) error {
 	}
 
 	if resp.Point != "" && resp.BlindPoint != "" {
-		p, err := cryptography.NewFieldElementFromHex(resp.Point)
+		p, err := cryptography.NewFieldElementFromHexWithOrder(resp.Point, curveOrder)
 		if err != nil {
 			return err
 		}
-		pPrime, err := cryptography.NewFieldElementFromHex(resp.BlindPoint)
+		pPrime, err := cryptography.NewFieldElementFromHexWithOrder(resp.BlindPoint, curveOrder)
 		if err != nil {
 			return err
 		}
 
-		senderFE := cryptography.NewFieldElement(int64(respIdx))
-		selfFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+		senderFE := cryptography.NewFieldElementWithOrder(int64(respIdx), curveOrder)
+		selfFE := cryptography.NewFieldElementWithOrder(int64(s.SelfIndex), curveOrder)
 		if !s.Commitments.VerifyPoint(senderFE, selfFE, p, pPrime) {
 			return ErrPointVerification
 		}

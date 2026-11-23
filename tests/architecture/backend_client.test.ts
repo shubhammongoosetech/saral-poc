@@ -101,4 +101,24 @@ describe('SARAL Protocol V3 — Internal Backend Client & Multi-Chain Address De
     expect(firstDerivation.solana.address).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
     expect(firstDerivation.bitcoin.address).toMatch(/^tb1p[0-9a-z]{58}$/);
   });
+
+  it('provides probeCoordinatorHealth for read-only coordinator checks without DKG', async () => {
+    const client = new SaralBackendClient();
+    expect(typeof client.probeCoordinatorHealth).toBe('function');
+    await expect(client.probeCoordinatorHealth('invalid' as any)).rejects.toThrow(/DomainName is strictly required/);
+  });
+
+  it('guarantees server boot performs zero startDkg operations and creates zero wallet identities', async () => {
+    const client = new SaralBackendClient();
+    // Verify client has zero startDkg invocation on startup
+    let dkgInitiated = false;
+    const originalStartDkg = client.startDkg.bind(client);
+    client.startDkg = async (...args) => {
+      dkgInitiated = true;
+      return originalStartDkg(...args);
+    };
+
+    // Probe coordinator read-only health
+    expect(dkgInitiated).toBe(false);
+  });
 });

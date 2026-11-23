@@ -97,20 +97,8 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 	// Resolve committee
 	committee := req.Committee
 	if len(committee) == 0 {
-		if req.N == 5 {
-			for _, n := range s.registry.GetAllNodes() {
-				committee = append(committee, n.NodeID)
-			}
-		} else {
-			allParts := s.monitor.GetAuthorizedParticipants()
-			for id := range allParts {
-				committee = append(committee, id)
-			}
-			if len(committee) == 0 {
-				for _, n := range s.registry.GetAllNodes() {
-					committee = append(committee, n.NodeID)
-				}
-			}
+		for _, n := range s.registry.GetAllNodes() {
+			committee = append(committee, n.NodeID)
 		}
 	}
 
@@ -122,28 +110,33 @@ func (s *Server) handleStartDKG(params json.RawMessage, token string) (interface
 	sort.Strings(normalizedCommittee)
 
 	n := len(normalizedCommittee)
-	if req.N > 0 && req.N != n {
+	if req.N <= 0 {
+		return nil, &JsonRpcErr{Code: -32602, Message: "parameter n is required and must be a positive integer"}
+	}
+	if req.N != n {
 		return nil, &JsonRpcErr{Code: -32602, Message: fmt.Sprintf("specified n=%d does not match committee size %d", req.N, n)}
 	}
-	req.N = n
-
-	// Default threshold parameters:
-	// Each coordinator handles only its own domain's nodes (n=5, k=3, t=1)
-	if req.K == 0 && req.T == 0 {
-		if req.N == 5 {
-			req.K = 3
-			req.T = 1
-		} else {
-			req.T = (req.N - 1) / 3
-			if req.T < 1 {
-				req.T = 1
-			}
-			req.K = req.N - 2*req.T
-		}
+	if req.K <= 0 {
+		return nil, &JsonRpcErr{Code: -32602, Message: "parameter k (threshold) is required and must be a positive integer"}
+	}
+	if req.T <= 0 {
+		return nil, &JsonRpcErr{Code: -32602, Message: "parameter t (fault tolerance) is required and must be a positive integer"}
 	}
 
 	if err := ValidateDKGParameters(req.N, req.K, req.T); err != nil {
 		return nil, &JsonRpcErr{Code: -32602, Message: err.Error()}
+	}
+
+	if req.Curve == "" {
+		if strings.EqualFold(req.ChainFamily, "solana") {
+			req.Curve = "ed25519"
+		} else {
+			req.Curve = "secp256k1"
+		}
+	}
+	req.Curve = strings.ToLower(strings.TrimSpace(req.Curve))
+	if req.Curve != "secp256k1" && req.Curve != "ed25519" {
+		return nil, &JsonRpcErr{Code: -32602, Message: fmt.Sprintf("invalid curve %q: DKG requires secp256k1 or ed25519", req.Curve)}
 	}
 
 	if req.SessionID == "" {
@@ -523,18 +516,22 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 	committee := meta.Committee
 	kThreshold := meta.K
 	if kThreshold <= 0 {
-		kThreshold = 3
+		return nil, &JsonRpcErr{Code: -32000, Message: fmt.Sprintf("invalid threshold k=%d in session metadata", kThreshold)}
 	}
 
-	curveName := "secp256k1"
-	if req.Curve != "" {
-		curveName = req.Curve
-	} else if meta != nil && meta.Curve != "" {
-		curveName = meta.Curve
-	} else if strings.EqualFold(req.ChainFamily, "solana") {
-		curveName = "ed25519"
-	} else if strings.EqualFold(req.ChainFamily, "evm") || strings.EqualFold(req.ChainFamily, "bitcoin") || strings.EqualFold(req.ChainFamily, "mst") {
-		curveName = "secp256k1"
+	curveName := strings.ToLower(strings.TrimSpace(req.Curve))
+	if curveName == "" {
+		if strings.EqualFold(req.ChainFamily, "solana") {
+			curveName = "ed25519"
+		} else {
+			curveName = "secp256k1"
+		}
+	}
+	if meta.Curve != "" && !strings.EqualFold(meta.Curve, curveName) {
+		return nil, &JsonRpcErr{
+			Code:    -32001,
+			Message: fmt.Sprintf("curve mismatch: session %s is bound to %s, request requested %s", sessionID, meta.Curve, curveName),
+		}
 	}
 
 	type nodeContribution struct {
@@ -650,3 +647,59 @@ func (s *Server) handleDerivePublicKey(params json.RawMessage, token string) (in
 		"derivedAddress":  derivedAddress,
 	}, nil
 }
+
+// handleAbortDKG marks an incomplete or failed DKG session as ABORTED.
+// It refuses to abort a completed session belonging to a READY wallet.
+func (s *Server) handleAbortDKG(params json.RawMessage, token string) (interface{}, *JsonRpcErr) {
+	if s.verifierClient != nil && token != "" {
+		if _, err := s.verifierClient.VerifyTokenWithRole(token, "operator"); err != nil {
+			return nil, &JsonRpcErr{Code: -32001, Message: fmt.Sprintf("Authorization rejected: %s", err.Error())}
+		}
+	}
+
+	var req struct {
+		SessionID   string `json:"sessionId"`
+		CommitteeID string `json:"committeeId"`
+	}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, &JsonRpcErr{Code: -32602, Message: "Invalid parameters format"}
+		}
+	}
+
+	if req.SessionID == "" {
+		return nil, &JsonRpcErr{Code: -32602, Message: "sessionId is required"}
+	}
+
+	s.avssMu.Lock()
+	meta, exists := s.dkgSessions[req.SessionID]
+	if !exists || meta == nil {
+		s.avssMu.Unlock()
+		return map[string]interface{}{
+			"success": true,
+			"sessionId": req.SessionID,
+			"message": "session not found or already aborted",
+		}, nil
+	}
+
+	if meta.State == "COMPLETED" {
+		s.avssMu.Unlock()
+		return nil, &JsonRpcErr{
+			Code:    -32001,
+			Message: "refusing to abort completed DKG session of a READY wallet",
+		}
+	}
+
+	meta.State = "ABORTED"
+	meta.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.avssMu.Unlock()
+
+	s.persistSession(meta)
+
+	return map[string]interface{}{
+		"success":   true,
+		"sessionId": meta.SessionID,
+		"state":     "ABORTED",
+	}, nil
+}
+

@@ -19,6 +19,20 @@ echo -e "${CYAN}================================================================
 # Step 1: Wipe everything clean
 bash scripts/clean-all.sh
 
+# Step 1.1: Ensure untracked local .env exists with securely generated secrets (FIX 8c)
+if [ ! -f .env ]; then
+  echo "Creating .env from .env.example with securely generated random secrets..."
+  cp .env.example .env
+  JWT_HEX=$(openssl rand -hex 32)
+  MFA_HEX=$(openssl rand -hex 32)
+  OTP_HEX=$(openssl rand -hex 32)
+  TOKEN_HEX=$(openssl rand -hex 32)
+  sed -i "s/JWT_SECRET=.*/JWT_SECRET=${JWT_HEX}/" .env
+  sed -i "s/MFA_ENCRYPTION_KEY=.*/MFA_ENCRYPTION_KEY=${MFA_HEX}/" .env
+  sed -i "s/OTP_PEPPER=.*/OTP_PEPPER=${OTP_HEX}/" .env
+  sed -i "s/SARAL_INTERNAL_TOKEN=.*/SARAL_INTERNAL_TOKEN=${TOKEN_HEX}/" .env
+fi
+
 # Step 2: Ensure persistent cryptographic keys & cluster secrets
 echo -e "\n${BLUE}[1/6] Verifying asymmetric keys & cluster secrets...${NC}"
 mkdir -p infra/config infra/secrets
@@ -41,8 +55,15 @@ cp -f infra/config/auth_ed25519_public_key.pem infra/config/auth_public_key.pem 
 if [ ! -f infra/secrets/internal_token.secret ]; then
   echo "Generating 256-bit cluster internal secret token..."
   openssl rand -hex 32 > infra/secrets/internal_token.secret
-  chmod 600 infra/secrets/internal_token.secret
 fi
+chmod 600 infra/secrets/internal_token.secret 2>/dev/null || true
+
+# Ensure genesis participants file exists on host before compose mounts it
+if [ ! -f infra/config/genesis_participants.json ]; then
+  echo "{}" > infra/config/genesis_participants.json
+fi
+chmod 600 infra/config/genesis_participants.json 2>/dev/null || true
+chmod 600 infra/config/auth_public_key.pem 2>/dev/null || true
 echo -e "${GREEN}✓ Cryptographic keys and cluster secrets verified.${NC}"
 
 # Step 3: Compile Static Go Microservice Binaries
@@ -65,66 +86,81 @@ fi
 
 # Step 5: Start 21 DKG Backend Containers in Docker
 echo -e "\n${BLUE}[4/6] Starting 21 DKG backend containers in Docker...${NC}"
-docker compose -f infra/compose/full24.yml up -d \
-  node-f1 node-f2 node-f3 node-f4 node-f5 \
-  node-p1 node-p2 node-p3 node-p4 node-p5 \
-  node-r1 node-r2 node-r3 node-r4 node-r5 \
-  coordinator-foundation coordinator-public coordinator-private \
-  verifier-foundation verifier-public verifier-private 2>/dev/null || true
+F_NODES=${SARAL_FOUNDATION_NODES:-5}
+P_NODES=${SARAL_PUBLIC_NODES:-5}
+R_NODES=${SARAL_PRIVATE_NODES:-5}
 
-docker start \
-  saral-prod-verifier-foundation saral-prod-verifier-public saral-prod-verifier-private \
-  saral-prod-coord-foundation saral-prod-coord-public saral-prod-coord-private 2>/dev/null || true
+NODE_SERVICES=()
+for ((i=1; i<=F_NODES; i++)); do NODE_SERVICES+=("node-f$i"); done
+for ((i=1; i<=P_NODES; i++)); do NODE_SERVICES+=("node-p$i"); done
+for ((i=1; i<=R_NODES; i++)); do NODE_SERVICES+=("node-r$i"); done
 
-# Step 6: Provision Keys, Secrets & Binaries into Containers
-echo -e "\n${BLUE}[5/6] Provisioning binaries, verification keys & secrets to containers...${NC}"
+ALL_SERVICES=(
+  verifier-foundation verifier-public verifier-private
+  coordinator-foundation coordinator-public coordinator-private
+  "${NODE_SERVICES[@]}"
+)
 
-# Synchronize genesis participants with node identities
+docker compose -f infra/compose/full24.yml up -d "${ALL_SERVICES[@]}"
+
+# Step 6: Synchronize Genesis Participants & Deploy Fresh Binaries
+echo -e "\n${BLUE}[5/6] Synchronizing node identities & deploying latest binaries...${NC}"
+
+# Synchronize genesis participants with generated node identities from vaults
 sleep 2
 node scripts/sync-genesis.js 2>/dev/null || true
 
-# Verifiers receive auth_public_key.pem
+# Deploy latest compiled binaries to running containers
+for c in "${NODE_SERVICES[@]}"; do
+  docker cp services/saral-node/bin/saral-node "saral-prod-$c":/usr/local/bin/saral-node 2>/dev/null || true
+done
+for c in saral-prod-coord-foundation saral-prod-coord-public saral-prod-coord-private; do
+  docker cp services/coordinator/bin/coordinator "$c":/usr/local/bin/coordinator 2>/dev/null || true
+done
 for c in saral-prod-verifier-foundation saral-prod-verifier-public saral-prod-verifier-private; do
-  docker exec $c mkdir -p /keys 2>/dev/null || true
-  docker cp infra/config/auth_public_key.pem $c:/keys/auth_public_key.pem 2>/dev/null || true
-  docker restart $c >/dev/null
+  docker cp services/verifier/bin/verifier "$c":/usr/local/bin/verifier 2>/dev/null || true
 done
 
-# Coordinators and Nodes
-SERVICES_WITH_TOKEN=(
+# Restart coordinators and nodes so they pick up synced genesis and latest binary
+RESTART_CONTAINERS=(
   saral-prod-coord-foundation saral-prod-coord-public saral-prod-coord-private
-  saral-prod-node-f1 saral-prod-node-f2 saral-prod-node-f3 saral-prod-node-f4 saral-prod-node-f5
-  saral-prod-node-p1 saral-prod-node-p2 saral-prod-node-p3 saral-prod-node-p4 saral-prod-node-p5
-  saral-prod-node-r1 saral-prod-node-r2 saral-prod-node-r3 saral-prod-node-r4 saral-prod-node-r5
 )
+for c in "${NODE_SERVICES[@]}"; do
+  RESTART_CONTAINERS+=("saral-prod-$c")
+done
 
-for c in "${SERVICES_WITH_TOKEN[@]}"; do
-  docker exec $c mkdir -p /run/secrets 2>/dev/null || true
-  cat infra/secrets/internal_token.secret | docker exec -i $c sh -c "cat > /run/secrets/saral_internal_token 2>/dev/null || true"
-  cat infra/config/genesis_participants.json | docker exec -i $c sh -c "cat > /run/secrets/saral_genesis_participants.json 2>/dev/null || true"
-  cat infra/config/auth_public_key.pem | docker exec -i $c sh -c "cat > /run/secrets/auth_ed25519_pub.pem 2>/dev/null || true"
-  # Deploy latest compiled binary
-  if [[ "$c" =~ saral-prod-node ]]; then
-    docker cp services/saral-node/bin/saral-node $c:/usr/local/bin/saral-node 2>/dev/null || true
-  elif [[ "$c" =~ saral-prod-coord ]]; then
-    docker cp services/coordinator/bin/coordinator $c:/usr/local/bin/coordinator 2>/dev/null || true
-  fi
-  docker restart $c >/dev/null &
+for c in "${RESTART_CONTAINERS[@]}"; do
+  docker restart "$c" >/dev/null &
 done
 wait
 
-echo "Waiting 6 seconds for container health checks..."
-sleep 6
+echo "Waiting for all 3 coordinators and 15 nodes to become healthy and registered..."
+MAX_WAIT=30
+START_TIME=$(date +%s)
+ALL_REGISTERED=false
 
-# Check health status
-UNHEALTHY=$(docker ps --filter "name=saral-prod" --filter "health=unhealthy" -q)
-if [ -n "$UNHEALTHY" ]; then
-  echo -e "${RED}⚠️  Warning: Some containers are reporting unhealthy. Check logs: docker logs <container>${NC}"
+while [ $(($(date +%s) - START_TIME)) -lt $MAX_WAIT ]; do
+  F_REG=$(curl -s http://localhost:9001/health | grep -o '"enrolledNodes":[0-9]*' | cut -d: -f2 || echo 0)
+  P_REG=$(curl -s http://localhost:9002/health | grep -o '"enrolledNodes":[0-9]*' | cut -d: -f2 || echo 0)
+  R_REG=$(curl -s http://localhost:9003/health | grep -o '"enrolledNodes":[0-9]*' | cut -d: -f2 || echo 0)
+
+  if [ "${F_REG:-0}" -ge "$F_NODES" ] && [ "${P_REG:-0}" -ge "$P_NODES" ] && [ "${R_REG:-0}" -ge "$R_NODES" ]; then
+    ALL_REGISTERED=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "$ALL_REGISTERED" = true ]; then
+  echo -e "${GREEN}✓ FOUNDATION domain: ${F_REG}/${F_NODES} nodes registered${NC}"
+  echo -e "${GREEN}✓ PUBLIC domain:     ${P_REG}/${P_NODES} nodes registered${NC}"
+  echo -e "${GREEN}✓ PRIVATE domain:    ${R_REG}/${R_NODES} nodes registered${NC}"
+  echo -e "${GREEN}✓ All 21 DKG backend containers are healthy and all 15 nodes registered across 3 domains.${NC}"
 else
-  echo -e "${GREEN}✓ All 21 DKG backend containers are healthy and running.${NC}"
+  echo -e "${RED}⚠️  Warning: Timeout waiting for all nodes to register (Foundation: ${F_REG:-0}/${F_NODES}, Public: ${P_REG:-0}/${P_NODES}, Private: ${R_REG:-0}/${R_NODES})${NC}"
 fi
 
-# Step 7: Live Verification of 3-Domain DKG Consensus & Multi-Chain Derivation
+# Step 7: Live Verification of 3-Domain Multi-Curve DKG (6 Sessions: 3 Domains x 2 Curves)
 echo -e "\n${BLUE}[6/6] Verifying live 3-Domain Dealerless DKG across Foundation, Public & Private...${NC}"
 npx tsx -e '
 import { saralBackendClient } from "./apps/auth-server/src/clients/saralBackendClient";
@@ -133,93 +169,131 @@ import { addSecp256k1PublicKeys, addEd25519PublicKeys } from "./apps/auth-server
 import { deriveAddressFromDkgPublicKey } from "./apps/auth-server/src/services/walletService";
 
 async function verify() {
-  const sessionIds = {
-    foundation: "dkg-foundation-verify-" + Date.now(),
-    public: "dkg-public-verify-" + Date.now(),
-    private: "dkg-private-verify-" + Date.now(),
+  const ts = Date.now();
+  const testUserId = `user-verify-${ts}`;
+  const testWalletId = `wal-verify-${ts}`;
+
+  const curves = ["secp256k1", "ed25519"] as const;
+  const sessionIds: Record<string, { secp256k1: string; ed25519: string }> = {
+    foundation: { secp256k1: `dkg-found-secp-${ts}`, ed25519: `dkg-found-ed-${ts}` },
+    public: { secp256k1: `dkg-pub-secp-${ts}`, ed25519: `dkg-pub-ed-${ts}` },
+    private: { secp256k1: `dkg-priv-secp-${ts}`, ed25519: `dkg-priv-ed-${ts}` },
   };
 
-  console.log("   • Starting 3-Domain DKG sessions across 15 nodes in 3 domains...");
-  await saralBackendClient.runOnAllDomains(async (domainName) => {
-    const cfg = DOMAINS_MAP[domainName];
-    const start = await saralBackendClient.startDkg(domainName, {
-      committeeId: cfg.committeeId,
-      sessionId: sessionIds[domainName],
-      committee: cfg.nodeIds,
-      n: cfg.n,
-      k: cfg.k,
-      t: cfg.t,
-      walletId: "wal-verify",
-      userId: "user-verify",
-    });
-    if (!start || !start.success) {
-      throw new Error(`Failed to start DKG on domain ${domainName}`);
-    }
-  });
+  console.log("   • Starting 6 DKG sessions across 3 domains x 2 curves (secp256k1 & ed25519)...");
 
-  // Poll until completed on all 3 domains
-  const completedDomains = new Set();
-  for (let i = 0; i < 25; i++) {
-    await new Promise(r => setTimeout(r, 250));
+  const startPromises: Promise<any>[] = [];
+  for (const d of DOMAINS) {
+    const cfg = DOMAINS_MAP[d.name];
+    for (const curve of curves) {
+      const sessId = sessionIds[d.name][curve];
+      const chainFamily = curve === "ed25519" ? "solana" : "mst";
+      startPromises.push(
+        saralBackendClient.startDkg(d.name, {
+          committeeId: cfg.committeeId,
+          sessionId: sessId,
+          committee: cfg.nodeIds,
+          n: cfg.n,
+          k: cfg.k,
+          t: cfg.t,
+          walletId: testWalletId,
+          userId: testUserId,
+          keyId: `key-${curve}-${d.name}`,
+          curve,
+          chainFamily,
+        })
+      );
+    }
+  }
+  await Promise.all(startPromises);
+
+  const totalSessions = 6;
+  const completedSessions = new Set<string>();
+  const timeoutMs = parseInt(process.env.SARAL_DKG_TIMEOUT_MS || "30000", 10);
+  const deadline = Date.now() + timeoutMs;
+  const lastStatuses: Record<string, any> = {};
+
+  while (Date.now() < deadline) {
     for (const d of DOMAINS) {
-      if (completedDomains.has(d.name)) continue;
-      try {
-        const st = await saralBackendClient.getDkgStatus(d.name, sessionIds[d.name]);
-        if (st?.state === "COMPLETED" || (st?.completedNodes && st.completedNodes >= d.k)) {
-          completedDomains.add(d.name);
-          console.log(`   • Domain ${d.name.toUpperCase()} DKG Consensus COMPLETED (${st.completedNodes || d.k}/${d.n} nodes decided)`);
-        }
-      } catch (_) {}
+      for (const curve of curves) {
+        const sessId = sessionIds[d.name][curve];
+        const key = `${d.name}:${curve}`;
+        if (completedSessions.has(key)) continue;
+        try {
+          const st = await saralBackendClient.getDkgStatus(d.name, sessId);
+          lastStatuses[key] = st;
+          if (st?.state === "COMPLETED" && st?.masterPublicKey && (st.completedNodes || 0) >= d.k) {
+            completedSessions.add(key);
+            console.log(`   • [${d.name.toUpperCase()}] curve=${curve} DKG COMPLETED (${st.completedNodes || d.k}/${d.n} nodes decided)`);
+          }
+        } catch (_) {}
+      }
     }
-    if (completedDomains.size === DOMAINS.length) break;
+    if (completedSessions.size === totalSessions) break;
+    await new Promise((r) => setTimeout(r, 400));
   }
 
-  if (completedDomains.size < DOMAINS.length) {
-    throw new Error(`DKG Consensus timed out across threshold nodes (${completedDomains.size}/3 completed)`);
+  if (completedSessions.size < totalSessions) {
+    const failed = [];
+    for (const d of DOMAINS) {
+      for (const curve of curves) {
+        const key = `${d.name}:${curve}`;
+        if (!completedSessions.has(key)) {
+          failed.push(`${key} (status: ${JSON.stringify(lastStatuses[key] || "no status")})`);
+        }
+      }
+    }
+    throw new Error(`DKG Consensus timed out: ${completedSessions.size}/${totalSessions} completed. Incomplete: ${failed.join(", ")}`);
   }
 
-  // Derive MST public key points on all 3 domains and combine
-  const mstPoints = await Promise.all(DOMAINS.map(d =>
-    saralBackendClient.derivePublicKey(d.name, {
-      walletId: "wal-verify",
-      userId: "user-verify",
-      keyId: "key-mst-verify",
-      dkgSessionId: sessionIds[d.name],
-      committeeId: d.committeeId,
-      curve: "secp256k1",
-      chainFamily: "mst",
-    }).then(r => r.masterPublicKey)
-  ));
+  // Derive MST public key points on all 3 domains (secp256k1) and combine
+  const mstPoints = await Promise.all(
+    DOMAINS.map((d) =>
+      saralBackendClient.derivePublicKey(d.name, {
+        walletId: testWalletId,
+        userId: testUserId,
+        keyId: `key-secp256k1-${d.name}`,
+        dkgSessionId: sessionIds[d.name].secp256k1,
+        committeeId: d.committeeId,
+        curve: "secp256k1",
+        chainFamily: "mst",
+      }).then((r) => r.masterPublicKey)
+    )
+  );
   const mstCombined = addSecp256k1PublicKeys(mstPoints);
   const mstAddr = deriveAddressFromDkgPublicKey("mst", mstCombined);
 
-  // Derive Solana public key points on all 3 domains and combine
-  const solPoints = await Promise.all(DOMAINS.map(d =>
-    saralBackendClient.derivePublicKey(d.name, {
-      walletId: "wal-verify",
-      userId: "user-verify",
-      keyId: "key-sol-verify",
-      dkgSessionId: sessionIds[d.name],
-      committeeId: d.committeeId,
-      curve: "ed25519",
-      chainFamily: "solana",
-    }).then(r => r.masterPublicKey)
-  ));
+  // Derive Solana public key points on all 3 domains (ed25519) and combine
+  const solPoints = await Promise.all(
+    DOMAINS.map((d) =>
+      saralBackendClient.derivePublicKey(d.name, {
+        walletId: testWalletId,
+        userId: testUserId,
+        keyId: `key-ed25519-${d.name}`,
+        dkgSessionId: sessionIds[d.name].ed25519,
+        committeeId: d.committeeId,
+        curve: "ed25519",
+        chainFamily: "solana",
+      }).then((r) => r.masterPublicKey)
+    )
+  );
   const solCombined = addEd25519PublicKeys(solPoints);
   const solAddr = deriveAddressFromDkgPublicKey("solana", solCombined);
 
-  // Derive Bitcoin public key points on all 3 domains and combine
-  const btcPoints = await Promise.all(DOMAINS.map(d =>
-    saralBackendClient.derivePublicKey(d.name, {
-      walletId: "wal-verify",
-      userId: "user-verify",
-      keyId: "key-btc-verify",
-      dkgSessionId: sessionIds[d.name],
-      committeeId: d.committeeId,
-      curve: "secp256k1",
-      chainFamily: "bitcoin",
-    }).then(r => r.masterPublicKey)
-  ));
+  // Derive Bitcoin public key points on all 3 domains (secp256k1) and combine
+  const btcPoints = await Promise.all(
+    DOMAINS.map((d) =>
+      saralBackendClient.derivePublicKey(d.name, {
+        walletId: testWalletId,
+        userId: testUserId,
+        keyId: `key-secp256k1-${d.name}`,
+        dkgSessionId: sessionIds[d.name].secp256k1,
+        committeeId: d.committeeId,
+        curve: "secp256k1",
+        chainFamily: "bitcoin",
+      }).then((r) => r.masterPublicKey)
+    )
+  );
   const btcCombined = addSecp256k1PublicKeys(btcPoints);
   const btcAddr = deriveAddressFromDkgPublicKey("bitcoin", btcCombined);
 
@@ -228,7 +302,7 @@ async function verify() {
   console.log("\x1b[32m   ✓ Bitcoin Testnet Address (3-Domain Combined): " + btcAddr + "\x1b[0m");
 }
 
-verify().catch(e => {
+verify().catch((e) => {
   console.error("\x1b[31m✗ Verification failed:\x1b[0m", e.message);
   process.exit(1);
 });

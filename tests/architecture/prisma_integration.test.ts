@@ -41,29 +41,38 @@ describe('SARAL Protocol — Prisma ORM & Database Layer Integration', () => {
       },
     });
 
-    vi.spyOn(saralBackendClient, 'startDkg').mockResolvedValue({
-      success: true,
-      sessionId: 'sess-prisma-1',
-      committeeId: 'committee-foundation',
-      state: 'COMPLETED',
-      n: 5,
-      k: 3,
-      t: 1,
-      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+    vi.spyOn(saralBackendClient, 'startDkg').mockImplementation(async (domainOrParams: any, maybeParams?: any) => {
+      const p = typeof domainOrParams === 'object' ? domainOrParams : maybeParams || {};
+      return {
+        success: true,
+        sessionId: p.sessionId || 'sess-prisma-1',
+        committeeId: p.committeeId || 'committee-foundation',
+        state: 'COMPLETED',
+        n: 5,
+        k: 3,
+        t: 1,
+        committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+      };
     });
-    vi.spyOn(saralBackendClient, 'getDkgStatus').mockResolvedValue({
-      sessionId: 'sess-prisma-1',
-      committeeId: 'committee-foundation',
-      epoch: 1,
-      n: 5,
-      k: 3,
-      t: 1,
-      state: 'COMPLETED',
-      completedNodes: 5,
-      totalNodes: 5,
-      committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+    vi.spyOn(saralBackendClient, 'getDkgStatus').mockImplementation(async (domainOrSessionId: any, maybeSessionId?: any) => {
+      const sId = typeof domainOrSessionId === 'string' ? (maybeSessionId || domainOrSessionId) : maybeSessionId || 'sess-prisma-1';
+      return {
+        sessionId: sId,
+        committeeId: 'committee-foundation',
+        epoch: 1,
+        n: 5,
+        k: 3,
+        t: 1,
+        state: 'COMPLETED',
+        completedNodes: 5,
+        totalNodes: 5,
+        committee: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+        qualifiedSet: ['saral-foundation-1', 'saral-foundation-2', 'saral-foundation-3', 'saral-foundation-4', 'saral-foundation-5'],
+        masterPublicKey: '0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8',
+      };
     });
-    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
+    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (domainOrParams: any, maybeParams?: any) => {
+      const params = typeof domainOrParams === 'object' ? domainOrParams : maybeParams || {};
       if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
         return {
           success: true,

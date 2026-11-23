@@ -58,6 +58,7 @@ type Session struct {
 	N           int
 	K           int
 	T           int
+	Curve       string
 	Committee   []string // List of NodeIDs in canonical order
 
 	State     SessionState
@@ -204,12 +205,20 @@ func (s *Session) FinalizeShare() error {
 	s.Share = s.RowPoly.Coeffs[0]
 	s.BlindShare = s.RowBlindPoly.Coeffs[0]
 
-	selfIndexFE := cryptography.NewFieldElement(int64(s.SelfIndex))
+	selfIndexFE := cryptography.NewFieldElementWithOrder(int64(s.SelfIndex), cryptography.GetCurveOrder(s.GetCurve()))
 	s.PublicShareCommitment = s.Commitments.ComputeShareCommitment(selfIndexFE)
 	s.PublicSecretCommitment = s.Commitments.SecretCommitment()
 
 	s.State = StateSharingCompleted
 	s.UpdatedAt = time.Now()
 	return nil
+}
+
+// GetCurve returns the session curve or defaults to nist-p256
+func (s *Session) GetCurve() string {
+	if s != nil && s.Curve != "" {
+		return s.Curve
+	}
+	return "nist-p256"
 }
 

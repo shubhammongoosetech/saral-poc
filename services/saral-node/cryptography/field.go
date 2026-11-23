@@ -18,7 +18,6 @@ var (
 
 	// FieldP is the base field prime P of NIST P-256 (P = 2^256 - 2^224 + 2^192 + 2^96 - 1).
 	// In hex: 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
-	// Point coordinates (X, Y) lie in F_P, while scalar multipliers lie in Z_N (OrderQ).
 	FieldP *big.Int
 
 	// Zero and One field constants
@@ -39,9 +38,25 @@ func init() {
 	One = big.NewInt(1)
 }
 
-// FieldElement represents a scalar in Z_q.
+// FieldElement represents a scalar in Z_q, bound to a specific curve scalar field order.
 type FieldElement struct {
-	val *big.Int
+	val   *big.Int
+	order *big.Int
+}
+
+// Order returns the modulus order of this field element (defaulting to OrderQ for P-256).
+func (fe *FieldElement) Order() *big.Int {
+	if fe != nil && fe.order != nil {
+		return new(big.Int).Set(fe.order)
+	}
+	return new(big.Int).Set(OrderQ)
+}
+
+func (fe *FieldElement) orderVal() *big.Int {
+	if fe != nil && fe.order != nil {
+		return fe.order
+	}
+	return OrderQ
 }
 
 // Zero explicitly clears the underlying big.Int to prevent memory lingering
@@ -51,46 +66,80 @@ func (fe *FieldElement) Zero() {
 	}
 }
 
-// NewFieldElement creates a new FieldElement from an int64, reduced mod q.
+// NewFieldElement creates a new FieldElement from an int64, reduced mod OrderQ (P-256).
 func NewFieldElement(v int64) *FieldElement {
-	z := big.NewInt(v)
-	z.Mod(z, OrderQ)
-	if z.Sign() < 0 {
-		z.Add(z, OrderQ)
-	}
-	return &FieldElement{val: z}
+	return NewFieldElementWithOrder(v, OrderQ)
 }
 
-// NewFieldElementFromBigInt creates a new FieldElement from *big.Int, checking canonical range [0, q-1].
+// NewFieldElementWithOrder creates a new FieldElement from an int64 with explicit order.
+func NewFieldElementWithOrder(v int64, order *big.Int) *FieldElement {
+	if order == nil {
+		order = OrderQ
+	}
+	z := big.NewInt(v)
+	z.Mod(z, order)
+	if z.Sign() < 0 {
+		z.Add(z, order)
+	}
+	return &FieldElement{val: z, order: order}
+}
+
+// NewFieldElementForCurve creates a new FieldElement for a designated curve.
+func NewFieldElementForCurve(v int64, curve string) *FieldElement {
+	return NewFieldElementWithOrder(v, GetCurveOrder(curve))
+}
+
+// NewFieldElementFromBigInt creates a new FieldElement from *big.Int, checking canonical range [0, OrderQ-1].
 func NewFieldElementFromBigInt(b *big.Int) (*FieldElement, error) {
+	return NewFieldElementFromBigIntWithOrder(b, OrderQ)
+}
+
+// NewFieldElementFromBigIntWithOrder creates a new FieldElement from *big.Int with explicit order.
+func NewFieldElementFromBigIntWithOrder(b *big.Int, order *big.Int) (*FieldElement, error) {
 	if b == nil {
 		return nil, errors.New("nil big.Int")
 	}
-	if b.Sign() < 0 || b.Cmp(OrderQ) >= 0 {
+	if order == nil {
+		order = OrderQ
+	}
+	if b.Sign() < 0 || b.Cmp(order) >= 0 {
 		return nil, ErrInvalidScalarEncoding
 	}
-	return &FieldElement{val: new(big.Int).Set(b)}, nil
+	return &FieldElement{val: new(big.Int).Set(b), order: order}, nil
 }
 
 // NewFieldElementFromBytes parses a canonical 32-byte big-endian scalar.
 func NewFieldElementFromBytes(b []byte) (*FieldElement, error) {
+	return NewFieldElementFromBytesWithOrder(b, OrderQ)
+}
+
+// NewFieldElementFromBytesWithOrder parses a canonical 32-byte big-endian scalar with explicit order.
+func NewFieldElementFromBytesWithOrder(b []byte, order *big.Int) (*FieldElement, error) {
 	if len(b) != 32 {
 		return nil, fmt.Errorf("%w: expected 32 bytes, got %d", ErrInvalidScalarEncoding, len(b))
 	}
+	if order == nil {
+		order = OrderQ
+	}
 	val := new(big.Int).SetBytes(b)
-	if val.Cmp(OrderQ) >= 0 {
+	if val.Cmp(order) >= 0 {
 		return nil, fmt.Errorf("%w: scalar %s >= group order q", ErrInvalidScalarEncoding, hex.EncodeToString(b))
 	}
-	return &FieldElement{val: val}, nil
+	return &FieldElement{val: val, order: order}, nil
 }
 
 // NewFieldElementFromHex parses a 64-char hex string as a canonical scalar.
 func NewFieldElementFromHex(h string) (*FieldElement, error) {
+	return NewFieldElementFromHexWithOrder(h, OrderQ)
+}
+
+// NewFieldElementFromHexWithOrder parses a 64-char hex string as a canonical scalar with explicit order.
+func NewFieldElementFromHexWithOrder(h string, order *big.Int) (*FieldElement, error) {
 	b, err := hex.DecodeString(h)
 	if err != nil {
 		return nil, fmt.Errorf("invalid hex string: %w", err)
 	}
-	return NewFieldElementFromBytes(b)
+	return NewFieldElementFromBytesWithOrder(b, order)
 }
 
 // Bytes returns the canonical 32-byte big-endian representation.
@@ -128,35 +177,39 @@ func (fe *FieldElement) Equal(other *FieldElement) bool {
 
 // Add returns (fe + other) mod q.
 func (fe *FieldElement) Add(other *FieldElement) *FieldElement {
+	ord := fe.orderVal()
 	res := new(big.Int).Add(fe.val, other.val)
-	res.Mod(res, OrderQ)
-	return &FieldElement{val: res}
+	res.Mod(res, ord)
+	return &FieldElement{val: res, order: ord}
 }
 
 // Sub returns (fe - other) mod q.
 func (fe *FieldElement) Sub(other *FieldElement) *FieldElement {
+	ord := fe.orderVal()
 	res := new(big.Int).Sub(fe.val, other.val)
-	res.Mod(res, OrderQ)
+	res.Mod(res, ord)
 	if res.Sign() < 0 {
-		res.Add(res, OrderQ)
+		res.Add(res, ord)
 	}
-	return &FieldElement{val: res}
+	return &FieldElement{val: res, order: ord}
 }
 
 // Mul returns (fe * other) mod q.
 func (fe *FieldElement) Mul(other *FieldElement) *FieldElement {
+	ord := fe.orderVal()
 	res := new(big.Int).Mul(fe.val, other.val)
-	res.Mod(res, OrderQ)
-	return &FieldElement{val: res}
+	res.Mod(res, ord)
+	return &FieldElement{val: res, order: ord}
 }
 
 // Neg returns (-fe) mod q.
 func (fe *FieldElement) Neg() *FieldElement {
+	ord := fe.orderVal()
 	if fe.IsZero() {
-		return &FieldElement{val: big.NewInt(0)}
+		return &FieldElement{val: big.NewInt(0), order: ord}
 	}
-	res := new(big.Int).Sub(OrderQ, fe.val)
-	return &FieldElement{val: res}
+	res := new(big.Int).Sub(ord, fe.val)
+	return &FieldElement{val: res, order: ord}
 }
 
 // Inv returns fe^(-1) mod q. Returns ErrZeroDivision if fe is zero.
@@ -164,11 +217,12 @@ func (fe *FieldElement) Inv() (*FieldElement, error) {
 	if fe.IsZero() {
 		return nil, ErrZeroDivision
 	}
-	res := new(big.Int).ModInverse(fe.val, OrderQ)
+	ord := fe.orderVal()
+	res := new(big.Int).ModInverse(fe.val, ord)
 	if res == nil {
 		return nil, ErrZeroDivision
 	}
-	return &FieldElement{val: res}, nil
+	return &FieldElement{val: res, order: ord}, nil
 }
 
 // Div returns (fe * other^(-1)) mod q.
@@ -182,16 +236,18 @@ func (fe *FieldElement) Div(other *FieldElement) (*FieldElement, error) {
 
 // Exp returns fe^e mod q.
 func (fe *FieldElement) Exp(e *big.Int) *FieldElement {
-	res := new(big.Int).Exp(fe.val, e, OrderQ)
-	return &FieldElement{val: res}
+	ord := fe.orderVal()
+	res := new(big.Int).Exp(fe.val, e, ord)
+	return &FieldElement{val: res, order: ord}
 }
 
 // LagrangeCoefficient computes the Lagrange interpolation basis coefficient:
 // \lambda_i = \prod_{j \in S, j \ne i} \frac{x - x_j}{x_i - x_j} \pmod q
 // evaluated at xTarget (typically xTarget = 0 to recover secret).
 func LagrangeCoefficient(xTarget *FieldElement, xi *FieldElement, allX []*FieldElement) (*FieldElement, error) {
-	num := NewFieldElement(1)
-	den := NewFieldElement(1)
+	ord := xi.orderVal()
+	num := NewFieldElementWithOrder(1, ord)
+	den := NewFieldElementWithOrder(1, ord)
 
 	for _, xj := range allX {
 		if xj.Equal(xi) {
@@ -215,4 +271,3 @@ func LagrangeCoefficient(xTarget *FieldElement, xi *FieldElement, allX []*FieldE
 	}
 	return coeff, nil
 }
-

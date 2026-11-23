@@ -12,7 +12,7 @@ services:
       - saral_postgres_data:/var/lib/postgresql/data
       - ../../infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
-      - '5432:5432'
+      - '${POSTGRES_PORT:-15432}:5432'
     networks:
       - saral-mesh
     healthcheck:
@@ -33,7 +33,7 @@ services:
       PORT: 3001
       NODE_ENV: development
       ENABLE_DEV_AUTH: "true"
-      DATABASE_URL: "postgresql://saral:saral_secret@postgres:5432/saral"
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://saral:saral_secret@postgres:5432/saral}
       FOUNDATION_COORDINATOR_URL: "http://coordinator-foundation:9001"
       PUBLIC_COORDINATOR_URL: "http://coordinator-public:9002"
       PRIVATE_COORDINATOR_URL: "http://coordinator-private:9003"
@@ -69,9 +69,6 @@ services:
       DOMAIN: FOUNDATION
       AUTH_SERVER_URL: http://auth-server:3001
     volumes: ['../../infra/config/auth_public_key.pem:/keys/auth_public_key.pem:ro']
-    depends_on:
-      auth-server:
-        condition: service_healthy
     networks:
       - saral-mesh
     healthcheck:
@@ -89,9 +86,6 @@ services:
       DOMAIN: PUBLIC
       AUTH_SERVER_URL: http://auth-server:3001
     volumes: ['../../infra/config/auth_public_key.pem:/keys/auth_public_key.pem:ro']
-    depends_on:
-      auth-server:
-        condition: service_healthy
     networks:
       - saral-mesh
     healthcheck:
@@ -109,9 +103,6 @@ services:
       DOMAIN: PRIVATE
       AUTH_SERVER_URL: http://auth-server:3001
     volumes: ['../../infra/config/auth_public_key.pem:/keys/auth_public_key.pem:ro']
-    depends_on:
-      auth-server:
-        condition: service_healthy
     networks:
       - saral-mesh
     healthcheck:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,6 +81,13 @@ func (e *Engine) CreateSessionWithBinding(
 	sess.WalletID = walletID
 	sess.KeyID = keyID
 	sess.UserBindingID = userID
+	if curve == "" {
+		if strings.EqualFold(chainFamily, "solana") {
+			curve = "ed25519"
+		} else {
+			curve = "secp256k1"
+		}
+	}
 	sess.Curve = curve
 	sess.ChainFamily = chainFamily
 
@@ -91,7 +99,10 @@ func (e *Engine) CreateSessionWithBinding(
 	if e.AVSSEngine != nil {
 		for _, member := range committee {
 			subSessID := fmt.Sprintf("dkg-%s-contrib-%s", sessionID, member)
-			_, _ = e.AVSSEngine.CreateSession(subSessID, committeeID, member, 1, n, k, t, committee)
+			subSess, _ := e.AVSSEngine.CreateSession(subSessID, committeeID, member, 1, n, k, t, committee)
+			if subSess != nil {
+				subSess.Curve = sess.Curve
+			}
 		}
 	}
 
@@ -133,6 +144,7 @@ func (e *Engine) StartContribution(sessionID string) error {
 		DealerIndex:      sess.SelfIndex,
 		SecretCommitment: dealerPkg.CommitmentMatrix.SecretCommitment().Hex(),
 		CommitmentMatrix: dealerPkg.CommitmentMatrix.ToHexMatrix(),
+		Curve:            sess.Curve,
 		Timestamp:        time.Now().UnixMilli(),
 	}
 	e.broadcastDKG(sess.Committee, MessageTypeDKGContribution, contribMsg)
@@ -140,6 +152,10 @@ func (e *Engine) StartContribution(sessionID string) error {
 	// 2. Delegate AVSS distribution to local AVSS engine
 	go func() {
 		subSessionID := fmt.Sprintf("dkg-%s-contrib-%s", sessionID, e.NodeID)
+		subSess, _ := e.AVSSEngine.CreateSession(subSessionID, sess.CommitteeID, e.NodeID, 1, sess.N, sess.K, sess.T, sess.Committee)
+		if subSess != nil {
+			subSess.Curve = sess.Curve
+		}
 		_, err := e.AVSSEngine.StartDealerSharing(
 			subSessionID, sess.CommitteeID, sess.Committee, sess.K,
 			sess.LocalSecret, sess.LocalBlind,
@@ -169,9 +185,16 @@ func (e *Engine) OnAVSSSubprotocolCompleted(subSessionID string, avssSess *avss.
 			if sess.CanProposeQualifiedSet() && !sess.Agreement.IsDecided && !sess.proposed {
 				sess.proposed = true
 				go func(s *Session) {
-					// If not all N completed yet, wait up to 100ms for peer contributions to arrive
-					if len(s.CompletedSharings) < s.N {
-						time.Sleep(100 * time.Millisecond)
+					// Wait up to 2 seconds for peer contributions to arrive (all N nodes in normal runs)
+					deadline := time.Now().Add(2 * time.Second)
+					for time.Now().Before(deadline) {
+						s.mu.RLock()
+						count := len(s.CompletedSharings)
+						s.mu.RUnlock()
+						if count >= s.N {
+							break
+						}
+						time.Sleep(30 * time.Millisecond)
 					}
 					if s.Agreement.IsDecided {
 						return
@@ -266,7 +289,15 @@ func (e *Engine) HandleDKGContribution(msg *DKGContributionMessage) error {
 		return err
 	}
 
-	cm, err := avss.ParseCommitmentMatrixFromHex(msg.CommitmentMatrix)
+	curve := sess.Curve
+	if curve == "" {
+		curve = msg.Curve
+	}
+	if curve == "" {
+		curve = "nist-p256"
+	}
+
+	cm, err := avss.ParseCommitmentMatrixFromHexForCurve(msg.CommitmentMatrix, curve)
 	if err != nil {
 		return fmt.Errorf("failed to parse peer commitment matrix: %w", err)
 	}
@@ -443,6 +474,11 @@ func (e *Engine) GetPublicShareContribution(
 	keyID, sessionID, committeeID, curve string,
 	epoch uint64,
 ) (string, int, uint64, string, *vault.ShareRecordMetadata, error) {
+	if strings.TrimSpace(curve) == "" {
+		return "", 0, 0, "", nil, errors.New("curve parameter is strictly required")
+	}
+	normCurve := cryptography.NormalizeCurveName(curve)
+
 	if epoch == 0 {
 		epoch = 1
 	}
@@ -465,17 +501,14 @@ func (e *Engine) GetPublicShareContribution(
 			if err == nil && share != nil {
 				defer share.Zero()
 
-				usedCurve := curve
-				if usedCurve == "" && meta.Curve != "" {
-					usedCurve = meta.Curve
-				}
-				if usedCurve == "" {
-					usedCurve = "secp256k1"
+				vaultCurve := cryptography.NormalizeCurveName(meta.Curve)
+				if vaultCurve != "" && vaultCurve != normCurve {
+					return "", 0, 0, "", nil, fmt.Errorf("curve mismatch: vault record bound to %s, request requested %s", meta.Curve, curve)
 				}
 
-				ptHex, err := cryptography.ComputePublicContributionPoint(usedCurve, share.Hex())
+				ptHex, err := cryptography.ComputePublicContributionPoint(normCurve, share.Hex())
 				if err != nil {
-					return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", usedCurve, err)
+					return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", normCurve, err)
 				}
 				return ptHex, meta.NodeIndex, meta.Epoch, meta.PublicSecretCommitment, meta, nil
 			}
@@ -508,17 +541,14 @@ func (e *Engine) GetPublicShareContribution(
 	}
 
 	if matchedSession != nil && matchedSession.FinalShare != nil {
-		usedCurve := curve
-		if usedCurve == "" && matchedSession.Curve != "" {
-			usedCurve = matchedSession.Curve
-		}
-		if usedCurve == "" {
-			usedCurve = "secp256k1"
+		sessionCurve := cryptography.NormalizeCurveName(matchedSession.Curve)
+		if sessionCurve != "" && sessionCurve != normCurve {
+			return "", 0, 0, "", nil, fmt.Errorf("curve mismatch: session bound to %s, request requested %s", matchedSession.Curve, curve)
 		}
 
-		ptHex, err := cryptography.ComputePublicContributionPoint(usedCurve, matchedSession.FinalShare.Hex())
+		ptHex, err := cryptography.ComputePublicContributionPoint(normCurve, matchedSession.FinalShare.Hex())
 		if err != nil {
-			return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", usedCurve, err)
+			return "", 0, 0, "", nil, fmt.Errorf("failed computing contribution point on curve %s: %w", normCurve, err)
 		}
 		commit := ""
 		if matchedSession.MasterSecretCommitment != nil {

@@ -382,10 +382,10 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 	t.Log("  -> Identity persistence verified: public key identical after restart.")
 
 	// 7. Launch 3 Coordinators
-	t.Log("[STEP 7] Launching 3 Coordinators (Foundation: 8011, Public: 8012, Private: 8013)...")
-	coordFPort := 8011
-	coordPPort := 8012
-	coordRPort := 8013
+	t.Log("[STEP 7] Launching 3 Coordinators (Foundation: 18011, Public: 18012, Private: 18013)...")
+	coordFPort := 18011
+	coordPPort := 18012
+	coordRPort := 18013
 
 	// Write dynamic genesis registry for coordinators with the actual ephemeral node identities
 	genesisEntries := make(map[string]interface{})
@@ -631,4 +631,59 @@ func TestArchitectureRuntimeEndToEnd(t *testing.T) {
 
 	_ = node2Port
 	t.Log("✅ ALL 13 INTEGRATION TESTS PASSED (3 verifiers, 3 coordinators, 15 nodes, peer auth, replay protection, fail-closed, stubs)!")
+}
+
+// TestProductionBinaryZeroReconstructionSymbols (T7 / Requirement R4 / FIX 2)
+// Verifies that production binaries compiled without the test_only build tag contain
+// ZERO secret-reconstruction symbols (ReconstructSecret, ExecuteTestReconstruction).
+func TestProductionBinaryZeroReconstructionSymbols(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get cwd: %v", err)
+	}
+	projectRoot := filepath.Clean(filepath.Join(cwd, "../.."))
+
+	tempDir, err := os.MkdirTemp("", "saral-prod-bin-check-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	nodeBin := filepath.Join(tempDir, "saral-node")
+	coordBin := filepath.Join(tempDir, "coordinator")
+
+	// Compile production binaries WITHOUT test_only tag
+	buildNode := exec.Command("go", "build", "-o", nodeBin, "./cmd/main.go")
+	buildNode.Dir = filepath.Join(projectRoot, "services/saral-node")
+	if out, err := buildNode.CombinedOutput(); err != nil {
+		t.Fatalf("failed to build production saral-node: %v\nOutput: %s", err, string(out))
+	}
+
+	buildCoord := exec.Command("go", "build", "-o", coordBin, "./cmd/main.go")
+	buildCoord.Dir = filepath.Join(projectRoot, "services/coordinator")
+	if out, err := buildCoord.CombinedOutput(); err != nil {
+		t.Fatalf("failed to build production coordinator: %v\nOutput: %s", err, string(out))
+	}
+
+	// Inspect symbols using go tool nm
+	forbiddenSymbols := []string{
+		"ReconstructSecret",
+		"ExecuteTestReconstruction",
+	}
+
+	for _, binPath := range []string{nodeBin, coordBin} {
+		nmCmd := exec.Command("go", "tool", "nm", binPath)
+		out, err := nmCmd.Output()
+		if err != nil {
+			t.Fatalf("go tool nm failed on %s: %v", binPath, err)
+		}
+
+		outStr := string(out)
+		for _, sym := range forbiddenSymbols {
+			if strings.Contains(outStr, sym) {
+				t.Fatalf("CRITICAL SECURITY INVARIANT VIOLATION: Forbidden reconstruction symbol %q found in production binary %s", sym, filepath.Base(binPath))
+			}
+		}
+		t.Logf("  -> Verified: Production binary %s contains ZERO reconstruction symbols (%s).", filepath.Base(binPath), strings.Join(forbiddenSymbols, ", "))
+	}
 }

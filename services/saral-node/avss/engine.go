@@ -2,7 +2,6 @@ package avss
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -181,6 +180,10 @@ func (e *Engine) HandleSendMessage(msg *SendMessage) error {
 		}
 	}
 
+	if msg.Curve != "" && sess.Curve == "" {
+		sess.Curve = msg.Curve
+	}
+
 	echos, err := sess.ProcessSendMessage(msg)
 	if err != nil {
 		return err
@@ -335,39 +338,5 @@ func (e *Engine) onSharingCompleted(sess *Session) {
 	for _, l := range listeners {
 		l(sess.SessionID, sess)
 	}
-}
-
-// ExecuteTestReconstruction executes strictly isolated verifiable share reconstruction for test workflows
-func (e *Engine) ExecuteTestReconstruction(
-	sessionID string,
-	shares []*ReconstructionShare,
-) (*ReconstructedSecret, error) {
-	sess, err := e.GetSession(sessionID)
-	if err != nil {
-		return nil, err
-	}
-
-	if sess.Commitments == nil {
-		return nil, errors.New("cannot reconstruct: session has no commitment matrix")
-	}
-
-	sess.mu.Lock()
-	sess.State = StateReconstructionRequested
-	sess.mu.Unlock()
-
-	res, err := ReconstructSecret(shares, sess.Commitments, sess.K)
-	if err != nil {
-		sess.mu.Lock()
-		sess.State = StateSharingFailed
-		sess.Error = err.Error()
-		sess.mu.Unlock()
-		return nil, err
-	}
-
-	sess.mu.Lock()
-	sess.State = StateReconstructionCompleted
-	sess.mu.Unlock()
-
-	return res, nil
 }
 

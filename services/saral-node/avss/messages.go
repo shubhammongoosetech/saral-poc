@@ -37,6 +37,7 @@ type SendMessage struct {
 	RowBlindPoly []string   `json:"rowBlindPoly"` // a'_i(y) coefficients in hex
 	ColPoly      []string   `json:"colPoly"`      // b_i(x) coefficients in hex
 	ColBlindPoly []string   `json:"colBlindPoly"` // b'_i(x) coefficients in hex
+	Curve        string     `json:"curve,omitempty"`
 	Timestamp    int64      `json:"timestamp"`
 }
 
@@ -50,6 +51,7 @@ type EchoMessage struct {
 	Commitments [][]string `json:"commitments"`
 	Point       string     `json:"point"`      // p_{sender, recipient} = a_{sender}(recipient)
 	BlindPoint  string     `json:"blindPoint"` // p'_{sender, recipient} = a'_{sender}(recipient)
+	Curve       string     `json:"curve,omitempty"`
 	Timestamp   int64      `json:"timestamp"`
 }
 
@@ -63,6 +65,7 @@ type ReadyMessage struct {
 	Commitments [][]string `json:"commitments"`
 	Point       string     `json:"point,omitempty"`
 	BlindPoint  string     `json:"blindPoint,omitempty"`
+	Curve       string     `json:"curve,omitempty"`
 	Timestamp   int64      `json:"timestamp"`
 }
 
@@ -105,6 +108,7 @@ type RecoveryResponseMessage struct {
 	Point        string     `json:"point,omitempty"`
 	BlindPoint   string     `json:"blindPoint,omitempty"`
 	RowPolySlice []string   `json:"rowPolySlice,omitempty"`
+	Curve        string     `json:"curve,omitempty"`
 	Timestamp    int64      `json:"timestamp"`
 }
 

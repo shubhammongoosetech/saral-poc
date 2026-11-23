@@ -644,3 +644,61 @@ func TestDKGPedersenCommitmentVsSigningPublicKey(t *testing.T) {
 	t.Logf("   -> Verified: Y != C (blinded commitment strictly decoupled from signing key)")
 	t.Logf("   -> Verified: x*G == Y (blockchain signing key derivation is exact and unblinded)")
 }
+
+func TestDKGMultiCurveCommitmentHandling(t *testing.T) {
+	curves := []string{"secp256k1", "ed25519"}
+	committee := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
+
+	for _, curve := range curves {
+		t.Run("Curve_"+curve, func(t *testing.T) {
+			ss, err := vault.NewShareStore(t.TempDir(), []byte("32-byte-secret-key-for-vault-1234"))
+			if err != nil {
+				t.Fatalf("failed to create share store: %v", err)
+			}
+			engine := dkg.NewEngine("node-1", "FOUNDATION", t.TempDir(), ss, nil, nil)
+			sess, err := engine.CreateSessionWithBinding(
+				"sess-"+curve, "comm-"+curve, "wal-1", "key-1", "user-1", curve, "chain",
+				5, 3, 1, committee,
+			)
+			if err != nil {
+				t.Fatalf("failed to create session: %v", err)
+			}
+
+			// Generate a dealer package for node-2
+			z2, err := cryptography.RandScalarForCurve(curve)
+			if err != nil {
+				t.Fatalf("failed to sample z2: %v", err)
+			}
+			z2Prime, err := cryptography.RandScalarForCurve(curve)
+			if err != nil {
+				t.Fatalf("failed to sample z2Prime: %v", err)
+			}
+			pkg, err := avss.GenerateDealerSharing(
+				"dkg-sess-"+curve+"-contrib-node-2", "comm-"+curve, "node-2", 1, committee, 3, z2, z2Prime,
+			)
+			if err != nil {
+				t.Fatalf("failed to generate dealer sharing: %v", err)
+			}
+
+			// Handle DKG contribution message from node-2
+			contribMsg := &dkg.DKGContributionMessage{
+				SessionID:        sess.SessionID,
+				CommitteeID:      sess.CommitteeID,
+				DealerID:         "node-2",
+				DealerIndex:      2,
+				SecretCommitment: pkg.CommitmentMatrix.SecretCommitment().Hex(),
+				CommitmentMatrix: pkg.CommitmentMatrix.ToHexMatrix(),
+				Curve:            curve,
+				Timestamp:        1000,
+			}
+
+			if err := engine.HandleDKGContribution(contribMsg); err != nil {
+				t.Fatalf("HandleDKGContribution failed for %s: %v", curve, err)
+			}
+
+			if sess.PeerCommitmentMatrices["node-2"] == nil {
+				t.Fatalf("PeerCommitmentMatrix for node-2 was not recorded for curve %s", curve)
+			}
+		})
+	}
+}

@@ -85,6 +85,7 @@ func GenerateDealerSharing(
 		return nil, fmt.Errorf("failed to compute commitment matrix: %w", err)
 	}
 	commitHex := commitMatrix.ToHexMatrix()
+	detectedCurve := cryptography.DetectCurveFromOrder(secret.Order())
 
 	// 4. Generate polynomial evaluations for each participant
 	sendMessages := make(map[string]*SendMessage)
@@ -92,7 +93,7 @@ func GenerateDealerSharing(
 
 	for idx, nodeID := range committee {
 		// Participant index is 1-based: j = 1, 2, ..., n
-		jFE := cryptography.NewFieldElement(int64(idx + 1))
+		jFE := cryptography.NewFieldElementWithOrder(int64(idx+1), secret.Order())
 
 		rowPoly := F.RowPolynomial(jFE)
 		rowBlindPoly := FPrime.RowPolynomial(jFE)
@@ -124,6 +125,7 @@ func GenerateDealerSharing(
 			RowBlindPoly: rowBlindHex,
 			ColPoly:      colHex,
 			ColBlindPoly: colBlindHex,
+			Curve:        detectedCurve,
 			Timestamp:    now,
 		}
 	}

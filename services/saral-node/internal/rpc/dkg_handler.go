@@ -203,7 +203,7 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 		// If stored share is bound to a user, or caller claims a specific user/wallet identity:
 		if (meta != nil && meta.UserBindingID != "") || req.UserID != "" || req.WalletID != "" {
 			if bearerToken == "" {
-				log.Printf("[SECURITY_ALERT] Missing bearer token for user-bound key %s on node %s", req.KeyID, dkgEngine.NodeID)
+				log.Printf("[SECURITY_ALERT] Missing bearer token for user-bound key on node %s", dkgEngine.NodeID)
 				http.Error(w, `{"error":"SECURITY_ALERT: missing required bearer authorization token for user wallet key"}`, http.StatusForbidden)
 				return
 			}
@@ -237,21 +237,21 @@ func RegisterDKGRoutes(mux *http.ServeMux, dkgEngine *dkg.Engine) {
 			// STRICT OWNERSHIP BINDING: Token user MUST match stored vault user binding!
 			if meta != nil && meta.UserBindingID != "" {
 				if tokenUser != meta.UserBindingID {
-					log.Printf("[SECURITY_ALERT] UNAUTHORIZED SHARE CONTRIBUTION ATTEMPT on node %s: caller %s does not match stored binding %s for key %s",
-						dkgEngine.NodeID, tokenUser, meta.UserBindingID, meta.KeyID)
+					log.Printf("[SECURITY_ALERT] UNAUTHORIZED SHARE CONTRIBUTION ATTEMPT on node %s: caller identity does not match stored binding",
+						dkgEngine.NodeID)
 					http.Error(w, `{"error":"SECURITY_ALERT: unauthorized share contribution attempt: user ownership binding mismatch"}`, http.StatusForbidden)
 					return
 				}
 			}
 
 			if req.UserID != "" && tokenUser != req.UserID {
-				log.Printf("[SECURITY_ALERT] User ID parameter mismatch on node %s: token %s vs req %s", dkgEngine.NodeID, tokenUser, req.UserID)
+				log.Printf("[SECURITY_ALERT] User ID parameter mismatch on node %s", dkgEngine.NodeID)
 				http.Error(w, `{"error":"SECURITY_ALERT: user ID parameter does not match token subject"}`, http.StatusForbidden)
 				return
 			}
 
 			if meta != nil && meta.WalletID != "" && claims.WalletID != "" && claims.WalletID != meta.WalletID {
-				log.Printf("[SECURITY_ALERT] Wallet ID mismatch on node %s: token %s vs stored %s", dkgEngine.NodeID, claims.WalletID, meta.WalletID)
+				log.Printf("[SECURITY_ALERT] Wallet ID mismatch on node %s", dkgEngine.NodeID)
 				http.Error(w, `{"error":"SECURITY_ALERT: wallet binding mismatch"}`, http.StatusForbidden)
 				return
 			}

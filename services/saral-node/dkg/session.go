@@ -143,7 +143,7 @@ func (s *Session) StartContribution() (*avss.DealerPackage, error) {
 	}
 
 	// 1. Independently generate a fresh random secret contribution z_i in [1, q-1]
-	zi, err := cryptography.RandScalar()
+	zi, err := cryptography.RandScalarForCurve(s.Curve)
 	if err != nil {
 		s.State = StateFailed
 		s.Error = fmt.Sprintf("failed to generate random secret contribution: %v", err)
@@ -151,7 +151,7 @@ func (s *Session) StartContribution() (*avss.DealerPackage, error) {
 	}
 
 	// 2. Independently generate a random blinding contribution z'_i in [1, q-1]
-	zPrimeI, err := cryptography.RandScalar()
+	zPrimeI, err := cryptography.RandScalarForCurve(s.Curve)
 	if err != nil {
 		s.State = StateFailed
 		s.Error = fmt.Sprintf("failed to generate random blinding contribution: %v", err)
@@ -175,7 +175,7 @@ func (s *Session) StartContribution() (*avss.DealerPackage, error) {
 	s.LocalDealerPkg = dealerPkg
 	s.ContributionDealt = true
 	s.PeerCommitments[s.SelfID] = dealerPkg.CommitmentMatrix.SecretCommitment()
-	s.PeerPublicKeys[s.SelfID] = cryptography.GeneratorG.ScalarMult(zi)
+	s.PeerPublicKeys[s.SelfID] = cryptography.GetGeneratorG(s.Curve).ScalarMult(zi)
 	s.PeerCommitmentMatrices[s.SelfID] = dealerPkg.CommitmentMatrix
 	s.State = StateAVSSSharing
 	s.UpdatedAt = time.Now()
@@ -270,8 +270,9 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 	// 2. Aggregate local private key share and blinding factor:
 	// x_j = \sum_{i \in QUAL} s_{i, j} \pmod N
 	// x'_j = \sum_{i \in QUAL} s'_{i, j} \pmod N
-	combinedShare := cryptography.NewFieldElement(0)
-	combinedBlind := cryptography.NewFieldElement(0)
+	ord := cryptography.GetCurveOrder(s.Curve)
+	combinedShare := cryptography.NewFieldElementWithOrder(0, ord)
+	combinedBlind := cryptography.NewFieldElementWithOrder(0, ord)
 
 	for _, dealerID := range sortedQUAL {
 		subSess := s.CompletedSharings[dealerID]
@@ -281,7 +282,7 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 
 	// 3. Derive group master secret commitment:
 	// C = \sum_{i \in QUAL} C^{(i)}_{0, 0} = x * G + x' * H
-	masterSecretCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	masterSecretCommit := cryptography.ZeroPointForCurve(s.Curve)
 	for _, dealerID := range sortedQUAL {
 		subCommit, exists := s.PeerCommitments[dealerID]
 		if !exists || subCommit == nil {
@@ -292,7 +293,7 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 
 	// 3b. Derive group master signing public key:
 	// Y = \sum_{i \in QUAL} V_i = x * G (where V_i = z_i * G)
-	masterSigningPubKey := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	masterSigningPubKey := cryptography.ZeroPointForCurve(s.Curve)
 	hasSigningKeys := true
 	for _, dealerID := range sortedQUAL {
 		pk, exists := s.PeerPublicKeys[dealerID]
@@ -313,8 +314,8 @@ func (s *Session) AggregateShares(agreedQUAL []string) error {
 
 	// Mathematical consistency check:
 	// Verify that Q_j matches the sum of the dealers' individual share commitments at x = selfIndex
-	selfIdxFE := cryptography.NewFieldElement(int64(s.SelfIndex))
-	expectedShareCommit := &cryptography.CurvePoint{X: cryptography.Zero, Y: cryptography.Zero}
+	selfIdxFE := cryptography.NewFieldElementWithOrder(int64(s.SelfIndex), ord)
+	expectedShareCommit := cryptography.ZeroPointForCurve(s.Curve)
 	for _, dealerID := range sortedQUAL {
 		cm := s.PeerCommitmentMatrices[dealerID]
 		if cm == nil {

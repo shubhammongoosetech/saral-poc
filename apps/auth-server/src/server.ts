@@ -1,7 +1,8 @@
 import { app } from './app';
-import { env } from './config/env';
+import { env, DomainName } from './config/env';
 import { connectPrisma, disconnectPrisma } from './database/prisma';
 import { DataStore } from './storage/store';
+import { saralBackendClient } from './clients/saralBackendClient';
 
 export async function startServer(): Promise<any> {
   const port = env.PORT;
@@ -16,12 +17,29 @@ export async function startServer(): Promise<any> {
     console.warn('[SARAL Auth Server] Database initialization warning:', err.message);
   }
 
-  // 2. Start Express server
+  // 2. Read-only probe of 3 coordinators (Zero DKG initiation, zero DB wallet inserts on boot)
+  try {
+    const domains: DomainName[] = ['foundation', 'public', 'private'];
+    await Promise.allSettled(
+      domains.map(async (domain) => {
+        try {
+          const h = await saralBackendClient.probeCoordinatorHealth(domain);
+          console.log(`[SARAL Auth Server] Coordinator ${domain} healthy (${h.enrolledNodes} nodes enrolled)`);
+        } catch (e: any) {
+          console.warn(`[SARAL Auth Server] Coordinator ${domain} probe warning: ${e.message}`);
+        }
+      })
+    );
+  } catch (err: any) {
+    console.warn('[SARAL Auth Server] Coordinator probe error:', err.message);
+  }
+
+  // 3. Start Express server
   const server = app.listen(port, () => {
     console.log(`[SARAL Auth Server] Active and listening on port ${port} (Prisma ORM enabled)`);
   });
 
-  // 3. Graceful shutdown handler
+  // 4. Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`[SARAL Auth Server] Received ${signal}, closing server gracefully...`);
     server.close(async () => {

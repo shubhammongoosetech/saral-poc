@@ -332,6 +332,7 @@ func (v *ValidatedAgreementInstance) StartRound(round int) (*AgreementVoteMessag
 
 	v.sentPrevote[round] = true
 	msg := &AgreementVoteMessage{
+		SessionID:     v.SessionID,
 		CommitteeID:   v.CommitteeID,
 		Epoch:         v.Epoch,
 		Round:         round,
@@ -449,6 +450,7 @@ func (v *ValidatedAgreementInstance) ProcessVote(msg *AgreementVoteMessage) (
 
 			v.recordVote(round, StepMainVote, selectedHash, v.SelfID, mainVoteVal)
 			nextVote = &AgreementVoteMessage{
+				SessionID:     v.SessionID,
 				CommitteeID:   v.CommitteeID,
 				Epoch:         v.Epoch,
 				Round:         round,
@@ -500,6 +502,7 @@ func (v *ValidatedAgreementInstance) ProcessVote(msg *AgreementVoteMessage) (
 				v.coinShares[round][v.SelfID] = cs
 
 				coinShareMsg = &AgreementCoinShareMessage{
+					SessionID:   v.SessionID,
 					CommitteeID: v.CommitteeID,
 					Epoch:       v.Epoch,
 					Round:       round,
@@ -628,6 +631,7 @@ func (v *ValidatedAgreementInstance) ProcessCoinShare(msg *AgreementCoinShareMes
 
 			v.recordVote(nextRound, StepPreVote, candHash, v.SelfID, voteVal)
 			nextVote = &AgreementVoteMessage{
+				SessionID:     v.SessionID,
 				CommitteeID:   v.CommitteeID,
 				Epoch:         v.Epoch,
 				Round:         nextRound,

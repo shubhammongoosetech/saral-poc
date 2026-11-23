@@ -70,6 +70,7 @@ export interface WalletMetadataRecord {
     | 'UNAVAILABLE'
     | 'ERROR'
     | 'LEGACY_SINGLE_DOMAIN'
+    | 'LEGACY_CURVE_MISMATCH'
     | string;
   error?: string;
   keyReferences: {
@@ -78,10 +79,12 @@ export interface WalletMetadataRecord {
     bitcoin?: string;
     dkgSessionId?: string;
     dkgSessionIds?: {
-      foundation: string;
-      public: string;
-      private: string;
+      foundation: { secp256k1: string; ed25519: string } | string;
+      public: { secp256k1: string; ed25519: string } | string;
+      private: { secp256k1: string; ed25519: string } | string;
+      [key: string]: any;
     };
+    [key: string]: any;
   };
   createdAt: string;
   updatedAt: string;

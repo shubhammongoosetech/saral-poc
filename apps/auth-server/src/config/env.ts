@@ -124,6 +124,44 @@ export const DOMAINS_MAP: Record<DomainName, DomainConfig> = {
   private: DOMAINS.find((d) => d.name === 'private')!,
 };
 
+// Production secrets validation (FIX 8)
+function validateProductionSecrets(): void {
+  const isProd = process.env.NODE_ENV === 'production';
+  const jwt = process.env.JWT_SECRET || 'saral_dev_jwt_secret_key_2024_change_me_min32';
+  const mfa = process.env.MFA_ENCRYPTION_KEY || 'saral-mfa-protection-key-2026-v3';
+  const otp = process.env.OTP_PEPPER || 'saral-otp-cryptographic-pepper-2026';
+  const internalToken = process.env.SARAL_INTERNAL_TOKEN || '';
+
+  if (isProd) {
+    if (jwt.length < 32 || jwt.includes('change_me') || jwt.includes('dev')) {
+      throw new Error(
+        '[Security Config Error] Production startup refused: JWT_SECRET must be at least 32 characters and cannot contain "dev" or "change_me".'
+      );
+    }
+    if (mfa.length < 32) {
+      throw new Error(
+        '[Security Config Error] Production startup refused: MFA_ENCRYPTION_KEY must be at least 32 characters in production.'
+      );
+    }
+    if (otp.length < 32) {
+      throw new Error(
+        '[Security Config Error] Production startup refused: OTP_PEPPER must be at least 32 characters in production.'
+      );
+    }
+    if (!internalToken || internalToken.length < 16) {
+      throw new Error(
+        '[Security Config Error] Production startup refused: SARAL_INTERNAL_TOKEN is required and must be at least 16 characters in production.'
+      );
+    }
+  } else if (!process.env.NODE_ENV || process.env.NODE_ENV === 'development') {
+    if (jwt.includes('change_me') || mfa.length < 32 || otp.length < 32) {
+      console.warn('[Security Warning] Running with development cryptographic secrets. Do NOT use these in production!');
+    }
+  }
+}
+
+validateProductionSecrets();
+
 export const env = {
   PORT: parseInt(process.env.PORT || '3001', 10),
   NODE_ENV: process.env.NODE_ENV || 'development',
@@ -141,6 +179,8 @@ export const env = {
   MFA_ENCRYPTION_KEY: process.env.MFA_ENCRYPTION_KEY || 'saral-mfa-protection-key-2026-v3',
   OTP_PEPPER: process.env.OTP_PEPPER || 'saral-otp-cryptographic-pepper-2026',
   ENABLE_DEV_AUTH: process.env.ENABLE_DEV_AUTH === 'true',
+  SARAL_INTERNAL_TOKEN: process.env.SARAL_INTERNAL_TOKEN || '',
+  SARAL_DKG_TIMEOUT_MS: parseInt(process.env.SARAL_DKG_TIMEOUT_MS || '15000', 10),
 
   // Client URLs & OAuth
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173',

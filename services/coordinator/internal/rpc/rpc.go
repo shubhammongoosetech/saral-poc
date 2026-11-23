@@ -305,6 +305,8 @@ func (s *Server) dispatch(method string, params json.RawMessage, token string) (
 	// Phase 3 Dealerless DKG Methods
 	case "saral_startDkg":
 		return s.handleStartDKG(params, token)
+	case "saral_abortDkg":
+		return s.handleAbortDKG(params, token)
 	case "saral_getDkgStatus":
 		return s.handleGetDKGStatus(params)
 	case "saral_getDkgParticipants":

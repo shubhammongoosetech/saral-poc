@@ -2,6 +2,7 @@ package cryptography
 
 import (
 	"crypto/elliptic"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -21,7 +22,187 @@ var (
 	Ed25519D, _  = new(big.Int).SetString("52036CEE2B6FFE738CC740797779E89800700A4D4141D8AB75EB4DCA135978A3", 16) // d = -121665/121666 mod P
 	Ed25519Bx, _ = new(big.Int).SetString("216936D3CD6E53FEC0A4E231FDD6DC5C692CC7609525A7B2C9562D608F25D51A", 16)
 	Ed25519By, _ = new(big.Int).SetString("6666666666666666666666666666666666666666666666666666666666666658", 16) // 4/5 mod P
+
+	// Curve Generators
+	Secp256k1GeneratorG *CurvePoint
+	Secp256k1GeneratorH *CurvePoint
+
+	Ed25519GeneratorG *CurvePoint
+	Ed25519GeneratorH *CurvePoint
 )
+
+const (
+	PedersenSeedH_Secp256k1 = "SARAL_SECP256K1_PEDERSEN_H_V1_NUMS"
+	PedersenSeedH_Ed25519   = "SARAL_ED25519_PEDERSEN_H_V1_NUMS"
+)
+
+func init() {
+	Secp256k1GeneratorG = &CurvePoint{X: new(big.Int).Set(Secp256k1Gx), Y: new(big.Int).Set(Secp256k1Gy), Curve: "secp256k1"}
+	hx, hy, err := deriveSecp256k1H(PedersenSeedH_Secp256k1)
+	if err != nil {
+		panic(fmt.Sprintf("failed to derive secp256k1 NUMS generator H: %v", err))
+	}
+	Secp256k1GeneratorH = &CurvePoint{X: hx, Y: hy, Curve: "secp256k1"}
+
+	Ed25519GeneratorG = &CurvePoint{X: new(big.Int).Set(Ed25519Bx), Y: new(big.Int).Set(Ed25519By), Curve: "ed25519"}
+	edHx, edHy, err := deriveEd25519H(PedersenSeedH_Ed25519)
+	if err != nil {
+		panic(fmt.Sprintf("failed to derive ed25519 NUMS generator H: %v", err))
+	}
+	Ed25519GeneratorH = &CurvePoint{X: edHx, Y: edHy, Curve: "ed25519"}
+}
+
+// NormalizeCurveName maps curve aliases to standard names: "secp256k1", "ed25519", "nist-p256".
+func NormalizeCurveName(curve string) string {
+	norm := strings.ToLower(strings.TrimSpace(curve))
+	switch {
+	case strings.Contains(norm, "secp256k1") || norm == "secp" || norm == "k1":
+		return "secp256k1"
+	case strings.Contains(norm, "ed25519") || norm == "ed" || norm == "solana":
+		return "ed25519"
+	case strings.Contains(norm, "p256") || strings.Contains(norm, "p-256") || strings.Contains(norm, "nist"):
+		return "nist-p256"
+	default:
+		if norm == "" {
+			return "nist-p256"
+		}
+		return norm
+	}
+}
+
+// GetCurveOrder returns the scalar subgroup order for the designated curve.
+func GetCurveOrder(curve string) *big.Int {
+	switch NormalizeCurveName(curve) {
+	case "secp256k1":
+		return new(big.Int).Set(Secp256k1N)
+	case "ed25519":
+		return new(big.Int).Set(Ed25519L)
+	default:
+		if OrderQ != nil {
+			return new(big.Int).Set(OrderQ)
+		}
+		return new(big.Int).Set(elliptic.P256().Params().N)
+	}
+}
+
+// GetGeneratorG returns the base generator G for the designated curve.
+func GetGeneratorG(curve string) *CurvePoint {
+	switch NormalizeCurveName(curve) {
+	case "secp256k1":
+		return Secp256k1GeneratorG
+	case "ed25519":
+		return Ed25519GeneratorG
+	default:
+		return GeneratorG
+	}
+}
+
+// GetGeneratorH returns the Pedersen NUMS generator H for the designated curve.
+func GetGeneratorH(curve string) *CurvePoint {
+	switch NormalizeCurveName(curve) {
+	case "secp256k1":
+		return Secp256k1GeneratorH
+	case "ed25519":
+		return Ed25519GeneratorH
+	default:
+		return GeneratorH
+	}
+}
+
+// ZeroPointForCurve returns the neutral/identity point for the designated curve.
+func ZeroPointForCurve(curve string) *CurvePoint {
+	norm := NormalizeCurveName(curve)
+	switch norm {
+	case "secp256k1":
+		return &CurvePoint{X: big.NewInt(0), Y: big.NewInt(0), Curve: "secp256k1"}
+	case "ed25519":
+		return &CurvePoint{X: big.NewInt(0), Y: big.NewInt(1), Curve: "ed25519"}
+	default:
+		return &CurvePoint{X: big.NewInt(0), Y: big.NewInt(0), Curve: "nist-p256"}
+	}
+}
+
+// deriveSecp256k1H derives a transparent NUMS point on secp256k1 with unknown discrete log w.r.t G
+func deriveSecp256k1H(seed string) (*big.Int, *big.Int, error) {
+	exp := new(big.Int).Add(Secp256k1P, big.NewInt(1))
+	exp.Rsh(exp, 2) // (P + 1) / 4
+	for counter := 0; counter < 100000; counter++ {
+		h := sha256.New()
+		h.Write([]byte(seed))
+		h.Write([]byte(fmt.Sprintf(":%d", counter)))
+		x := new(big.Int).SetBytes(h.Sum(nil))
+		x.Mod(x, Secp256k1P)
+
+		// rhs = x^3 + 7 mod P
+		x3 := new(big.Int).Exp(x, big.NewInt(3), Secp256k1P)
+		rhs := new(big.Int).Add(x3, big.NewInt(7))
+		rhs.Mod(rhs, Secp256k1P)
+
+		y := new(big.Int).Exp(rhs, exp, Secp256k1P)
+		y2 := new(big.Int).Exp(y, big.NewInt(2), Secp256k1P)
+		if y2.Cmp(rhs) == 0 && y.Sign() != 0 {
+			// Verify order is Secp256k1N
+			nx, ny := Secp256k1ScalarMult(x, y, Secp256k1N)
+			if nx.Sign() == 0 && ny.Sign() == 0 {
+				return x, y, nil
+			}
+		}
+	}
+	return nil, nil, fmt.Errorf("failed to derive secp256k1 NUMS point")
+}
+
+// deriveEd25519H derives a transparent NUMS point in the prime-order subgroup of Ed25519
+func deriveEd25519H(seed string) (*big.Int, *big.Int, error) {
+	iModP := new(big.Int).Exp(big.NewInt(2), new(big.Int).Rsh(new(big.Int).Sub(Ed25519P, big.NewInt(1)), 2), Ed25519P)
+	sqrtExp := new(big.Int).Rsh(new(big.Int).Add(Ed25519P, big.NewInt(3)), 3) // (P + 3) / 8
+
+	for counter := 0; counter < 100000; counter++ {
+		h := sha256.New()
+		h.Write([]byte(seed))
+		h.Write([]byte(fmt.Sprintf(":%d", counter)))
+		y := new(big.Int).SetBytes(h.Sum(nil))
+		y.Mod(y, Ed25519P)
+
+		// x^2 = (y^2 - 1) / (1 + d y^2) mod P
+		y2 := new(big.Int).Mul(y, y)
+		y2.Mod(y2, Ed25519P)
+		u := new(big.Int).Sub(y2, big.NewInt(1))
+		u.Mod(u, Ed25519P)
+		if u.Sign() < 0 {
+			u.Add(u, Ed25519P)
+		}
+
+		v := new(big.Int).Mul(Ed25519D, y2)
+		v.Add(v, big.NewInt(1))
+		v.Mod(v, Ed25519P)
+		invV := new(big.Int).ModInverse(v, Ed25519P)
+		if invV == nil {
+			continue
+		}
+		x2 := new(big.Int).Mul(u, invV)
+		x2.Mod(x2, Ed25519P)
+
+		candX := new(big.Int).Exp(x2, sqrtExp, Ed25519P)
+		candX2 := new(big.Int).Exp(candX, big.NewInt(2), Ed25519P)
+		if candX2.Cmp(x2) != 0 {
+			candX.Mul(candX, iModP)
+			candX.Mod(candX, Ed25519P)
+			candX2 = new(big.Int).Exp(candX, big.NewInt(2), Ed25519P)
+		}
+
+		if candX2.Cmp(x2) == 0 && candX.Sign() != 0 {
+			// Multiply by cofactor 8 to guarantee point is strictly in prime-order subgroup
+			hx, hy := Ed25519ScalarMult(candX, y, big.NewInt(8))
+			if hx.Sign() != 0 || hy.Cmp(big.NewInt(1)) != 0 {
+				lx, ly := Ed25519ScalarMult(hx, hy, Ed25519L)
+				if lx.Sign() == 0 && ly.Cmp(big.NewInt(1)) == 0 {
+					return hx, hy, nil
+				}
+			}
+		}
+	}
+	return nil, nil, fmt.Errorf("failed to derive ed25519 NUMS point")
+}
 
 // Secp256k1Add computes P1 + P2 on y^2 = x^3 + 7 mod P
 func Secp256k1Add(x1, y1, x2, y2 *big.Int) (*big.Int, *big.Int) {
@@ -200,7 +381,6 @@ func ComputePublicContributionPoint(curve string, scalarHex string) (string, err
 		return "", fmt.Errorf("invalid scalar hex: %w", err)
 	}
 	defer func() {
-		// Zero out plaintext buffer
 		for i := range scalarBytes {
 			scalarBytes[i] = 0
 		}
@@ -211,22 +391,22 @@ func ComputePublicContributionPoint(curve string, scalarHex string) (string, err
 		scalarInt.SetInt64(0)
 	}()
 
-	normCurve := strings.ToLower(strings.TrimSpace(curve))
+	normCurve := NormalizeCurveName(curve)
 	var px, py *big.Int
 
-	switch {
-	case strings.Contains(normCurve, "secp256k1"):
+	switch normCurve {
+	case "secp256k1":
 		px, py = Secp256k1ScalarBaseMult(scalarInt)
-
-	case strings.Contains(normCurve, "ed25519"):
+	case "ed25519":
 		px, py = Ed25519ScalarBaseMult(scalarInt)
-
-	default: // NIST P-256
+	case "nist-p256":
 		p256 := elliptic.P256()
 		px, py = p256.ScalarBaseMult(scalarBytes)
+	default:
+		return "", fmt.Errorf("unsupported curve: %s", curve)
 	}
 
-	if px == nil || py == nil || (px.Sign() == 0 && py.Sign() == 0) {
+	if px == nil || py == nil || (px.Sign() == 0 && py.Sign() == 0 && normCurve != "ed25519") {
 		return "", fmt.Errorf("scalar multiplication resulted in point at infinity")
 	}
 
@@ -240,4 +420,3 @@ func ComputePublicContributionPoint(curve string, scalarHex string) (string, err
 
 	return hex.EncodeToString(ptBytes), nil
 }
-

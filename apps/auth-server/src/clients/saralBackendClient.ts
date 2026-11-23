@@ -124,13 +124,6 @@ function isDomainName(val: unknown): val is DomainName {
   return val === 'foundation' || val === 'public' || val === 'private';
 }
 
-function inferDomainFromCommittee(committeeId?: string): DomainName {
-  if (!committeeId) return 'foundation';
-  if (committeeId.includes('public')) return 'public';
-  if (committeeId.includes('private')) return 'private';
-  return 'foundation';
-}
-
 export class SaralBackendClient {
   public coordinatorUrls: Record<DomainName, string>;
   private internalToken: string;
@@ -292,91 +285,67 @@ export class SaralBackendClient {
   }
 
   /**
-   * Orchestrates DKG across committee nodes for a specific domain.
+   * Orchestrates DKG across committee nodes for an explicitly designated domain.
    */
   public async startDkg(
-    domainOrParams?: DomainName | DkgStartParams,
-    maybeParams?: DkgStartParams
+    domain: DomainName,
+    params: DkgStartParams
   ): Promise<DkgStartResponse> {
-    let domain: DomainName = 'foundation';
-    let params: DkgStartParams = {};
-
-    if (isDomainName(domainOrParams)) {
-      domain = domainOrParams;
-      params = maybeParams || {};
-    } else if (domainOrParams) {
-      params = domainOrParams;
-      domain = inferDomainFromCommittee(params.committeeId);
+    if (!domain || !isDomainName(domain)) {
+      throw new Error(`[saralBackendClient] DomainName is strictly required: got "${domain}"`);
     }
-
     return this.rpcCall<DkgStartResponse>('saral_startDkg', params as Record<string, unknown>, undefined, domain);
   }
 
   /**
-   * Retrieves status and node completion counts for an active DKG session on a domain.
+   * Retrieves status and node completion counts for an active DKG session on an explicit domain.
    */
   public async getDkgStatus(
-    domainOrSessionId: DomainName | string,
-    maybeSessionId?: string
+    domain: DomainName,
+    sessionId: string
   ): Promise<DkgStatusResponse> {
-    let domain: DomainName = 'foundation';
-    let sessionId: string = '';
-
-    if (isDomainName(domainOrSessionId)) {
-      domain = domainOrSessionId;
-      sessionId = maybeSessionId || '';
-    } else {
-      sessionId = domainOrSessionId;
-      if (sessionId.includes('public')) domain = 'public';
-      else if (sessionId.includes('private')) domain = 'private';
+    if (!domain || !isDomainName(domain)) {
+      throw new Error(`[saralBackendClient] DomainName is strictly required: got "${domain}"`);
     }
-
     return this.rpcCall<DkgStatusResponse>('saral_getDkgStatus', { sessionId }, undefined, domain);
   }
 
   /**
-   * Retrieves public key from completed DKG session on a domain.
+   * Retrieves public key from completed DKG session on an explicit domain.
    */
   public async getDkgPublicKey(
-    domainOrSessionId: DomainName | string,
-    maybeSessionId?: string
+    domain: DomainName,
+    sessionId: string
   ): Promise<DkgPublicKeyResponse> {
-    let domain: DomainName = 'foundation';
-    let sessionId: string = '';
-
-    if (isDomainName(domainOrSessionId)) {
-      domain = domainOrSessionId;
-      sessionId = maybeSessionId || '';
-    } else {
-      sessionId = domainOrSessionId;
-      if (sessionId.includes('public')) domain = 'public';
-      else if (sessionId.includes('private')) domain = 'private';
+    if (!domain || !isDomainName(domain)) {
+      throw new Error(`[saralBackendClient] DomainName is strictly required: got "${domain}"`);
     }
-
     return this.rpcCall<DkgPublicKeyResponse>('saral_getDkgPublicKey', { sessionId }, undefined, domain);
   }
 
   /**
+   * Marks an incomplete/failed DKG session as ABORTED on an explicit domain.
+   */
+  public async abortDkg(
+    domain: DomainName,
+    sessionId: string
+  ): Promise<{ success: boolean; sessionId: string; state: string }> {
+    if (!domain || !isDomainName(domain)) {
+      throw new Error(`[saralBackendClient] DomainName is strictly required: got "${domain}"`);
+    }
+    return this.rpcCall('saral_abortDkg', { sessionId }, undefined, domain);
+  }
+
+  /**
    * Recomputes domain aggregate signing public key Y_domain from verified distributed key shares
-   * WITHOUT EVER exposing or reconstructing the complete private scalar x.
+   * on an explicit domain WITHOUT EVER exposing or reconstructing the complete private scalar x.
    */
   public async derivePublicKey(
-    domainOrParams: DomainName | DerivePublicKeyParams,
-    maybeParams?: DerivePublicKeyParams
+    domain: DomainName,
+    params: DerivePublicKeyParams
   ): Promise<DerivePublicKeyResponse> {
-    let domain: DomainName = 'foundation';
-    let params: DerivePublicKeyParams;
-
-    if (isDomainName(domainOrParams)) {
-      domain = domainOrParams;
-      params = maybeParams!;
-    } else {
-      params = domainOrParams;
-      domain = inferDomainFromCommittee(params.committeeId);
-      if (params.dkgSessionId) {
-        if (params.dkgSessionId.includes('public')) domain = 'public';
-        else if (params.dkgSessionId.includes('private')) domain = 'private';
-      }
+    if (!domain || !isDomainName(domain)) {
+      throw new Error(`[saralBackendClient] DomainName is strictly required: got "${domain}"`);
     }
 
     // Generate scoped authorization token binding user and wallet identities
@@ -410,6 +379,18 @@ export class SaralBackendClient {
 
   public async getDomainStatus(domain: DomainName = 'foundation'): Promise<unknown> {
     return this.rpcCall('saral_getDomainStatus', {}, undefined, domain);
+  }
+
+  public async probeCoordinatorHealth(domain: DomainName): Promise<{ status: string; domain: string; enrolledNodes: number }> {
+    if (!domain || !isDomainName(domain)) {
+      throw new Error(`[saralBackendClient] DomainName is strictly required: got "${domain}"`);
+    }
+    const url = `${this.getCoordinatorUrl(domain)}/health`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) {
+      throw new Error(`Coordinator ${domain} health check failed with status ${res.status}`);
+    }
+    return res.json() as Promise<{ status: string; domain: string; enrolledNodes: number }>;
   }
 }
 

@@ -23,7 +23,7 @@ import crypto from 'crypto';
 import { DataStore, WalletMetadataRecord } from '../storage/store';
 import { evaluateWorkingPolicy } from './policyService';
 import { saralBackendClient } from '../clients/saralBackendClient';
-import { DOMAINS, DOMAINS_MAP } from '../config/env';
+import { DOMAINS, DomainName } from '../config/env';
 import { addSecp256k1PublicKeys, addEd25519PublicKeys } from '../utils/curveMath';
 import {
   toEip55Checksum,
@@ -278,7 +278,7 @@ export async function recomputeWalletAddressesFromShares(
   }
 
   const keyRefs = wallet.keyReferences || {};
-  const dkgSessionIds = keyRefs.dkgSessionIds;
+  const dkgSessionIds = keyRefs.dkgSessionIds as any;
 
   // Strict 3-Domain Invariant: All 3 domain session IDs must be present
   if (
@@ -294,43 +294,85 @@ export async function recomputeWalletAddressesFromShares(
     throw err;
   }
 
-  // 1. MST EVM (secp256k1) — Query all 3 domains concurrently & add points
+  // FIX 1f: Legacy wallet detection — flat 3-string layout check
+  const isLegacyFlatString =
+    typeof dkgSessionIds.foundation === 'string' ||
+    typeof dkgSessionIds.public === 'string' ||
+    typeof dkgSessionIds.private === 'string';
+
+  if (isLegacyFlatString) {
+    wallet.status = 'LEGACY_CURVE_MISMATCH';
+    await store.saveWallet(wallet);
+    const err: any = new Error(
+      'Wallet created with single/unsupported curve. Please re-onboard.'
+    );
+    err.statusCode = 409;
+    throw err;
+  }
+
+  // Validate 6-session nested curve structure: 3 domains x 2 curves
+  const hasAllCurves =
+    dkgSessionIds.foundation?.secp256k1 &&
+    dkgSessionIds.foundation?.ed25519 &&
+    dkgSessionIds.public?.secp256k1 &&
+    dkgSessionIds.public?.ed25519 &&
+    dkgSessionIds.private?.secp256k1 &&
+    dkgSessionIds.private?.ed25519;
+
+  if (!hasAllCurves) {
+    const err: any = new Error(
+      'Wallet incomplete or legacy: all 3 domain sessions across both secp256k1 and ed25519 are strictly required. Re-onboarding required.'
+    );
+    err.statusCode = 409;
+    throw err;
+  }
+
+  // 1. secp256k1 DKG (serves MST EVM and Bitcoin Taproot) — Query all 3 domains concurrently & add points
   let mstPubkey = '';
+  let btcPubkey = '';
   try {
-    const mstDomainPoints = await Promise.all(
+    const secpDomainPoints = await Promise.all(
       DOMAINS.map(async (domain) => {
-        const resp = await saralBackendClient.derivePublicKey({
+        const resp = await saralBackendClient.derivePublicKey(domain.name, {
           walletId: wallet.walletId,
           userId,
           keyId: keyRefs.mst,
-          dkgSessionId: dkgSessionIds[domain.name],
+          dkgSessionId: dkgSessionIds[domain.name].secp256k1,
           committeeId: domain.committeeId,
           curve: 'secp256k1',
           chainFamily: 'mst',
         });
         if (!resp?.masterPublicKey) {
-          throw new Error(`Missing masterPublicKey from ${domain.name} domain for MST`);
+          throw new Error(`Missing masterPublicKey from ${domain.name} domain for secp256k1`);
         }
         return resp.masterPublicKey;
       })
     );
-    mstPubkey = addSecp256k1PublicKeys(mstDomainPoints);
+    mstPubkey = addSecp256k1PublicKeys(secpDomainPoints);
+    // FIX 1c & FIX 1g: Both MST and Bitcoin share the verified secp256k1 public key point Y.
+    // BIP-340/341 Taproot Parity Invariant:
+    // Taproot addresses use the x-only public key (32 bytes) of the combined secp256k1 curve point Y.
+    // In elliptic curve cryptography, both point Y = (x, y) and its negation -Y = (x, -y mod p) share
+    // the identical x-coordinate and yield the identical Taproot bech32m address.
+    // Threshold Taproot Schnorr signatures handle the odd/even parity bit during partial-signature aggregation
+    // without ever needing to expose, reconstruct, or persist the master private key scalar.
+    btcPubkey = mstPubkey;
   } catch (err: any) {
     throw new Error(
-      `CRITICAL_SECURITY_ERROR: Failed to derive 3-domain public key for MST: ${err.message}. Fail-closed active.`
+      `CRITICAL_SECURITY_ERROR: Failed to derive 3-domain public key for secp256k1 (MST/BTC): ${err.message}. Fail-closed active.`
     );
   }
 
-  // 2. Solana (ed25519) — Query all 3 domains concurrently & add points
+  // 2. ed25519 DKG (serves Solana) — Query all 3 domains concurrently & add points
   let solPubkey = '';
   try {
     const solDomainPoints = await Promise.all(
       DOMAINS.map(async (domain) => {
-        const resp = await saralBackendClient.derivePublicKey({
+        const resp = await saralBackendClient.derivePublicKey(domain.name, {
           walletId: wallet.walletId,
           userId,
           keyId: keyRefs.solana,
-          dkgSessionId: dkgSessionIds[domain.name],
+          dkgSessionId: dkgSessionIds[domain.name].ed25519,
           committeeId: domain.committeeId,
           curve: 'ed25519',
           chainFamily: 'solana',
@@ -344,34 +386,7 @@ export async function recomputeWalletAddressesFromShares(
     solPubkey = addEd25519PublicKeys(solDomainPoints);
   } catch (err: any) {
     throw new Error(
-      `CRITICAL_SECURITY_ERROR: Failed to derive 3-domain public key for Solana: ${err.message}. Fail-closed active.`
-    );
-  }
-
-  // 3. Bitcoin (secp256k1) — Query all 3 domains concurrently & add points
-  let btcPubkey = '';
-  try {
-    const btcDomainPoints = await Promise.all(
-      DOMAINS.map(async (domain) => {
-        const resp = await saralBackendClient.derivePublicKey({
-          walletId: wallet.walletId,
-          userId,
-          keyId: keyRefs.bitcoin,
-          dkgSessionId: dkgSessionIds[domain.name],
-          committeeId: domain.committeeId,
-          curve: 'secp256k1',
-          chainFamily: 'bitcoin',
-        });
-        if (!resp?.masterPublicKey) {
-          throw new Error(`Missing masterPublicKey from ${domain.name} domain for Bitcoin`);
-        }
-        return resp.masterPublicKey;
-      })
-    );
-    btcPubkey = addSecp256k1PublicKeys(btcDomainPoints);
-  } catch (err: any) {
-    throw new Error(
-      `CRITICAL_SECURITY_ERROR: Failed to derive 3-domain public key for Bitcoin: ${err.message}. Fail-closed active.`
+      `CRITICAL_SECURITY_ERROR: Failed to derive 3-domain public key for Solana (ed25519): ${err.message}. Fail-closed active.`
     );
   }
 
@@ -380,7 +395,7 @@ export async function recomputeWalletAddressesFromShares(
     mst: mstPubkey,
     solana: solPubkey,
     bitcoin: btcPubkey,
-    dkgSessionId: dkgSessionIds.foundation,
+    dkgSessionId: dkgSessionIds.foundation.secp256k1,
   });
 
   return {
@@ -405,17 +420,40 @@ export async function createOrGetWallet(userId: string): Promise<{
   // Check if wallet already exists
   const existing = store.getWalletByUserId(userId);
   if (existing && existing.status === 'READY') {
-    const sessionIds = existing.keyReferences?.dkgSessionIds;
-    const is3Domain = sessionIds && sessionIds.foundation && sessionIds.public && sessionIds.private;
-    if (!is3Domain) {
-      existing.status = 'LEGACY_SINGLE_DOMAIN';
+    const sessionIds = existing.keyReferences?.dkgSessionIds as any;
+    const isLegacyFlatString =
+      typeof sessionIds?.foundation === 'string' ||
+      typeof sessionIds?.public === 'string' ||
+      typeof sessionIds?.private === 'string';
+
+    if (isLegacyFlatString) {
+      existing.status = 'LEGACY_CURVE_MISMATCH';
       await store.saveWallet(existing);
       const err: any = new Error(
-        'Legacy single-domain wallet detected. Protocol requires 3-domain security. Re-onboarding required.'
+        'Wallet created with single/unsupported curve. Please re-onboard.'
       );
       err.statusCode = 409;
       throw err;
     }
+
+    const is6SessionReady =
+      sessionIds?.foundation?.secp256k1 &&
+      sessionIds?.foundation?.ed25519 &&
+      sessionIds?.public?.secp256k1 &&
+      sessionIds?.public?.ed25519 &&
+      sessionIds?.private?.secp256k1 &&
+      sessionIds?.private?.ed25519;
+
+    if (!is6SessionReady) {
+      existing.status = 'LEGACY_CURVE_MISMATCH';
+      await store.saveWallet(existing);
+      const err: any = new Error(
+        'Legacy single-domain or unsupported curve wallet detected. Protocol requires 3-domain multi-curve security. Re-onboarding required.'
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+
     const derived = await recomputeWalletAddressesFromShares(userId);
     return {
       wallet: existing,
@@ -434,17 +472,40 @@ export async function createOrGetWallet(userId: string): Promise<{
       // Re-check existing wallet after acquiring lock
       const doubleCheck = store.getWalletByUserId(userId);
       if (doubleCheck && doubleCheck.status === 'READY') {
-        const sessionIds = doubleCheck.keyReferences?.dkgSessionIds;
-        const is3Domain = sessionIds && sessionIds.foundation && sessionIds.public && sessionIds.private;
-        if (!is3Domain) {
-          doubleCheck.status = 'LEGACY_SINGLE_DOMAIN';
+        const sessionIds = doubleCheck.keyReferences?.dkgSessionIds as any;
+        const isLegacyFlatString =
+          typeof sessionIds?.foundation === 'string' ||
+          typeof sessionIds?.public === 'string' ||
+          typeof sessionIds?.private === 'string';
+
+        if (isLegacyFlatString) {
+          doubleCheck.status = 'LEGACY_CURVE_MISMATCH';
           await store.saveWallet(doubleCheck);
           const err: any = new Error(
-            'Legacy single-domain wallet detected. Protocol requires 3-domain security. Re-onboarding required.'
+            'Wallet created with single/unsupported curve. Please re-onboard.'
           );
           err.statusCode = 409;
           throw err;
         }
+
+        const is6SessionReady =
+          sessionIds?.foundation?.secp256k1 &&
+          sessionIds?.foundation?.ed25519 &&
+          sessionIds?.public?.secp256k1 &&
+          sessionIds?.public?.ed25519 &&
+          sessionIds?.private?.secp256k1 &&
+          sessionIds?.private?.ed25519;
+
+        if (!is6SessionReady) {
+          doubleCheck.status = 'LEGACY_CURVE_MISMATCH';
+          await store.saveWallet(doubleCheck);
+          const err: any = new Error(
+            'Legacy single-domain or unsupported curve wallet detected. Protocol requires 3-domain multi-curve security. Re-onboarding required.'
+          );
+          err.statusCode = 409;
+          throw err;
+        }
+
         const derived = await recomputeWalletAddressesFromShares(userId);
         return {
           wallet: doubleCheck,
@@ -453,14 +514,47 @@ export async function createOrGetWallet(userId: string): Promise<{
         };
       }
 
-      // Check if DKG was already in progress with existing session IDs
+      // FIX 6: Retry on ERROR or DKG_IN_PROGRESS:
+      // If previous wallet exists but is not READY, abort old sessions and generate FRESH 6 sessions,
+      // but KEEP the same walletId and DB row (UNIQUE(userId) constraint).
       let walletId = doubleCheck?.walletId || `wal-${crypto.randomUUID()}`;
       const now = new Date().toISOString();
 
-      let dkgSessionIds = doubleCheck?.keyReferences?.dkgSessionIds || {
-        foundation: `dkg-foundation-${crypto.randomUUID()}`,
-        public: `dkg-public-${crypto.randomUUID()}`,
-        private: `dkg-private-${crypto.randomUUID()}`,
+      if (doubleCheck && (doubleCheck.status === 'ERROR' || doubleCheck.status === 'DKG_IN_PROGRESS')) {
+        const oldSessions = doubleCheck.keyReferences?.dkgSessionIds;
+        if (oldSessions) {
+          await Promise.all(
+            DOMAINS.map(async (domain) => {
+              const domEntry = oldSessions[domain.name];
+              if (typeof domEntry === 'string') {
+                await saralBackendClient.abortDkg(domain.name, domEntry).catch(() => {});
+              } else if (domEntry && typeof domEntry === 'object') {
+                if (domEntry.secp256k1) {
+                  await saralBackendClient.abortDkg(domain.name, domEntry.secp256k1).catch(() => {});
+                }
+                if (domEntry.ed25519) {
+                  await saralBackendClient.abortDkg(domain.name, domEntry.ed25519).catch(() => {});
+                }
+              }
+            })
+          );
+        }
+      }
+
+      // Generate 6 fresh session IDs: 3 domains x 2 curves
+      const dkgSessionIds = {
+        foundation: {
+          secp256k1: `dkg-foundation-secp-${crypto.randomUUID()}`,
+          ed25519: `dkg-foundation-ed-${crypto.randomUUID()}`,
+        },
+        public: {
+          secp256k1: `dkg-public-secp-${crypto.randomUUID()}`,
+          ed25519: `dkg-public-ed-${crypto.randomUUID()}`,
+        },
+        private: {
+          secp256k1: `dkg-private-secp-${crypto.randomUUID()}`,
+          ed25519: `dkg-private-ed-${crypto.randomUUID()}`,
+        },
       };
 
       const keyMst = doubleCheck?.keyReferences?.mst || `key-mst-${crypto.randomBytes(8).toString('hex')}`;
@@ -471,7 +565,7 @@ export async function createOrGetWallet(userId: string): Promise<{
         mst: keyMst,
         solana: keySol,
         bitcoin: keyBtc,
-        dkgSessionId: dkgSessionIds.foundation,
+        dkgSessionId: dkgSessionIds.foundation.secp256k1,
         dkgSessionIds,
       };
 
@@ -485,62 +579,86 @@ export async function createOrGetWallet(userId: string): Promise<{
       };
       await store.saveWallet(pendingWallet);
 
-      console.log(`[DKG] Initiating 3-Domain Dealerless DKG across Foundation, Public, and Private domains for user ${userId}...`);
+      // FIX 7: Sanitized audit log using opaque correlation ID (no userId / session IDs leaked)
+      const correlationId = `corr-${crypto.randomUUID()}`;
+      console.log(`[DKG] Initiating 3-Domain Multi-Curve Dealerless DKG across 3 domains (6 sessions: 3 domains x 2 curves) [correlationId: ${correlationId}]`);
 
-      // Start DKGs on ALL 3 domains in parallel
-      await saralBackendClient.runOnAllDomains(async (domainName) => {
-        const domainConfig = DOMAINS_MAP[domainName];
-        return saralBackendClient.startDkg({
-          committeeId: domainConfig.committeeId,
-          sessionId: dkgSessionIds[domainName],
-          committee: domainConfig.nodeIds,
-          n: domainConfig.n,
-          k: domainConfig.k,
-          t: domainConfig.t,
-          walletId,
-          userId,
-        });
-      });
+      // Start 6 DKGs across all 3 domains x 2 curves in parallel
+      await Promise.all(
+        DOMAINS.flatMap((domain) =>
+          (['secp256k1', 'ed25519'] as const).map(async (curve) => {
+            const sessionId = dkgSessionIds[domain.name][curve];
+            const keyId = curve === 'secp256k1' ? keyMst : keySol;
+            return saralBackendClient.startDkg(domain.name, {
+              committeeId: domain.committeeId,
+              sessionId,
+              committee: domain.nodeIds,
+              n: domain.n,
+              k: domain.k,
+              t: domain.t,
+              walletId,
+              userId,
+              curve,
+              keyId,
+              chainFamily: curve === 'secp256k1' ? 'mst' : 'solana',
+            });
+          })
+        )
+      );
 
-      console.log(`[DKG] 3-Domain DKG sessions initialized:`, dkgSessionIds);
-
-      // Await genuine DKG consensus across all 3 domains
+      // FIX 3: Await genuine DKG consensus across all 6 sessions
+      // Require state === 'COMPLETED' && masterPublicKey && (qualifiedSet?.length ?? 0) >= k
       const pollStart = Date.now();
-      const maxPollTime = 15000;
-      const completedDomains = new Set<string>();
+      const rawTimeout = parseInt(process.env.SARAL_DKG_TIMEOUT_MS || '15000', 10);
+      const maxPollTime = isNaN(rawTimeout) || rawTimeout <= 0 ? 15000 : rawTimeout;
+      const completedSessions = new Set<string>();
 
-      while (Date.now() - pollStart < maxPollTime && completedDomains.size < DOMAINS.length) {
+      const requiredSessions: { domain: DomainName; curve: 'secp256k1' | 'ed25519'; sessionId: string; k: number }[] = [];
+      for (const domain of DOMAINS) {
+        for (const curve of ['secp256k1', 'ed25519'] as const) {
+          requiredSessions.push({
+            domain: domain.name,
+            curve,
+            sessionId: dkgSessionIds[domain.name][curve],
+            k: domain.k,
+          });
+        }
+      }
+
+      while (Date.now() - pollStart < maxPollTime && completedSessions.size < requiredSessions.length) {
         await Promise.all(
-          DOMAINS.map(async (domain) => {
-            if (completedDomains.has(domain.name)) return;
+          requiredSessions.map(async (item) => {
+            const sessionKey = `${item.domain}:${item.curve}`;
+            if (completedSessions.has(sessionKey)) return;
             try {
-              const status = await saralBackendClient.getDkgStatus(dkgSessionIds[domain.name]);
+              const status = await saralBackendClient.getDkgStatus(item.domain, item.sessionId);
               if (
-                status?.state === 'COMPLETED' ||
-                (status?.completedNodes && status.completedNodes >= domain.k)
+                status?.state === 'COMPLETED' &&
+                status?.masterPublicKey &&
+                (status?.qualifiedSet?.length ?? 0) >= item.k
               ) {
-                completedDomains.add(domain.name);
+                completedSessions.add(sessionKey);
               }
             } catch (_) {}
           })
         );
-        if (completedDomains.size === DOMAINS.length) break;
+        if (completedSessions.size === requiredSessions.length) break;
         await new Promise((r) => setTimeout(r, 250));
       }
 
-      if (completedDomains.size < DOMAINS.length) {
+      if (completedSessions.size < requiredSessions.length) {
         const errorWallet: WalletMetadataRecord = {
           userId,
           walletId,
           status: 'ERROR',
-          error: `3-Domain DKG consensus timed out. Completed domains: ${Array.from(completedDomains).join(', ')} of 3.`,
+          error: `3-Domain Multi-Curve DKG consensus timed out. Completed sessions: ${completedSessions.size} of ${requiredSessions.length}.`,
           keyReferences,
           createdAt: pendingWallet.createdAt,
           updatedAt: new Date().toISOString(),
         };
         await store.saveWallet(errorWallet);
         throw new Error(
-          `Failed to obtain verified 3-domain DKG public keys: consensus timed out on 1 or more domains. Fail-closed active.`
+          `Failed to obtain verified 3-domain DKG public keys: consensus timed out on 1 or more curve sessions. Fail-closed active.`
         );
       }
 
@@ -571,7 +689,7 @@ export async function createOrGetWallet(userId: string): Promise<{
 
       return {
         wallet: readyWallet,
-        isNew: true,
+        isNew: !doubleCheck,
         addresses: derived.addresses,
       };
     } finally {

@@ -35,10 +35,22 @@ echo -e "${GREEN}✓ All cryptographic test vectors & distributed protocols PASS
 echo -e "\n${BLUE}[4/4] Verifying 3-Domain cluster health across 15 nodes and 3 coordinators...${NC}"
 RUNNING_CONTAINERS=$(docker ps --filter "name=saral-prod" --format "{{.Names}}" | wc -l)
 echo "   • Active SARAL containers: $RUNNING_CONTAINERS / 21"
+
+F_NODES=${SARAL_FOUNDATION_NODES:-5}
+P_NODES=${SARAL_PUBLIC_NODES:-5}
+R_NODES=${SARAL_PRIVATE_NODES:-5}
+
+F_REG=$(curl -s http://localhost:9001/health | grep -o '"enrolledNodes":[0-9]*' | cut -d: -f2 || echo 0)
+P_REG=$(curl -s http://localhost:9002/health | grep -o '"enrolledNodes":[0-9]*' | cut -d: -f2 || echo 0)
+R_REG=$(curl -s http://localhost:9003/health | grep -o '"enrolledNodes":[0-9]*' | cut -d: -f2 || echo 0)
+
 if [ "$RUNNING_CONTAINERS" -ge 21 ]; then
-  echo -e "${GREEN}✓ All 21 Docker backend nodes and 3 coordinators (Foundation, Public, Private) are active.${NC}"
+  echo -e "${GREEN}✓ All 21 Docker backend containers are active.${NC}"
+  echo -e "${GREEN}✓ FOUNDATION domain: ${F_REG:-0}/${F_NODES} nodes registered${NC}"
+  echo -e "${GREEN}✓ PUBLIC domain:     ${P_REG:-0}/${P_NODES} nodes registered${NC}"
+  echo -e "${GREEN}✓ PRIVATE domain:    ${R_REG:-0}/${R_NODES} nodes registered${NC}"
 else
-  echo -e "${YELLOW}⚠️  Note: $RUNNING_CONTAINERS / 21 containers detected. Run 'npm run setup' to start all 21.${NC}"
+  echo -e "${YELLOW}⚠️  Note: $RUNNING_CONTAINERS / 21 containers detected. Run 'bash scripts/fresh-setup.sh' to start all 21.${NC}"
 fi
 
 echo -e "\n${GREEN}======================================================================${NC}"

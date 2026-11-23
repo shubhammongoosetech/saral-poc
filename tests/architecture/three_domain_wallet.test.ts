@@ -69,7 +69,7 @@ describe('SARAL 3-Domain Separation of Powers Architecture Suite (T1-T8)', () =>
     });
 
     vi.spyOn(saralBackendClient, 'getDkgStatus').mockImplementation(async (domainOrSessionId: any, maybeSessionId?: any) => {
-      const sId = typeof domainOrSessionId === 'string' ? domainOrSessionId : maybeSessionId;
+      const sId = typeof domainOrSessionId === 'string' ? (maybeSessionId || domainOrSessionId) : maybeSessionId;
       return {
         sessionId: sId,
         committeeId: 'committee-foundation',
@@ -81,10 +81,13 @@ describe('SARAL 3-Domain Separation of Powers Architecture Suite (T1-T8)', () =>
         completedNodes: 5,
         totalNodes: 5,
         committee: ['node-1', 'node-2', 'node-3', 'node-4', 'node-5'],
+        qualifiedSet: ['node-1', 'node-2', 'node-3', 'node-4', 'node-5'],
+        masterPublicKey: SECP_G,
       };
     });
 
-    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (params: any) => {
+    vi.spyOn(saralBackendClient, 'derivePublicKey').mockImplementation(async (domainOrParams: any, maybeParams?: any) => {
+      const params = typeof domainOrParams === 'object' ? domainOrParams : maybeParams || {};
       if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
         return {
           success: true,
@@ -109,6 +112,12 @@ describe('SARAL 3-Domain Separation of Powers Architecture Suite (T1-T8)', () =>
         threshold: 3,
         masterPublicKey: SECP_G,
       };
+    });
+
+    vi.spyOn(saralBackendClient, 'abortDkg').mockResolvedValue({
+      success: true,
+      sessionId: 'aborted-sess',
+      state: 'ABORTED',
     });
   });
 
@@ -135,11 +144,14 @@ describe('SARAL 3-Domain Separation of Powers Architecture Suite (T1-T8)', () =>
     const res = await createOrGetWallet(testUserAId);
     walletAInitial = res;
 
-    // R1: All 3 domains MUST take part
+    // R1: All 3 domains MUST take part across both secp256k1 and ed25519 (6 DKG sessions)
     expect(res.wallet.keyReferences.dkgSessionIds).toBeDefined();
-    expect(res.wallet.keyReferences.dkgSessionIds.foundation).toMatch(/^dkg-foundation-/);
-    expect(res.wallet.keyReferences.dkgSessionIds.public).toMatch(/^dkg-public-/);
-    expect(res.wallet.keyReferences.dkgSessionIds.private).toMatch(/^dkg-private-/);
+    expect(res.wallet.keyReferences.dkgSessionIds.foundation.secp256k1).toMatch(/^dkg-foundation-secp-/);
+    expect(res.wallet.keyReferences.dkgSessionIds.foundation.ed25519).toMatch(/^dkg-foundation-ed-/);
+    expect(res.wallet.keyReferences.dkgSessionIds.public.secp256k1).toMatch(/^dkg-public-secp-/);
+    expect(res.wallet.keyReferences.dkgSessionIds.public.ed25519).toMatch(/^dkg-public-ed-/);
+    expect(res.wallet.keyReferences.dkgSessionIds.private.secp256k1).toMatch(/^dkg-private-secp-/);
+    expect(res.wallet.keyReferences.dkgSessionIds.private.ed25519).toMatch(/^dkg-private-ed-/);
 
     // R2: Exactly ONE wallet per user
     expect(res.isNew).toBe(true);
@@ -206,8 +218,10 @@ describe('SARAL 3-Domain Separation of Powers Architecture Suite (T1-T8)', () =>
     const deriveSpy = vi.spyOn(saralBackendClient, 'derivePublicKey');
     try {
       // Simulate public domain failing due to insufficient nodes (< k)
-      deriveSpy.mockImplementation(async (params: any) => {
-        if (params.committeeId === 'committee-public' || (params.dkgSessionId && params.dkgSessionId.includes('public'))) {
+      deriveSpy.mockImplementation(async (domainOrParams: any, maybeParams?: any) => {
+        const params = typeof domainOrParams === 'object' ? domainOrParams : maybeParams || {};
+        const domain = typeof domainOrParams === 'string' ? domainOrParams : '';
+        if (domain === 'public' || params.committeeId === 'committee-public' || (params.dkgSessionId && params.dkgSessionId.includes('public'))) {
           throw new Error('insufficient verified node shares: obtained 2 valid points, required threshold k=3');
         }
         return {
@@ -229,7 +243,8 @@ describe('SARAL 3-Domain Separation of Powers Architecture Suite (T1-T8)', () =>
       );
     } finally {
       // Restore default mock
-      deriveSpy.mockImplementation(async (params: any) => {
+      deriveSpy.mockImplementation(async (domainOrParams: any, maybeParams?: any) => {
+        const params = typeof domainOrParams === 'object' ? domainOrParams : maybeParams || {};
         if (params.curve === 'ed25519' || params.chainFamily === 'solana') {
           return {
             success: true,
@@ -309,15 +324,15 @@ describe('SARAL 3-Domain Separation of Powers Architecture Suite (T1-T8)', () =>
     const resB = await createOrGetWallet(testUserBId);
     expect(resB.wallet.walletId).not.toBe(walletAInitial.wallet.walletId);
 
-    // Verify session IDs of User A and User B are completely distinct
-    expect(resB.wallet.keyReferences.dkgSessionIds.foundation).not.toBe(
-      walletAInitial.wallet.keyReferences.dkgSessionIds.foundation
+    // Verify session IDs of User A and User B are completely distinct across all 6 curve sessions
+    expect(resB.wallet.keyReferences.dkgSessionIds.foundation.secp256k1).not.toBe(
+      walletAInitial.wallet.keyReferences.dkgSessionIds.foundation.secp256k1
     );
-    expect(resB.wallet.keyReferences.dkgSessionIds.public).not.toBe(
-      walletAInitial.wallet.keyReferences.dkgSessionIds.public
+    expect(resB.wallet.keyReferences.dkgSessionIds.public.secp256k1).not.toBe(
+      walletAInitial.wallet.keyReferences.dkgSessionIds.public.secp256k1
     );
-    expect(resB.wallet.keyReferences.dkgSessionIds.private).not.toBe(
-      walletAInitial.wallet.keyReferences.dkgSessionIds.private
+    expect(resB.wallet.keyReferences.dkgSessionIds.private.secp256k1).not.toBe(
+      walletAInitial.wallet.keyReferences.dkgSessionIds.private.secp256k1
     );
   });
 
@@ -366,5 +381,242 @@ describe('SARAL 3-Domain Separation of Powers Architecture Suite (T1-T8)', () =>
     expect(DOMAINS_MAP.foundation).toBeDefined();
     expect(DOMAINS_MAP.public).toBeDefined();
     expect(DOMAINS_MAP.private).toBeDefined();
+  });
+
+  // ---------------------------------------------------------------------------
+  // T9: BITCOIN TAPROOT PARITY INVARIANT (FIX 1g)
+  // ---------------------------------------------------------------------------
+  it('T9: Bitcoin Taproot parity invariant — Y and -Y yield identical x-only Taproot output', () => {
+    // Generator point G = (Gx, Gy) on secp256k1
+    // p = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+    const p = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F');
+    const gy = BigInt('0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8');
+    const negGy = (p - gy).toString(16).padStart(64, '0');
+    const gxHex = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+
+    const pointY = `04${gxHex}483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8`;
+    const pointNegY = `04${gxHex}${negGy}`;
+
+    const addrY = deriveAddressFromDkgPublicKey('bitcoin', pointY);
+    const addrNegY = deriveAddressFromDkgPublicKey('bitcoin', pointNegY);
+
+    // Both Y and -Y share the exact same x-coordinate and must produce the identical Taproot address
+    expect(addrY).toBe(addrNegY);
+    expect(addrY.startsWith('tb1p')).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------------
+  // T10: NEGATIVE TEST — LEGACY FLAT 3-STRING WALLET RETURNS 409 (FIX 1f)
+  // ---------------------------------------------------------------------------
+  it('T10: legacy flat 3-string wallet detection -> flags LEGACY_CURVE_MISMATCH and returns HTTP 409', async () => {
+    const legacyUserId = crypto.randomUUID();
+    await prisma.user.create({
+      data: {
+        id: legacyUserId,
+        email: `legacy-${Date.now()}@saral.network`,
+        mobile: `+9194${Date.now().toString().slice(-8)}`,
+        loginMethod: 'google',
+      },
+    });
+
+    const legacyWallet = {
+      userId: legacyUserId,
+      walletId: `wal-legacy-${Date.now()}`,
+      status: 'READY',
+      keyReferences: {
+        mst: 'key-mst-1',
+        solana: 'key-sol-1',
+        bitcoin: 'key-btc-1',
+        dkgSessionId: 'dkg-foundation-old-1',
+        dkgSessionIds: {
+          foundation: 'dkg-foundation-old-1',
+          public: 'dkg-public-old-2',
+          private: 'dkg-private-old-3',
+        },
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await store.saveWallet(legacyWallet as any);
+
+    // Attempting to recompute must throw 409
+    await expect(recomputeWalletAddressesFromShares(legacyUserId)).rejects.toThrow(
+      /Wallet created with single\/unsupported curve/i
+    );
+
+    const updated = store.getWalletByUserId(legacyUserId);
+    expect(updated?.status).toBe('LEGACY_CURVE_MISMATCH');
+
+    await prisma.user.deleteMany({ where: { id: legacyUserId } });
+  });
+
+  // ---------------------------------------------------------------------------
+  // T11: RETRY ON ERROR / DKG_IN_PROGRESS GENERATES FRESH SESSIONS (FIX 6)
+  // ---------------------------------------------------------------------------
+  it('T11: retry after ERROR or DKG_IN_PROGRESS generates 6 fresh sessions without duplicate DB row', async () => {
+    const retryUserId = crypto.randomUUID();
+    await prisma.user.create({
+      data: {
+        id: retryUserId,
+        email: `retry-${Date.now()}@saral.network`,
+        mobile: `+9195${Date.now().toString().slice(-8)}`,
+        loginMethod: 'google',
+      },
+    });
+
+    // Simulate an aborted or failed prior wallet
+    const failedWalletId = `wal-retry-${Date.now()}`;
+    const failedWallet = {
+      userId: retryUserId,
+      walletId: failedWalletId,
+      status: 'ERROR',
+      error: 'Simulated prior DKG timeout',
+      keyReferences: {
+        mst: 'key-mst-old',
+        solana: 'key-sol-old',
+        bitcoin: 'key-btc-old',
+        dkgSessionId: 'dkg-old-foundation',
+        dkgSessionIds: {
+          foundation: { secp256k1: 'old-f-secp', ed25519: 'old-f-ed' },
+          public: { secp256k1: 'old-p-secp', ed25519: 'old-p-ed' },
+          private: { secp256k1: 'old-r-secp', ed25519: 'old-r-ed' },
+        },
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await store.saveWallet(failedWallet as any);
+
+    // Call createOrGetWallet to retry
+    const res = await createOrGetWallet(retryUserId);
+
+    expect(res.wallet.status).toBe('READY');
+    // Must reuse the exact same walletId and DB row
+    expect(res.wallet.walletId).toBe(failedWalletId);
+
+    // Must generate 6 FRESH session UUIDs, completely different from failed session IDs
+    const newSessions = res.wallet.keyReferences.dkgSessionIds;
+    expect(newSessions.foundation.secp256k1).not.toBe('old-f-secp');
+    expect(newSessions.foundation.ed25519).not.toBe('old-f-ed');
+    expect(newSessions.public.secp256k1).not.toBe('old-p-secp');
+    expect(newSessions.public.ed25519).not.toBe('old-p-ed');
+    expect(newSessions.private.secp256k1).not.toBe('old-r-secp');
+    expect(newSessions.private.ed25519).not.toBe('old-r-ed');
+
+    // Exactly ONE wallet row in database (UNIQUE(userId) invariant preserved)
+    const dbWallets = await prisma.walletIdentity.findMany({ where: { userId: retryUserId } });
+    expect(dbWallets.length).toBe(1);
+
+    await prisma.user.deleteMany({ where: { id: retryUserId } });
+  });
+
+  // ---------------------------------------------------------------------------
+  // T12: DKG TIMEOUT FAILURE MODE (FIX 3)
+  // ---------------------------------------------------------------------------
+  it('T12: DKG consensus timeout sets status ERROR and fails closed', async () => {
+    const timeoutUserId = crypto.randomUUID();
+    await prisma.user.create({
+      data: {
+        id: timeoutUserId,
+        email: `timeout-${Date.now()}@saral.network`,
+        mobile: `+9196${Date.now().toString().slice(-8)}`,
+        loginMethod: 'google',
+      },
+    });
+
+    const origTimeout = process.env.SARAL_DKG_TIMEOUT_MS;
+    process.env.SARAL_DKG_TIMEOUT_MS = '300'; // 300ms fast test timeout
+
+    const statusSpy = vi.spyOn(saralBackendClient, 'getDkgStatus');
+    // Simulate nodes not reaching threshold
+    statusSpy.mockResolvedValue({
+      sessionId: 'sess-timeout',
+      committeeId: 'committee-foundation',
+      epoch: 1,
+      n: 5,
+      k: 3,
+      t: 1,
+      state: 'DKG_RUNNING',
+      completedNodes: 2,
+      totalNodes: 5,
+      committee: ['node-1', 'node-2', 'node-3', 'node-4', 'node-5'],
+      qualifiedSet: ['node-1', 'node-2'], // < k=3
+      masterPublicKey: '',
+    });
+
+    try {
+      await expect(createOrGetWallet(timeoutUserId)).rejects.toThrow(
+        /consensus timed out/i
+      );
+
+      const failedWallet = store.getWalletByUserId(timeoutUserId);
+      expect(failedWallet).toBeDefined();
+      expect(failedWallet?.status).toBe('ERROR');
+    } finally {
+      if (origTimeout !== undefined) {
+        process.env.SARAL_DKG_TIMEOUT_MS = origTimeout;
+      } else {
+        delete process.env.SARAL_DKG_TIMEOUT_MS;
+      }
+      statusSpy.mockImplementation(async (domainOrSessionId: any, maybeSessionId?: any) => {
+        const sId = typeof domainOrSessionId === 'string' ? (maybeSessionId || domainOrSessionId) : maybeSessionId;
+        return {
+          sessionId: sId,
+          committeeId: 'committee-foundation',
+          epoch: 1,
+          n: 5,
+          k: 3,
+          t: 1,
+          state: 'COMPLETED',
+          completedNodes: 5,
+          totalNodes: 5,
+          committee: ['node-1', 'node-2', 'node-3', 'node-4', 'node-5'],
+          qualifiedSet: ['node-1', 'node-2', 'node-3', 'node-4', 'node-5'],
+          masterPublicKey: SECP_G,
+        };
+      });
+      await prisma.user.deleteMany({ where: { id: timeoutUserId } });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // T13: AUDIT LOG SANITIZATION — ZERO USER ID AND SESSIONS IN LOGS (FIX 7)
+  // ---------------------------------------------------------------------------
+  it('T13: audit log sanitization — zero raw userId or session IDs emitted at INFO level', async () => {
+    const auditUserId = crypto.randomUUID();
+    await prisma.user.create({
+      data: {
+        id: auditUserId,
+        email: `audit-${Date.now()}@saral.network`,
+        mobile: `+9197${Date.now().toString().slice(-8)}`,
+        loginMethod: 'google',
+      },
+    });
+
+    const logMessages: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: any[]) => {
+      logMessages.push(args.map(String).join(' '));
+    });
+
+    try {
+      const res = await createOrGetWallet(auditUserId);
+      expect(res.wallet.status).toBe('READY');
+
+      const allLogs = logMessages.join('\n');
+      // Assert raw userId does not appear in any log message
+      expect(allLogs).not.toContain(auditUserId);
+
+      // Assert none of the 6 session UUIDs appear in log output
+      const sessions = res.wallet.keyReferences.dkgSessionIds;
+      expect(allLogs).not.toContain(sessions.foundation.secp256k1);
+      expect(allLogs).not.toContain(sessions.foundation.ed25519);
+      expect(allLogs).not.toContain(sessions.public.secp256k1);
+      expect(allLogs).not.toContain(sessions.public.ed25519);
+      expect(allLogs).not.toContain(sessions.private.secp256k1);
+      expect(allLogs).not.toContain(sessions.private.ed25519);
+    } finally {
+      logSpy.mockRestore();
+      await prisma.user.deleteMany({ where: { id: auditUserId } });
+    }
   });
 });
